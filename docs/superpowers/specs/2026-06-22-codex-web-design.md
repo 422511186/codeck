@@ -60,7 +60,7 @@
 
 ### 方案 C：安全协议代理 + 移动端 Web 工作台
 
-后端负责连接 app-server，把协议事件规范化后提供给浏览器，同时处理 Web 登录、工作区边界、上传文件、审计日志和状态缓存。
+后端负责连接 app-server，把协议事件规范化后提供给浏览器，同时处理个人访问密钥登录、工作区边界、上传文件和内存态请求队列。
 
 优点：最接近 VS Code 插件能力，同时安全性和兼容性可控。后端可以通过重新生成协议绑定来吸收 app-server 变化。
 缺点：实现量更大，测试面更宽。
@@ -77,7 +77,7 @@
 
 2. Web 后端
 
-   使用 Node.js 服务端，负责 Web 用户认证、启动或连接 Codex app-server、保存浏览器 session 元数据、校验请求、代理协议调用，并向浏览器广播规范化事件。
+   使用 Node.js 服务端，负责校验个人访问密钥、启动或连接 Codex app-server、校验请求、代理协议调用，并向浏览器广播规范化事件。
 
 3. Codex app-server 适配层
 
@@ -130,15 +130,15 @@
 
 后端负责：
 
-- Web 应用用户认证。
-- 浏览器 session 和 Codex thread 的映射。
+- 个人访问密钥登录。
+- 浏览器 signed session cookie 和 Codex thread 的映射。
 - 工作区 allowlist 和路径校验。
 - app-server 进程监督。
 - WebSocket 重连和事件恢复。
 - JSON-RPC request id 跟踪。
-- 待处理审批/question 队列。
+- 内存中的待处理审批/question 队列。
 - 浏览器安全可消费的事件规范化。
-- 图片上传暂存。
+- 图片上传到本地目录暂存。
 - 协议版本检查和生成绑定刷新。
 
 后端不负责：
@@ -199,29 +199,33 @@ app-server notification 到浏览器流：
 
 最低安全要求：
 
-- 任何 app-server 访问前都必须先登录 Web 应用。
+- 任何 app-server 访问前都必须先通过个人访问密钥登录 Web 应用。
 - app-server 尽量只绑定 loopback。
 - 如果 app-server 监听非 loopback 地址，必须使用 app-server WebSocket auth。
 - 永远不把原始 app-server endpoint 或 token 暴露给浏览器。
-- 维护工作区 allowlist；拒绝 allowlist 外的 cwd 和 runtime roots。
+- 维护配置文件/环境变量里的工作区 allowlist；拒绝 allowlist 外的 cwd 和 runtime roots。
 - 图片上传只存到项目自有暂存目录，并只传递安全的本地路径。
 - 除非用户主动选择允许更宽松的 Codex 权限配置，否则 server-request 审批必须显式确认。
-- 所有映射到命令执行、文件写入、审批、权限变更、配置写入的浏览器动作都要写审计日志。
+- 映射到命令执行、文件写入、审批、权限变更、配置写入的浏览器动作可以写入本地追加日志；个人模式下不需要数据库审计表。
 - 支持 remote-control 客户端列表、撤销和配对状态。
 
 ## 状态模型
 
-Web 应用自己的持久化状态要保持很小，因为 Codex 已经负责保存 thread 内容。
+个人自用模式不引入数据库。Web 应用自己的持久化状态尽量为零，因为 Codex 已经负责保存 thread 内容。
 
-后端数据库表：
+配置来源：
 
-- `users`：登录身份。
-- `web_sessions`：浏览器 session id、用户 id、创建时间、最后访问时间。
-- `workspace_roots`：允许访问的绝对路径。
-- `thread_pins`：可选的 UI 置顶/收藏信息，按 Codex thread id 关联。
-- `pending_requests`：app-server request id、thread id、method、payload、状态。
-- `uploads`：暂存文件路径、所属用户、mime type、大小、创建时间。
-- `audit_events`：用户 id、动作、thread id、app-server method、摘要、时间戳。
+- `CODEX_WEB_ACCESS_TOKEN`：手机端登录用的访问密钥。可以设置成用户习惯的 `sk-...` 字符串，但如果它同时也是真实模型/API key，不建议在浏览器长期保存。
+- `CODEX_WEB_WORKSPACE_ROOTS`：允许手机端操作的工作区根目录列表。
+- `CODEX_WEB_BIND_HOST` 和 `CODEX_WEB_BIND_PORT`：Web 服务监听地址。
+- Codex 模型/API key：优先留在后端环境变量或 Codex 自己的配置中，不放进前端代码。
+
+运行中状态：
+
+- signed session cookie：浏览器登录态，不需要用户表。
+- 内存 map：WebSocket 连接、thread 订阅、pending approvals/questions、request id 关联。
+- 本地上传目录：图片暂存文件，按时间清理。
+- 可选追加日志文件：记录敏感动作，个人模式下不需要数据库表。
 
 Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方法读取，不在自己的数据库复制一份。
 
@@ -232,7 +236,7 @@ Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方
 - 协议不匹配：启动失败并给出明确提示，要求重新生成协议绑定。
 - 审批/question 超时：展示 app-server 的实际处理结果，不在浏览器侧编造默认决定。
 - 上传失败：阻止发送，并展示失败附件。
-- 工作区路径被拒绝：在调用 app-server 前拒绝，并写审计日志。
+- 工作区路径被拒绝：在调用 app-server 前拒绝，并写入本地日志。
 - 编辑重发遇到文件变更：如果 rollback 会留下过期的工作区修改，要求用户先查看或回滚相关 diff。
 
 ## 测试策略
@@ -241,7 +245,7 @@ Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方
 
 - JSON-RPC request/response 关联。
 - app-server 事件规范化。
-- 审批/question 队列。
+- 内存审批/question 队列。
 - 工作区路径校验。
 - 模型/思考强度设置映射。
 - 图片上传暂存和清理。
@@ -277,7 +281,7 @@ Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方
 
 1. 搭建 TypeScript 项目，包含后端、前端、共享协议包、生成的 app-server bindings。
 2. 实现 app-server client：JSON-RPC transport、生成类型、request 关联、notification stream。
-3. 加入单用户本地 Web 登录、工作区 allowlist、app-server 进程监督、浏览器 WebSocket。
+3. 加入个人访问密钥登录、工作区 allowlist、app-server 进程监督、浏览器 WebSocket。
 4. 实现会话列表、历史、resume 和实时 timeline 渲染。
 5. 实现文本输入、模型、思考强度、审批策略和图片上传。
 6. 实现来自 `ServerRequest` 的审批和 question。
@@ -291,7 +295,7 @@ Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方
 - 使用终端文本解析作为主集成方式。
 - 把原始 app-server token 暴露给浏览器。
 - 构建营销落地页。
-- 在单用户远程访问稳定前支持不可信多租户。
+- 支持用户表、团队账号、权限分组或不可信多租户。
 - 构建桌面端布局。
 
 ## 风险
