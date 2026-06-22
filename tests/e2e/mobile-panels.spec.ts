@@ -135,3 +135,20 @@ test("设置面板可以管理远程控制配对和客户端", async ({ page }) 
   await page.getByRole("button", { name: "启用远控" }).click();
   await expect(page.getByText("connected")).toBeVisible();
 });
+
+test("设置面板可以查看、安装和卸载插件", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  await page.getByRole("button", { name: "详情 浏览器工具" }).click();
+  await expect(page.getByText("用于移动端验证网页和截图。")).toBeVisible();
+  await expect(page.getByText("Skills 1 / Hooks 1 / Apps 1")).toBeVisible();
+  await expect(page.getByText("MCP browser")).toBeVisible();
+
+  await page.getByRole("button", { name: "安装 浏览器工具" }).click();
+  await expect(page.getByText("安装结果：ON_USE")).toBeVisible();
+
+  await page.getByRole("button", { name: "卸载 浏览器工具" }).click();
+  await expect(page.getByText("插件已卸载：browser-tools")).toBeVisible();
+});

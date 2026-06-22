@@ -4,6 +4,8 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileModelOption,
+  MobilePluginDetailView,
+  MobilePluginInstallResultView,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
@@ -352,6 +354,58 @@ export async function revokeRemoteControlClient(environmentId: string, clientId:
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法撤销远程客户端");
+  }
+}
+
+export async function readPlugin(input: {
+  marketplaceName?: string | null;
+  marketplacePath?: string | null;
+  pluginName: string;
+}): Promise<MobilePluginDetailView> {
+  const response = await fetch(`/api/codex/plugins/${encodeURIComponent(input.pluginName)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      marketplaceName: input.marketplaceName ?? null,
+      marketplacePath: input.marketplacePath ?? null
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取插件详情");
+  }
+
+  const payload = (await response.json()) as { plugin: MobilePluginDetailView };
+  return payload.plugin;
+}
+
+export async function installPlugin(input: {
+  marketplaceName?: string | null;
+  marketplacePath?: string | null;
+  pluginName: string;
+}): Promise<MobilePluginInstallResultView> {
+  const response = await fetch(`/api/codex/plugins/${encodeURIComponent(input.pluginName)}/install`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      marketplaceName: input.marketplaceName ?? null,
+      marketplacePath: input.marketplacePath ?? null
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法安装插件");
+  }
+
+  const payload = (await response.json()) as { result: MobilePluginInstallResultView };
+  return payload.result;
+}
+
+export async function uninstallPlugin(pluginId: string): Promise<void> {
+  const response = await fetch(`/api/codex/plugins/${encodeURIComponent(pluginId)}/uninstall`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法卸载插件");
   }
 }
 

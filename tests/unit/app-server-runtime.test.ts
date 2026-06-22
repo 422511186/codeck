@@ -273,6 +273,7 @@ describe("createAppServerGateway", () => {
       plugins: [
         {
           marketplaceName: "个人插件市场",
+          marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
           marketplaceDisplayName: "个人插件",
           id: "browser-tools",
           name: "browser-tools",
@@ -285,6 +286,7 @@ describe("createAppServerGateway", () => {
         },
         {
           marketplaceName: "个人插件市场",
+          marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
           marketplaceDisplayName: "个人插件",
           id: "review-pack",
           name: "review-pack",
@@ -425,6 +427,35 @@ describe("createAppServerGateway", () => {
     });
 
     await expect(gateway.enableRemoteControl()).resolves.toMatchObject({ status: "connected", environmentId: "mock-env" });
+  });
+
+  it("mock 模式支持读取、安装和卸载插件", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.readPlugin({
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+        pluginName: "browser-tools"
+      })
+    ).resolves.toMatchObject({
+      id: "browser-tools",
+      displayName: "浏览器工具",
+      skillCount: 1,
+      hookCount: 1,
+      appCount: 1,
+      mcpServers: ["browser"]
+    });
+    await expect(
+      gateway.installPlugin({
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+        pluginName: "browser-tools"
+      })
+    ).resolves.toMatchObject({
+      authPolicy: "ON_USE",
+      appsNeedingAuth: [expect.objectContaining({ id: "browser-app", name: "Browser" })]
+    });
+    await expect(gateway.uninstallPlugin("browser-tools")).resolves.toBeUndefined();
   });
 
   it("mock 模式支持切换记忆模式和重置记忆", async () => {

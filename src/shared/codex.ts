@@ -111,6 +111,7 @@ export type MobileSkillErrorView = {
 
 export type MobilePluginView = {
   marketplaceName: string;
+  marketplacePath: string | null;
   marketplaceDisplayName: string | null;
   id: string;
   name: string;
@@ -125,6 +126,35 @@ export type MobilePluginView = {
 export type MobilePluginMarketplaceErrorView = {
   marketplacePath: string;
   message: string;
+};
+
+export type MobilePluginDetailView = {
+  marketplaceName: string;
+  marketplacePath: string | null;
+  id: string;
+  name: string;
+  displayName: string | null;
+  description: string | null;
+  installed: boolean;
+  enabled: boolean;
+  authPolicy: string;
+  installPolicy: string;
+  availability: string;
+  skillCount: number;
+  hookCount: number;
+  appCount: number;
+  mcpServers: string[];
+};
+
+export type MobilePluginInstallResultView = {
+  authPolicy: string;
+  appsNeedingAuth: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    installUrl: string | null;
+    category: string | null;
+  }>;
 };
 
 export type MobileTimelineItem = {

@@ -5,6 +5,8 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileModelOption,
+  MobilePluginDetailView,
+  MobilePluginInstallResultView,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
@@ -22,6 +24,7 @@ import {
   type ExecCommandInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
+  type PluginLookupInput,
   type SearchThreadsInput,
   type SetThreadGoalInput,
   type StartThreadInput,
@@ -940,7 +943,73 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "plugin/read") {
+      return {
+        plugin: this.createMockPluginDetail()
+      };
+    }
+
+    if (method === "plugin/install") {
+      return {
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [
+          { id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }
+        ]
+      };
+    }
+
+    if (method === "plugin/uninstall") {
+      return {};
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
+  }
+
+  private createMockPluginDetail() {
+    return {
+      marketplaceName: "个人插件市场",
+      marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+      summary: {
+        id: "browser-tools",
+        remotePluginId: null,
+        localVersion: "1.0.0",
+        name: "browser-tools",
+        shareContext: null,
+        source: { type: "local", path: "C:\\Users\\huang\\.codex\\plugins\\browser-tools" },
+        installed: true,
+        enabled: true,
+        installPolicy: "AVAILABLE",
+        authPolicy: "ON_USE",
+        availability: "AVAILABLE",
+        interface: {
+          displayName: "浏览器工具",
+          shortDescription: "控制浏览器",
+          longDescription: "用于移动端验证网页和截图。",
+          developerName: "Codex",
+          category: "tools",
+          capabilities: ["browser"],
+          websiteUrl: null,
+          privacyPolicyUrl: null,
+          termsOfServiceUrl: null,
+          defaultPrompt: null,
+          brandColor: null,
+          composerIcon: null,
+          composerIconUrl: null,
+          logo: null,
+          logoUrl: null,
+          screenshots: [],
+          screenshotUrls: []
+        },
+        keywords: ["browser"]
+      },
+      shareUrl: null,
+      description: "用于移动端验证网页和截图。",
+      skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制" }],
+      hooks: [{ name: "after-edit", description: "编辑后检查" }],
+      apps: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }],
+      appTemplates: [],
+      mcpServers: ["browser"]
+    };
   }
 
   private emitNotification(message: AppServerNotificationMessage): void {
@@ -1294,6 +1363,21 @@ export class AppServerGateway {
   async resetMemory(): Promise<void> {
     await this.ensureReady();
     await this.client.resetMemory();
+  }
+
+  async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {
+    await this.ensureReady();
+    return this.client.readPlugin(input);
+  }
+
+  async installPlugin(input: PluginLookupInput): Promise<MobilePluginInstallResultView> {
+    await this.ensureReady();
+    return this.client.installPlugin(input);
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.uninstallPlugin(pluginId);
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

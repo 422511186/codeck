@@ -745,6 +745,66 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "plugin/read") {
+      return {
+        plugin: {
+          marketplaceName: "个人插件市场",
+          marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+          summary: {
+            id: "browser-tools",
+            remotePluginId: null,
+            localVersion: "1.0.0",
+            name: "browser-tools",
+            shareContext: null,
+            source: { type: "local", path: "C:\\Users\\huang\\.codex\\plugins\\browser-tools" },
+            installed: true,
+            enabled: true,
+            installPolicy: "AVAILABLE",
+            authPolicy: "ON_USE",
+            availability: "AVAILABLE",
+            interface: {
+              displayName: "浏览器工具",
+              shortDescription: "控制浏览器",
+              longDescription: "用于移动端验证网页和截图。",
+              developerName: "Codex",
+              category: "tools",
+              capabilities: ["browser"],
+              websiteUrl: null,
+              privacyPolicyUrl: null,
+              termsOfServiceUrl: null,
+              defaultPrompt: null,
+              brandColor: null,
+              composerIcon: null,
+              composerIconUrl: null,
+              logo: null,
+              logoUrl: null,
+              screenshots: [],
+              screenshotUrls: []
+            },
+            keywords: ["browser"]
+          },
+          shareUrl: null,
+          description: "用于移动端验证网页和截图。",
+          skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制" }],
+          hooks: [{ name: "after-edit", description: "编辑后检查" }],
+          apps: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }],
+          appTemplates: [],
+          mcpServers: ["browser"]
+        }
+      };
+    }
+
+    if (method === "plugin/install") {
+      return {
+        authPolicy: "ON_USE",
+        appsNeedingAuth: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }]
+      };
+    }
+
+    if (method === "plugin/uninstall") {
+      return {};
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
 }
@@ -1241,6 +1301,7 @@ describe("CodexAppServerClient", () => {
       plugins: [
         {
           marketplaceName: "个人插件市场",
+          marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
           marketplaceDisplayName: "个人插件",
           id: "browser-tools",
           name: "browser-tools",
@@ -1253,6 +1314,7 @@ describe("CodexAppServerClient", () => {
         },
         {
           marketplaceName: "个人插件市场",
+          marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
           marketplaceDisplayName: "个人插件",
           id: "review-pack",
           name: "review-pack",
@@ -1316,6 +1378,60 @@ describe("CodexAppServerClient", () => {
           params: { pairingCode: "pair-code-1", manualPairingCode: "123-456" }
         },
         { method: "remoteControl/client/revoke", params: { environmentId: "env-1", clientId: "phone-1" } }
+      ])
+    );
+  });
+
+  it("能读取、安装和卸载插件", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.readPlugin({ marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json", pluginName: "browser-tools" })
+    ).resolves.toEqual({
+      marketplaceName: "个人插件市场",
+      marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+      id: "browser-tools",
+      name: "browser-tools",
+      displayName: "浏览器工具",
+      description: "用于移动端验证网页和截图。",
+      installed: true,
+      enabled: true,
+      authPolicy: "ON_USE",
+      installPolicy: "AVAILABLE",
+      availability: "AVAILABLE",
+      skillCount: 1,
+      hookCount: 1,
+      appCount: 1,
+      mcpServers: ["browser"]
+    });
+    await expect(
+      client.installPlugin({ marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json", pluginName: "browser-tools" })
+    ).resolves.toEqual({
+      authPolicy: "ON_USE",
+      appsNeedingAuth: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }]
+    });
+    await expect(client.uninstallPlugin("browser-tools")).resolves.toBeUndefined();
+
+    expect(peer.calls).toEqual(
+      expect.arrayContaining([
+        {
+          method: "plugin/read",
+          params: {
+            marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            remoteMarketplaceName: null,
+            pluginName: "browser-tools"
+          }
+        },
+        {
+          method: "plugin/install",
+          params: {
+            marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            remoteMarketplaceName: null,
+            pluginName: "browser-tools"
+          }
+        },
+        { method: "plugin/uninstall", params: { pluginId: "browser-tools" } }
       ])
     );
   });

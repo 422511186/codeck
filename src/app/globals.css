@@ -635,12 +635,30 @@ pre {
   gap: 8px;
 }
 
-.remote-control-panel button {
+.remote-control-panel button,
+.plugin-control-panel button {
   min-height: 40px;
   border: 1px solid #435166;
   border-radius: 8px;
   background: #1d2734;
   color: #f2f2f2;
+  font-size: 12px;
+}
+
+.plugin-control-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-action-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.plugin-action-row span,
+.settings-note {
+  color: #cbd5e1;
   font-size: 12px;
 }
 

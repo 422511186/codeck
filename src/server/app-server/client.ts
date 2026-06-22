@@ -18,8 +18,14 @@ import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/M
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
+import type { PluginDetail } from "../../../docs/generated/app-server-ts/v2/PluginDetail";
+import type { PluginInstallParams } from "../../../docs/generated/app-server-ts/v2/PluginInstallParams";
+import type { PluginInstallResponse } from "../../../docs/generated/app-server-ts/v2/PluginInstallResponse";
 import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/PluginListParams";
 import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
+import type { PluginReadParams } from "../../../docs/generated/app-server-ts/v2/PluginReadParams";
+import type { PluginReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginReadResponse";
+import type { PluginUninstallParams } from "../../../docs/generated/app-server-ts/v2/PluginUninstallParams";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlClientsRevokeParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsRevokeParams";
 import type { RemoteControlDisableParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlDisableParams";
@@ -82,6 +88,8 @@ import type {
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
   MobilePluginMarketplaceErrorView,
+  MobilePluginDetailView,
+  MobilePluginInstallResultView,
   MobilePluginView,
   MobileRateLimitView,
   MobileRemoteControlClientView,
@@ -157,6 +165,12 @@ export type SetThreadGoalInput = {
   objective: string;
   status?: "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
   tokenBudget?: number | null;
+};
+
+export type PluginLookupInput = {
+  marketplacePath?: string | null;
+  remoteMarketplaceName?: string | null;
+  pluginName: string;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -398,6 +412,7 @@ function pluginViews(response: PluginListResponse): MobilePluginView[] {
   return response.marketplaces.flatMap((marketplace) =>
     marketplace.plugins.map((plugin) => ({
       marketplaceName: marketplace.name,
+      marketplacePath: marketplace.path,
       marketplaceDisplayName: marketplace.interface?.displayName ?? null,
       id: plugin.id,
       name: plugin.name,
@@ -416,6 +431,34 @@ function pluginMarketplaceErrorViews(response: PluginListResponse): MobilePlugin
     marketplacePath: error.marketplacePath,
     message: error.message
   }));
+}
+
+function pluginDetailView(plugin: PluginDetail): MobilePluginDetailView {
+  return {
+    marketplaceName: plugin.marketplaceName,
+    marketplacePath: plugin.marketplacePath,
+    id: plugin.summary.id,
+    name: plugin.summary.name,
+    displayName: plugin.summary.interface?.displayName ?? null,
+    description: plugin.description ?? plugin.summary.interface?.longDescription ?? plugin.summary.interface?.shortDescription ?? null,
+    installed: plugin.summary.installed,
+    enabled: plugin.summary.enabled,
+    authPolicy: plugin.summary.authPolicy,
+    installPolicy: plugin.summary.installPolicy,
+    availability: plugin.summary.availability,
+    skillCount: plugin.skills.length,
+    hookCount: plugin.hooks.length,
+    appCount: plugin.apps.length,
+    mcpServers: plugin.mcpServers
+  };
+}
+
+function pluginLookupParams(input: PluginLookupInput): PluginReadParams {
+  return {
+    marketplacePath: input.marketplacePath ?? null,
+    remoteMarketplaceName: input.remoteMarketplaceName ?? null,
+    pluginName: input.pluginName
+  };
 }
 
 export class CodexAppServerClient {
@@ -615,6 +658,25 @@ export class CodexAppServerClient {
 
   async resetMemory(): Promise<void> {
     await this.peer.request("memory/reset", undefined);
+  }
+
+  async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {
+    const response = (await this.peer.request("plugin/read", pluginLookupParams(input))) as PluginReadResponse;
+    return pluginDetailView(response.plugin);
+  }
+
+  async installPlugin(input: PluginLookupInput): Promise<MobilePluginInstallResultView> {
+    const params: PluginInstallParams = pluginLookupParams(input);
+    const response = (await this.peer.request("plugin/install", params)) as PluginInstallResponse;
+    return {
+      authPolicy: response.authPolicy,
+      appsNeedingAuth: response.appsNeedingAuth
+    };
+  }
+
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    const params: PluginUninstallParams = { pluginId };
+    await this.peer.request("plugin/uninstall", params);
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

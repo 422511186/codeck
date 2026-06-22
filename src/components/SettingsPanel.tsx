@@ -4,12 +4,20 @@ import { useEffect, useState } from "react";
 import {
   disableRemoteControl,
   enableRemoteControl,
+  installPlugin,
   readRemoteControlPairingStatus,
   readSettings,
+  readPlugin,
   revokeRemoteControlClient,
-  startRemoteControlPairing
+  startRemoteControlPairing,
+  uninstallPlugin
 } from "../lib/client-api";
-import type { MobileModelOption, MobileRemoteControlPairingView, MobileSettingsView } from "../shared/codex";
+import type {
+  MobileModelOption,
+  MobilePluginDetailView,
+  MobileRemoteControlPairingView,
+  MobileSettingsView
+} from "../shared/codex";
 
 type SettingsPanelProps = {
   models: MobileModelOption[];
@@ -135,6 +143,8 @@ export function SettingsPanel({
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
   const [pairing, setPairing] = useState<MobileRemoteControlPairingView | null>(null);
   const [pairingClaimed, setPairingClaimed] = useState<boolean | null>(null);
+  const [pluginDetail, setPluginDetail] = useState<MobilePluginDetailView | null>(null);
+  const [pluginNotice, setPluginNotice] = useState("");
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -238,6 +248,66 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法读取配对状态");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadPlugin(pluginName: string) {
+    const plugin = settings?.plugins.find((item) => item.name === pluginName);
+    if (!plugin) {
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    setPluginNotice("");
+    try {
+      const detail = await readPlugin({
+        marketplaceName: plugin.marketplaceName,
+        marketplacePath: plugin.marketplacePath,
+        pluginName: plugin.name
+      });
+      setPluginDetail(detail);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取插件详情");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleInstallPlugin(pluginName: string) {
+    const plugin = settings?.plugins.find((item) => item.name === pluginName);
+    if (!plugin) {
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    try {
+      const result = await installPlugin({
+        marketplaceName: plugin.marketplaceName,
+        marketplacePath: plugin.marketplacePath,
+        pluginName: plugin.name
+      });
+      setPluginNotice(`安装结果：${result.authPolicy}`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法安装插件");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleUninstallPlugin(pluginId: string) {
+    setRemoteBusy(true);
+    setError("");
+    try {
+      await uninstallPlugin(pluginId);
+      setPluginNotice(`插件已卸载：${pluginId}`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法卸载插件");
     } finally {
       setRemoteBusy(false);
     }
@@ -354,6 +424,50 @@ export function SettingsPanel({
               </button>
             );
           })}
+        </div>
+      ) : null}
+      {settings?.plugins.length ? (
+        <div className="plugin-control-panel">
+          {settings.plugins.map((plugin) => {
+            const label = plugin.displayName || plugin.name;
+            return (
+              <div className="plugin-action-row" key={plugin.id}>
+                <span>{label}</span>
+                <button type="button" onClick={() => handleReadPlugin(plugin.name)} disabled={remoteBusy}>
+                  详情 {label}
+                </button>
+                <button type="button" onClick={() => handleInstallPlugin(plugin.name)} disabled={remoteBusy}>
+                  安装 {label}
+                </button>
+                <button type="button" onClick={() => handleUninstallPlugin(plugin.id)} disabled={remoteBusy}>
+                  卸载 {label}
+                </button>
+              </div>
+            );
+          })}
+          {pluginDetail ? (
+            <dl className="settings-list">
+              <div className="settings-row">
+                <dt>插件详情</dt>
+                <dd>{pluginDetail.displayName || pluginDetail.name}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>描述</dt>
+                <dd>{pluginDetail.description || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>组成</dt>
+                <dd>
+                  Skills {pluginDetail.skillCount} / Hooks {pluginDetail.hookCount} / Apps {pluginDetail.appCount}
+                </dd>
+              </div>
+              <div className="settings-row">
+                <dt>MCP</dt>
+                <dd>{pluginDetail.mcpServers.length ? `MCP ${pluginDetail.mcpServers.join(" / ")}` : "-"}</dd>
+              </div>
+            </dl>
+          ) : null}
+          {pluginNotice ? <p className="settings-note">{pluginNotice}</p> : null}
         </div>
       ) : null}
     </section>

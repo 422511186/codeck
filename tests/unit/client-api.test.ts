@@ -6,8 +6,10 @@ import {
   deleteThread,
   disableRemoteControl,
   enableRemoteControl,
+  installPlugin,
   listThreads,
   renameThread,
+  readPlugin,
   readRemoteControlPairingStatus,
   resumeThread,
   resetMemory,
@@ -16,6 +18,7 @@ import {
   setThreadMemoryMode,
   startRemoteControlPairing,
   startReview,
+  uninstallPlugin,
   updateThreadSettings
 } from "../../src/lib/client-api";
 
@@ -233,5 +236,49 @@ describe("client-api", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ environmentId: "env-1" })
     });
+  });
+
+  it("读取、安装和卸载插件时调用插件端点", async () => {
+    const lookup = {
+      marketplaceName: "个人插件市场",
+      marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+      pluginName: "browser-tools"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ plugin: { id: "browser-tools", displayName: "浏览器工具", skillCount: 1 } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { authPolicy: "ON_USE", appsNeedingAuth: [] } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(readPlugin(lookup)).resolves.toEqual({ id: "browser-tools", displayName: "浏览器工具", skillCount: 1 });
+    await expect(installPlugin(lookup)).resolves.toEqual({ authPolicy: "ON_USE", appsNeedingAuth: [] });
+    await expect(uninstallPlugin("browser-tools")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/plugins/browser-tools", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        marketplaceName: "个人插件市场",
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json"
+      })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/plugins/browser-tools/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        marketplaceName: "个人插件市场",
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json"
+      })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/plugins/browser-tools/uninstall", { method: "POST" });
   });
 });
