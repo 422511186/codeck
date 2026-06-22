@@ -20,11 +20,13 @@ import {
   listThreads,
   readCodexStatus,
   readThread,
+  resetMemory,
   resumeThread,
   renameThread,
   resolveServerRequest,
   rollbackThread,
   setThreadGoal,
+  setThreadMemoryMode,
   steerTurn,
   startThread,
   startTurn,
@@ -382,6 +384,22 @@ export function MobileWorkbench() {
     ]);
   }
 
+  function appendThreadNotice(threadId: string, id: string, text: string) {
+    setSelectedThread((current) => {
+      if (!current || current.id !== threadId) {
+        return current;
+      }
+
+      return {
+        ...current,
+        timeline: [
+          ...current.timeline.filter((item) => item.id !== id),
+          { id, role: "tool", text }
+        ]
+      };
+    });
+  }
+
   async function refreshThreadsAfterRemoval() {
     const page = await listThreads(threadSearchTerm);
     setThreads(page.threads);
@@ -474,6 +492,40 @@ export function MobileWorkbench() {
       await compactThread(selectedThread.id);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法压缩上下文");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleSetMemoryMode(mode: "enabled" | "disabled") {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await setThreadMemoryMode(selectedThread.id, mode);
+      appendThreadNotice(selectedThread.id, `memory-mode-${mode}`, mode === "enabled" ? "记忆已启用" : "记忆已禁用");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法切换记忆模式");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleResetMemory() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await resetMemory();
+      appendThreadNotice(selectedThread.id, "memory-reset", "记忆已重置");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法重置记忆");
     } finally {
       setSending(false);
     }
@@ -708,6 +760,8 @@ export function MobileWorkbench() {
           onArchive={handleArchiveThread}
           onDelete={handleDeleteThread}
           onCompact={handleCompactThread}
+          onSetMemoryMode={handleSetMemoryMode}
+          onResetMemory={handleResetMemory}
           onSetGoal={handleSetThreadGoal}
           onClearGoal={handleClearThreadGoal}
           onEditResend={handleEditResend}

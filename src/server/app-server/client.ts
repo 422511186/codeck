@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { InitializeParams } from "../../../docs/generated/app-server-ts/InitializeParams";
 import type { InitializeResponse } from "../../../docs/generated/app-server-ts/InitializeResponse";
+import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
@@ -37,6 +38,7 @@ import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadForkResponse } from "../../../docs/generated/app-server-ts/v2/ThreadForkResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
+import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
@@ -502,6 +504,15 @@ export class CodexAppServerClient {
   async compactThread(threadId: string): Promise<void> {
     const params: ThreadCompactStartParams = { threadId };
     await this.peer.request("thread/compact/start", params);
+  }
+
+  async setThreadMemoryMode(threadId: string, mode: ThreadMemoryMode): Promise<void> {
+    const params: ThreadMemoryModeSetParams = { threadId, mode };
+    await this.peer.request("thread/memoryMode/set", params);
+  }
+
+  async resetMemory(): Promise<void> {
+    await this.peer.request("memory/reset", undefined);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

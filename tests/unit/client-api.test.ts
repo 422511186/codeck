@@ -7,7 +7,9 @@ import {
   listThreads,
   renameThread,
   resumeThread,
+  resetMemory,
   setThreadGoal,
+  setThreadMemoryMode,
   updateThreadSettings
 } from "../../src/lib/client-api";
 
@@ -134,5 +136,23 @@ describe("client-api", () => {
     await expect(compactThread("thread-1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/compact", { method: "POST" });
+  });
+
+  it("切换记忆模式和重置记忆时调用 memory 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setThreadMemoryMode("thread-1", "disabled")).resolves.toBeUndefined();
+    await expect(resetMemory()).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/memory", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "disabled" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/memory/reset", { method: "POST" });
   });
 });

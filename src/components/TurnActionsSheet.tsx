@@ -9,6 +9,8 @@ type TurnActionsSheetProps = {
   onArchive(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
+  onSetMemoryMode(mode: "enabled" | "disabled"): Promise<void>;
+  onResetMemory(): Promise<void>;
   onSetGoal(objective: string, tokenBudget?: number | null): Promise<void>;
   onClearGoal(): Promise<void>;
   onEditResend(text: string): Promise<void>;
@@ -24,6 +26,8 @@ export function TurnActionsSheet({
   onArchive,
   onDelete,
   onCompact,
+  onSetMemoryMode,
+  onResetMemory,
   onSetGoal,
   onClearGoal,
   onEditResend,
@@ -103,6 +107,17 @@ export function TurnActionsSheet({
       <div className="turn-actions-row">
         <button type="button" onClick={onDelete} disabled={busy}>
           删除
+        </button>
+        <button type="button" onClick={onResetMemory} disabled={busy}>
+          重置记忆
+        </button>
+      </div>
+      <div className="turn-actions-row">
+        <button type="button" onClick={() => onSetMemoryMode("enabled")} disabled={busy}>
+          启用记忆
+        </button>
+        <button type="button" onClick={() => onSetMemoryMode("disabled")} disabled={busy}>
+          禁用记忆
         </button>
       </div>
       <form className="turn-action-form" onSubmit={submitRename}>

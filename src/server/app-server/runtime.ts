@@ -1,4 +1,5 @@
 import type { AppServerConfig } from "../../config/env";
+import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type {
   MobileCommandResult,
   MobileFileContent,
@@ -51,6 +52,7 @@ import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
+import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 
 type TextUserInput = { type: "text"; text: string };
 
@@ -371,6 +373,16 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           turnId: this.thread.turns.at(-1)?.id || "mock-turn-1"
         }
       });
+      return {};
+    }
+
+    if (method === "thread/memoryMode/set") {
+      const memoryParams = params as ThreadMemoryModeSetParams;
+      this.selectThread(memoryParams.threadId);
+      return {};
+    }
+
+    if (method === "memory/reset") {
       return {};
     }
 
@@ -1078,6 +1090,16 @@ export class AppServerGateway {
   async compactThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.compactThread(threadId);
+  }
+
+  async setThreadMemoryMode(threadId: string, mode: ThreadMemoryMode): Promise<void> {
+    await this.ensureReady();
+    await this.client.setThreadMemoryMode(threadId, mode);
+  }
+
+  async resetMemory(): Promise<void> {
+    await this.ensureReady();
+    await this.client.resetMemory();
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

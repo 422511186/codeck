@@ -393,6 +393,14 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/memoryMode/set") {
+      return {};
+    }
+
+    if (method === "memory/reset") {
+      return {};
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -746,6 +754,19 @@ describe("CodexAppServerClient", () => {
       method: "thread/compact/start",
       params: { threadId: "thread-1" }
     });
+  });
+
+  it("能切换当前会话记忆模式并重置记忆", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.setThreadMemoryMode("thread-1", "enabled")).resolves.toBeUndefined();
+    await expect(client.resetMemory()).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-2)).toEqual([
+      { method: "thread/memoryMode/set", params: { threadId: "thread-1", mode: "enabled" } },
+      { method: "memory/reset", params: undefined }
+    ]);
   });
 
   it("能用 cwd、模型、思考强度和权限启动新会话", async () => {

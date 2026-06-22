@@ -258,6 +258,26 @@ export async function compactThread(threadId: string): Promise<void> {
   }
 }
 
+export async function setThreadMemoryMode(threadId: string, mode: "enabled" | "disabled"): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/memory`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法切换记忆模式");
+  }
+}
+
+export async function resetMemory(): Promise<void> {
+  const response = await fetch("/api/codex/memory/reset", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法重置记忆");
+  }
+}
+
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   const response = await fetch(`/api/codex/turns/${encodeURIComponent(threadId)}/interrupt`, {
     method: "POST",

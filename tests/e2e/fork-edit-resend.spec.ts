@@ -59,3 +59,16 @@ test("手机端可以压缩当前会话上下文", async ({ page }) => {
 
   await expect(page.getByText("上下文已压缩")).toBeVisible();
 });
+
+test("手机端可以切换记忆模式并重置记忆", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "启用记忆" }).click();
+  await expect(page.getByText("记忆已启用")).toBeVisible();
+
+  await page.getByRole("button", { name: "禁用记忆" }).click();
+  await expect(page.getByText("记忆已禁用")).toBeVisible();
+
+  await page.getByRole("button", { name: "重置记忆" }).click();
+  await expect(page.getByText("记忆已重置")).toBeVisible();
+});

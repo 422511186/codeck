@@ -335,6 +335,14 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持切换记忆模式和重置记忆", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.setThreadMemoryMode("mock-thread-1", "enabled")).resolves.toBeUndefined();
+    await expect(gateway.resetMemory()).resolves.toBeUndefined();
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
