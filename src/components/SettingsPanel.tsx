@@ -14,12 +14,6 @@ type SettingsPanelProps = {
   onPermissionsChange(permissions: string): void;
 };
 
-const permissionOptions = [
-  { value: "default", label: "default" },
-  { value: "read-only", label: "read-only" },
-  { value: "full-auto", label: "full-auto" }
-];
-
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -33,6 +27,9 @@ export function SettingsPanel({
   const [error, setError] = useState("");
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
   const reasoningOptions = selectedModel?.supportedReasoningEfforts || [];
+  const permissionOptions = settings?.permissionProfiles.length
+    ? settings.permissionProfiles
+    : [{ id: selectedPermissions, label: selectedPermissions, description: null }];
 
   useEffect(() => {
     let cancelled = false;
@@ -100,8 +97,8 @@ export function SettingsPanel({
           <span>权限配置</span>
           <select value={selectedPermissions} onChange={(event) => onPermissionsChange(event.target.value)}>
             {permissionOptions.map((permission) => (
-              <option value={permission.value} key={permission.value}>
-                {permission.label}
+              <option value={permission.id} key={permission.id}>
+                {permission.description ? `${permission.label} - ${permission.description}` : permission.label}
               </option>
             ))}
           </select>

@@ -11,6 +11,7 @@ import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/
 import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
+import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
@@ -393,12 +394,14 @@ export class CodexAppServerClient {
   }
 
   async readSettings(): Promise<MobileSettingsView> {
-    const [configResponse, remoteControlResponse] = await Promise.all([
+    const [configResponse, remoteControlResponse, permissionProfileResponse] = await Promise.all([
       this.peer.request("config/read", {}),
-      this.peer.request("remoteControl/status/read", {})
+      this.peer.request("remoteControl/status/read", {}),
+      this.peer.request("permissionProfile/list", {})
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
+    const permissionProfiles = (permissionProfileResponse as PermissionProfileListResponse).data;
 
     return {
       model: settingsValue(config.model),
@@ -406,7 +409,12 @@ export class CodexAppServerClient {
       reasoningEffort: settingsValue(config.model_reasoning_effort),
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
-      remoteControlStatus: remoteControl.status
+      remoteControlStatus: remoteControl.status,
+      permissionProfiles: permissionProfiles.map((profile) => ({
+        id: profile.id,
+        label: profile.id,
+        description: profile.description
+      }))
     };
   }
 

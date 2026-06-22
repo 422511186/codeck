@@ -26,6 +26,12 @@ export type MobileModelOption = {
   inputModalities: string[];
 };
 
+export type MobilePermissionProfileOption = {
+  id: string;
+  label: string;
+  description: string | null;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";
@@ -68,4 +74,5 @@ export type MobileSettingsView = {
   approvalPolicy: string | null;
   sandboxMode: string | null;
   remoteControlStatus: string;
+  permissionProfiles: MobilePermissionProfileOption[];
 };

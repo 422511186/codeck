@@ -407,6 +407,17 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "permissionProfile/list") {
+      return {
+        data: [
+          { id: "default", description: "默认权限" },
+          { id: "read-only", description: "只读" },
+          { id: "full-auto", description: "自动执行" }
+        ],
+        nextCursor: null
+      };
+    }
+
     if (method === "fs/readDirectory") {
       return {
         entries: [
@@ -756,7 +767,8 @@ describe("CodexAppServerClient", () => {
   });
 
   it("能读取设置状态", async () => {
-    const client = new CodexAppServerClient(new FakePeer());
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
 
     await expect(client.readSettings()).resolves.toEqual({
       model: "gpt-5-codex",
@@ -764,8 +776,14 @@ describe("CodexAppServerClient", () => {
       reasoningEffort: "medium",
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
-      remoteControlStatus: "connected"
+      remoteControlStatus: "connected",
+      permissionProfiles: [
+        { id: "default", label: "default", description: "默认权限" },
+        { id: "read-only", label: "read-only", description: "只读" },
+        { id: "full-auto", label: "full-auto", description: "自动执行" }
+      ]
     });
+    expect(peer.calls.map((call) => call.method)).toContain("permissionProfile/list");
   });
 
   it("能分页读取 turns 和 turn items", async () => {

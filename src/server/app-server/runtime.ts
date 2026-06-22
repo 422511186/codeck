@@ -507,6 +507,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "permissionProfile/list") {
+      return {
+        data: [
+          { id: "default", description: "默认权限配置" },
+          { id: "read-only", description: "只读工作区" },
+          { id: "full-auto", description: "允许自动执行" }
+        ],
+        nextCursor: null
+      };
+    }
+
     if (method === "fs/readDirectory") {
       const readParams = params as FsReadDirectoryParams;
       return {

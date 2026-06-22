@@ -195,7 +195,12 @@ describe("createAppServerGateway", () => {
       reasoningEffort: "medium",
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
-      remoteControlStatus: "connected"
+      remoteControlStatus: "connected",
+      permissionProfiles: [
+        { id: "default", label: "default", description: "默认权限配置" },
+        { id: "read-only", label: "read-only", description: "只读工作区" },
+        { id: "full-auto", label: "full-auto", description: "允许自动执行" }
+      ]
     });
   });
 
