@@ -33,10 +33,27 @@ export type BrowserCodexEvent =
       delta: string;
     }
   | {
+      kind: "file_output_delta";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      delta: string;
+    }
+  | {
       kind: "turn_diff_updated";
       threadId: string;
       turnId: string;
       diff: string;
+    }
+  | {
+      kind: "token_usage_updated";
+      threadId: string;
+      turnId: string;
+      totalTokens: number;
+      inputTokens: number;
+      outputTokens: number;
+      reasoningOutputTokens: number;
+      modelContextWindow: number | null;
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -51,18 +68,17 @@ type DeltaParams = {
   delta: string;
 };
 
-function isDeltaParams(value: unknown): value is DeltaParams {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "threadId" in value &&
-    "turnId" in value &&
-    "itemId" in value &&
-    "delta" in value
-  );
+type DeltaEventKind = Extract<BrowserCodexEvent, { delta: string }>["kind"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function deltaEvent(kind: BrowserCodexEvent["kind"], params: unknown): BrowserCodexEventEnvelope | null {
+function isDeltaParams(value: unknown): value is DeltaParams {
+  return isRecord(value) && "threadId" in value && "turnId" in value && "itemId" in value && "delta" in value;
+}
+
+function deltaEvent(kind: DeltaEventKind, params: unknown): BrowserCodexEventEnvelope | null {
   if (!isDeltaParams(params)) {
     return null;
   }
@@ -75,8 +91,12 @@ function deltaEvent(kind: BrowserCodexEvent["kind"], params: unknown): BrowserCo
       turnId: String(params.turnId),
       itemId: String(params.itemId),
       delta: String(params.delta)
-    } as BrowserCodexEvent
+    }
   };
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 export function normalizeAppServerNotification(
@@ -98,6 +118,10 @@ export function normalizeAppServerNotification(
     return deltaEvent("command_output_delta", message.params);
   }
 
+  if (message.method === "item/fileChange/outputDelta") {
+    return deltaEvent("file_output_delta", message.params);
+  }
+
   if (message.method === "turn/diff/updated") {
     const params = message.params as { threadId?: unknown; turnId?: unknown; diff?: unknown } | null | undefined;
     if (!params || !params.threadId || !params.turnId || typeof params.diff !== "string") {
@@ -111,6 +135,31 @@ export function normalizeAppServerNotification(
         threadId: String(params.threadId),
         turnId: String(params.turnId),
         diff: params.diff
+      }
+    };
+  }
+
+  if (message.method === "thread/tokenUsage/updated") {
+    const params = message.params as
+      | { threadId?: unknown; turnId?: unknown; tokenUsage?: { total?: Record<string, unknown>; modelContextWindow?: unknown } }
+      | null
+      | undefined;
+    if (!params?.threadId || !params.turnId || !params.tokenUsage?.total) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "token_usage_updated",
+        threadId: String(params.threadId),
+        turnId: String(params.turnId),
+        totalTokens: numberOrZero(params.tokenUsage.total.totalTokens),
+        inputTokens: numberOrZero(params.tokenUsage.total.inputTokens),
+        outputTokens: numberOrZero(params.tokenUsage.total.outputTokens),
+        reasoningOutputTokens: numberOrZero(params.tokenUsage.total.reasoningOutputTokens),
+        modelContextWindow:
+          typeof params.tokenUsage.modelContextWindow === "number" ? params.tokenUsage.modelContextWindow : null
       }
     };
   }

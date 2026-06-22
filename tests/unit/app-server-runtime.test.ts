@@ -53,5 +53,67 @@ describe("createAppServerGateway", () => {
         delta: "实时事件：实时流测试"
       }
     });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_delta",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        itemId: "mock-reasoning-4",
+        delta: "思考：实时流测试"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "plan_delta",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        itemId: "mock-plan-4",
+        delta: "计划：整理请求并生成回复"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        itemId: "mock-command-4",
+        delta: "命令输出：mock 完成"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "turn_diff_updated",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        diff: "diff --git a/mock.txt b/mock.txt"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "file_output_delta",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        itemId: "mock-file-4",
+        delta: "文件输出：mock.txt 已更新"
+      }
+    });
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "token_usage_updated",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        totalTokens: 128,
+        inputTokens: 48,
+        outputTokens: 64,
+        reasoningOutputTokens: 16,
+        modelContextWindow: 200000
+      }
+    });
   });
 });

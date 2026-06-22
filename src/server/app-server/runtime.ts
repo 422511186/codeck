@@ -177,14 +177,56 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         updatedAt: Math.floor(Date.now() / 1000)
       };
       setTimeout(() => {
+        const baseParams = {
+          threadId: startParams.threadId,
+          turnId
+        };
+        this.emitNotification({
+          method: "item/reasoning/textDelta",
+          params: { ...baseParams, itemId: `mock-reasoning-${this.itemCounter}`, delta: `思考：${text}` }
+        });
+        this.emitNotification({
+          method: "item/plan/delta",
+          params: { ...baseParams, itemId: `mock-plan-${this.itemCounter}`, delta: "计划：整理请求并生成回复" }
+        });
+        this.emitNotification({
+          method: "item/commandExecution/outputDelta",
+          params: { ...baseParams, itemId: `mock-command-${this.itemCounter}`, delta: "命令输出：mock 完成" }
+        });
+        this.emitNotification({
+          method: "turn/diff/updated",
+          params: { ...baseParams, diff: "diff --git a/mock.txt b/mock.txt" }
+        });
+        this.emitNotification({
+          method: "item/fileChange/outputDelta",
+          params: { ...baseParams, itemId: `mock-file-${this.itemCounter}`, delta: "文件输出：mock.txt 已更新" }
+        });
+        this.emitNotification({
+          method: "thread/tokenUsage/updated",
+          params: {
+            ...baseParams,
+            tokenUsage: {
+              total: {
+                totalTokens: 128,
+                inputTokens: 48,
+                cachedInputTokens: 0,
+                outputTokens: 64,
+                reasoningOutputTokens: 16
+              },
+              last: {
+                totalTokens: 128,
+                inputTokens: 48,
+                cachedInputTokens: 0,
+                outputTokens: 64,
+                reasoningOutputTokens: 16
+              },
+              modelContextWindow: 200000
+            }
+          }
+        });
         this.emitNotification({
           method: "item/agentMessage/delta",
-          params: {
-            threadId: startParams.threadId,
-            turnId,
-            itemId: liveItemId,
-            delta: `实时事件：${text}`
-          }
+          params: { ...baseParams, itemId: liveItemId, delta: `实时事件：${text}` }
         });
       }, 25);
 

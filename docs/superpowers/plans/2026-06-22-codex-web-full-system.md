@@ -99,7 +99,8 @@
 
 - [x] app-server notification 规范化为浏览器事件。
 - [x] `agentMessage/delta` 能增量更新当前 timeline。
-- [ ] reasoning、plan、command output、file output、diff、token usage 都能增量更新。
+- [x] reasoning、plan、command output、diff 能增量更新当前 timeline。
+- [x] file output、token usage 能增量更新当前 timeline。
 - [ ] WebSocket 断线后显示断连状态，重连后重新读取当前 thread。
 - [ ] 同一 item 的 delta 不重复、不乱序追加。
 
