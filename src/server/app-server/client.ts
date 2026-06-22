@@ -21,6 +21,8 @@ import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
+import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
+import type { ThreadSearchResponse } from "../../../docs/generated/app-server-ts/v2/ThreadSearchResponse";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
@@ -81,6 +83,12 @@ export type ListThreadTurnsInput = {
 export type ListThreadTurnItemsInput = {
   threadId: string;
   turnId: string;
+  cursor?: string | null;
+  limit?: number | null;
+};
+
+export type SearchThreadsInput = {
+  searchTerm: string;
   cursor?: string | null;
   limit?: number | null;
 };
@@ -203,6 +211,25 @@ export class CodexAppServerClient {
 
     return {
       threads: response.data.map(threadSummary),
+      nextCursor: response.nextCursor
+    };
+  }
+
+  async searchThreads(input: SearchThreadsInput): Promise<MobileThreadPage> {
+    const params: ThreadSearchParams = {
+      searchTerm: input.searchTerm,
+      cursor: input.cursor,
+      limit: input.limit,
+      sortKey: "updated_at",
+      sortDirection: "desc"
+    };
+    const response = (await this.peer.request("thread/search", params)) as ThreadSearchResponse;
+
+    return {
+      threads: response.data.map((result) => ({
+        ...threadSummary(result.thread),
+        preview: result.snippet || result.thread.preview
+      })),
       nextCursor: response.nextCursor
     };
   }

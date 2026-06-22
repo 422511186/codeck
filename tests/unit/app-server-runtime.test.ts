@@ -212,4 +212,22 @@ describe("createAppServerGateway", () => {
       nextCursor: null
     });
   });
+
+  it("mock 模式支持搜索会话历史", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await gateway.startThread({ model: "gpt-5-codex", permissions: "default" });
+
+    await expect(gateway.searchThreads({ searchTerm: "示例", limit: 10 })).resolves.toMatchObject({
+      threads: expect.arrayContaining([
+        expect.objectContaining({
+          id: "mock-thread-1",
+          title: "示例会话",
+          preview: expect.stringContaining("示例")
+        })
+      ]),
+      nextCursor: null
+    });
+  });
 });

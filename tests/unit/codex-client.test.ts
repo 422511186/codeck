@@ -99,6 +99,40 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/search") {
+      return {
+        data: [
+          {
+            thread: {
+              id: "search-thread-1",
+              sessionId: "search-session-1",
+              forkedFromId: null,
+              parentThreadId: null,
+              preview: "搜索命中的预览",
+              ephemeral: false,
+              modelProvider: "openai",
+              createdAt: 600,
+              updatedAt: 700,
+              status: { type: "idle" },
+              path: null,
+              cwd: "C:\\Users\\huang\\workspace\\demo",
+              cliVersion: "0.141.0",
+              source: "vscode",
+              threadSource: null,
+              agentNickname: null,
+              agentRole: null,
+              gitInfo: null,
+              name: "搜索结果",
+              turns: []
+            },
+            snippet: "命中片段"
+          }
+        ],
+        nextCursor: "search-next",
+        backwardsCursor: null
+      };
+    }
+
     if (method === "thread/turns/list") {
       return {
         data: [
@@ -641,6 +675,36 @@ describe("CodexAppServerClient", () => {
         turnId: "turn-page-1",
         cursor: "cursor-2",
         limit: 20
+      }
+    });
+  });
+
+  it("能搜索会话历史并整理成移动端摘要", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.searchThreads({ searchTerm: "登录", limit: 10, cursor: "search-cursor" })).resolves.toEqual({
+      threads: [
+        {
+          id: "search-thread-1",
+          title: "搜索结果",
+          preview: "命中片段",
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          modelProvider: "openai",
+          status: "idle",
+          updatedAt: 700
+        }
+      ],
+      nextCursor: "search-next"
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/search",
+      params: {
+        searchTerm: "登录",
+        limit: 10,
+        cursor: "search-cursor",
+        sortKey: "updated_at",
+        sortDirection: "desc"
       }
     });
   });

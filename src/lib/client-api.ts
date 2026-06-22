@@ -40,8 +40,13 @@ export async function readCodexStatus(): Promise<AppServerStatusView> {
   return payload.appServer;
 }
 
-export async function listThreads(): Promise<MobileThreadPage> {
-  const response = await fetch("/api/codex/threads", { cache: "no-store" });
+export async function listThreads(searchTerm = ""): Promise<MobileThreadPage> {
+  const params = new URLSearchParams();
+  if (searchTerm.trim()) {
+    params.set("search", searchTerm.trim());
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/codex/threads${query ? `?${query}` : ""}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error("无法读取会话历史");
   }

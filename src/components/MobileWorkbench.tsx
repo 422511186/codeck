@@ -52,7 +52,10 @@ export function MobileWorkbench() {
   const [selectedModelId, setSelectedModelId] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
   const [selectedPermissions, setSelectedPermissions] = useState("default");
+  const [threadSearchTerm, setThreadSearchTerm] = useState("");
+  const [searchingThreads, setSearchingThreads] = useState(false);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const threadSearchRequestIdRef = useRef(0);
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || defaultModel;
@@ -195,6 +198,28 @@ export function MobileWorkbench() {
       setSelectedThread(await readThread(threadId));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法读取会话内容");
+    }
+  }
+
+  async function handleSearchThreads(searchTerm: string) {
+    setThreadSearchTerm(searchTerm);
+    setSearchingThreads(true);
+    setLoadError("");
+    const requestId = ++threadSearchRequestIdRef.current;
+
+    try {
+      const page = await listThreads(searchTerm);
+      if (threadSearchRequestIdRef.current === requestId) {
+        setThreads(page.threads);
+      }
+    } catch (error) {
+      if (threadSearchRequestIdRef.current === requestId) {
+        setLoadError(error instanceof Error ? error.message : "无法搜索会话历史");
+      }
+    } finally {
+      if (threadSearchRequestIdRef.current === requestId) {
+        setSearchingThreads(false);
+      }
     }
   }
 
@@ -428,8 +453,16 @@ export function MobileWorkbench() {
             <section className="thread-list" aria-label="会话历史">
               <div className="section-title">
                 <h2>历史会话</h2>
-                <span>{threads.length}</span>
+                <span>{searchingThreads ? "搜索中" : threads.length}</span>
               </div>
+              <input
+                className="thread-search-input"
+                type="search"
+                aria-label="搜索历史会话"
+                placeholder="搜索历史会话"
+                value={threadSearchTerm}
+                onChange={(event) => void handleSearchThreads(event.target.value)}
+              />
               {threads.length > 0 ? (
                 threads.map((thread) => (
                   <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
@@ -442,8 +475,8 @@ export function MobileWorkbench() {
                 ))
               ) : (
                 <article className="empty-state">
-                  <h2>新会话</h2>
-                  <p>Codex</p>
+                  <h2>{threadSearchTerm.trim() ? "没有匹配的会话" : "新会话"}</h2>
+                  <p>{threadSearchTerm.trim() ? threadSearchTerm.trim() : "Codex"}</p>
                 </article>
               )}
             </section>

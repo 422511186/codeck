@@ -17,6 +17,7 @@ import {
   type ExecCommandInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
+  type SearchThreadsInput,
   type StartThreadInput,
   type StartTurnInput
 } from "./client";
@@ -41,6 +42,7 @@ import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-t
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
+import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 
 type TextUserInput = { type: "text"; text: string };
 
@@ -143,6 +145,24 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "thread/list") {
       return {
         data: this.threads.map((thread) => ({ ...thread, turns: [] })),
+        nextCursor: null,
+        backwardsCursor: null
+      };
+    }
+
+    if (method === "thread/search") {
+      const searchParams = params as ThreadSearchParams;
+      const searchTerm = searchParams.searchTerm.trim().toLowerCase();
+      const results = this.threads
+        .filter((thread) => this.threadMatchesSearch(thread, searchTerm))
+        .slice(0, searchParams.limit || undefined)
+        .map((thread) => ({
+          thread: { ...thread, turns: [] },
+          snippet: this.createSearchSnippet(thread, searchParams.searchTerm)
+        }));
+
+      return {
+        data: results,
         nextCursor: null,
         backwardsCursor: null
       };
@@ -519,6 +539,41 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     this.threads = [thread, ...this.threads.filter((item) => item.id !== thread.id)];
   }
 
+  private threadMatchesSearch(thread: Thread, searchTerm: string): boolean {
+    if (!searchTerm) {
+      return true;
+    }
+
+    const haystack = [
+      thread.name,
+      thread.preview,
+      thread.cwd,
+      ...thread.turns.flatMap((turn) =>
+        turn.items.map((item) => {
+          if (item.type === "agentMessage") {
+            return item.text;
+          }
+          if (item.type === "userMessage") {
+            return item.content.map((content) => (content.type === "text" ? content.text : "")).join(" ");
+          }
+          return "";
+        })
+      )
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .toLowerCase();
+
+    return haystack.includes(searchTerm);
+  }
+
+  private createSearchSnippet(thread: Thread, searchTerm: string): string {
+    const candidates = [thread.preview, thread.name, thread.cwd].filter((candidate): candidate is string =>
+      typeof candidate === "string"
+    );
+    return candidates.find((candidate) => candidate.includes(searchTerm)) || `搜索命中：${searchTerm}`;
+  }
+
   private createMockServerRequest(
     text: string,
     baseParams: { threadId: string; turnId: string },
@@ -722,6 +777,11 @@ export class AppServerGateway {
   async listThreads(params = {}): Promise<MobileThreadPage> {
     await this.ensureReady();
     return this.client.listThreads(params);
+  }
+
+  async searchThreads(input: SearchThreadsInput): Promise<MobileThreadPage> {
+    await this.ensureReady();
+    return this.client.searchThreads(input);
   }
 
   async listModels(): Promise<MobileModelOption[]> {

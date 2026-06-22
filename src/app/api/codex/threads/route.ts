@@ -10,12 +10,20 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");
-    const page = await getAppServerGateway().listThreads({
-      limit: 30,
-      cursor,
-      sortKey: "updated_at",
-      sortDirection: "desc"
-    });
+    const searchTerm = (url.searchParams.get("search") || url.searchParams.get("q") || "").trim();
+    const gateway = getAppServerGateway();
+    const page = searchTerm
+      ? await gateway.searchThreads({
+          searchTerm,
+          limit: 30,
+          cursor
+        })
+      : await gateway.listThreads({
+          limit: 30,
+          cursor,
+          sortKey: "updated_at",
+          sortDirection: "desc"
+        });
 
     return NextResponse.json({ ok: true, ...page });
   } catch (error) {
