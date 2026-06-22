@@ -29,13 +29,16 @@
 
 ## 当前状态
 
-项目目前处于设计和协议确认阶段。
+项目目前完成第一阶段可运行地基：个人 token 登录、签名 session cookie、移动端工作台壳子、浏览器 WebSocket 健康消息，以及 app-server JSON-RPC adapter 骨架。
 
 已经完成：
 
 - 确认本机 Codex CLI 支持 `app-server`、`remote-control` 和协议生成命令。
 - 生成 app-server TypeScript bindings 和 JSON Schema 快照。
 - 写入移动端 Web 设计文档。
+- 搭建 Next.js/React/TypeScript 移动端页面和 Node.js 自定义 server。
+- 实现个人模式登录，不需要数据库。
+- 加入单元测试和手机视口 Playwright 冒烟测试。
 
 关键文件：
 
@@ -58,6 +61,23 @@ npm run dev
 ```
 
 如果没有配置 `CODEX_WEB_ACCESS_TOKEN`，启动日志会打印临时登录 token。手机访问 `http://<后端机器局域网 IP>:3000` 后输入该 token 登录。
+
+## 第一阶段验收
+
+运行：
+
+```bash
+npm run verify
+npm run test:e2e
+```
+
+期望：
+
+- 类型检查和单元测试通过。
+- 手机视口 E2E 测试通过。
+- `npm run dev` 启动后，手机可以访问 Web 页面。
+- 未配置 `CODEX_WEB_ACCESS_TOKEN` 时，控制台会打印临时 token。
+- 登录后能看到移动端工作台、底部导航和连接状态。
 
 ## 个人模式配置
 
