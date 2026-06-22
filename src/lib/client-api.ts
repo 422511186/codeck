@@ -6,10 +6,12 @@ import type {
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
+  MobilePluginSkillContentView,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
   MobileSettingsView,
+  MobileSkillConfigWriteResultView,
   MobileThreadDetail,
   MobileThreadGoalView,
   MobileThreadPage,
@@ -407,6 +409,63 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法卸载插件");
   }
+}
+
+export async function readPluginSkill(input: {
+  remoteMarketplaceName: string;
+  remotePluginId: string;
+  skillName: string;
+}): Promise<MobilePluginSkillContentView> {
+  const response = await fetch(`/api/codex/plugin-skills/${encodeURIComponent(input.skillName)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      remoteMarketplaceName: input.remoteMarketplaceName,
+      remotePluginId: input.remotePluginId
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取插件 Skill");
+  }
+
+  const payload = (await response.json()) as { skill: MobilePluginSkillContentView };
+  return payload.skill;
+}
+
+export async function setSkillsExtraRoots(extraRoots: string[]): Promise<void> {
+  const response = await fetch("/api/codex/skills/extra-roots", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ extraRoots })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法设置 Skill 根目录");
+  }
+}
+
+export async function writeSkillConfig(input: {
+  name?: string | null;
+  path?: string | null;
+  enabled: boolean;
+}): Promise<MobileSkillConfigWriteResultView> {
+  const response = await fetch("/api/codex/skills/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: input.name ?? null,
+      path: input.path ?? null,
+      enabled: input.enabled
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法写入 Skill 配置");
+  }
+
+  const payload = (await response.json()) as { result: MobileSkillConfigWriteResultView };
+  return payload.result;
 }
 
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {

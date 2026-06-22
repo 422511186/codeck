@@ -636,7 +636,8 @@ pre {
 }
 
 .remote-control-panel button,
-.plugin-control-panel button {
+.plugin-control-panel button,
+.skill-control-panel button {
   min-height: 40px;
   border: 1px solid #435166;
   border-radius: 8px;
@@ -645,9 +646,21 @@ pre {
   font-size: 12px;
 }
 
-.plugin-control-panel {
+.plugin-control-panel,
+.skill-control-panel {
   display: grid;
   gap: 8px;
+}
+
+.skill-control-panel textarea {
+  min-height: 72px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #f2f2f2;
+  padding: 10px;
+  font-size: 12px;
+  resize: vertical;
 }
 
 .plugin-action-row {
@@ -660,6 +673,18 @@ pre {
 .settings-note {
   color: #cbd5e1;
   font-size: 12px;
+}
+
+.settings-code {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #0f1318;
+  color: #d9e2ef;
+  padding: 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .turn-action-form input {

@@ -132,6 +132,7 @@ export type MobilePluginDetailView = {
   marketplaceName: string;
   marketplacePath: string | null;
   id: string;
+  remotePluginId: string | null;
   name: string;
   displayName: string | null;
   description: string | null;
@@ -141,9 +142,22 @@ export type MobilePluginDetailView = {
   installPolicy: string;
   availability: string;
   skillCount: number;
+  skills: Array<{
+    name: string;
+    description: string;
+    enabled: boolean;
+  }>;
   hookCount: number;
   appCount: number;
   mcpServers: string[];
+};
+
+export type MobilePluginSkillContentView = {
+  contents: string | null;
+};
+
+export type MobileSkillConfigWriteResultView = {
+  effectiveEnabled: boolean;
 };
 
 export type MobilePluginInstallResultView = {

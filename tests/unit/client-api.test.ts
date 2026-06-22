@@ -10,15 +10,18 @@ import {
   listThreads,
   renameThread,
   readPlugin,
+  readPluginSkill,
   readRemoteControlPairingStatus,
   resumeThread,
   resetMemory,
   revokeRemoteControlClient,
   setThreadGoal,
   setThreadMemoryMode,
+  setSkillsExtraRoots,
   startRemoteControlPairing,
   startReview,
   uninstallPlugin,
+  writeSkillConfig,
   updateThreadSettings
 } from "../../src/lib/client-api";
 
@@ -280,5 +283,53 @@ describe("client-api", () => {
       })
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/plugins/browser-tools/uninstall", { method: "POST" });
+  });
+
+  it("读取插件 Skill、设置额外根目录和写入 Skill 配置时调用 Skills 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ skill: { contents: "# browser:control\n\n控制浏览器。" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { effectiveEnabled: false } })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      readPluginSkill({
+        remoteMarketplaceName: "个人插件市场",
+        remotePluginId: "remote-browser-tools",
+        skillName: "browser:control"
+      })
+    ).resolves.toEqual({ contents: "# browser:control\n\n控制浏览器。" });
+    await expect(setSkillsExtraRoots(["C:\\Users\\huang\\workspace\\skills"])).resolves.toBeUndefined();
+    await expect(writeSkillConfig({ name: "openai-docs", enabled: false })).resolves.toEqual({
+      effectiveEnabled: false
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/plugin-skills/browser%3Acontrol", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        remoteMarketplaceName: "个人插件市场",
+        remotePluginId: "remote-browser-tools"
+      })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/skills/extra-roots", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ extraRoots: ["C:\\Users\\huang\\workspace\\skills"] })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/skills/config", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "openai-docs", path: null, enabled: false })
+    });
   });
 });

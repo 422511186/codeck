@@ -152,3 +152,21 @@ test("设置面板可以查看、安装和卸载插件", async ({ page }) => {
   await page.getByRole("button", { name: "卸载 浏览器工具" }).click();
   await expect(page.getByText("插件已卸载：browser-tools")).toBeVisible();
 });
+
+test("设置面板可以管理 Skills 配置和读取插件 Skill", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  await page.getByPlaceholder("额外 Skill 根目录").fill("C:\\Users\\huang\\workspace\\skills");
+  await page.getByRole("button", { name: "设置 Skill 根目录" }).click();
+  await expect(page.getByText("Skill 根目录已更新")).toBeVisible();
+
+  await page.getByRole("button", { name: "禁用 openai-docs" }).click();
+  await expect(page.getByText("openai-docs 已禁用")).toBeVisible();
+
+  await page.getByRole("button", { name: "详情 浏览器工具" }).click();
+  await page.getByRole("button", { name: "读取 Skill browser:control" }).click();
+  await expect(page.getByText("# browser:control")).toBeVisible();
+  await expect(page.getByText("控制浏览器。")).toBeVisible();
+});

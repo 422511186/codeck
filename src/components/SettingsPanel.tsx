@@ -8,9 +8,12 @@ import {
   readRemoteControlPairingStatus,
   readSettings,
   readPlugin,
+  readPluginSkill,
   revokeRemoteControlClient,
+  setSkillsExtraRoots,
   startRemoteControlPairing,
-  uninstallPlugin
+  uninstallPlugin,
+  writeSkillConfig
 } from "../lib/client-api";
 import type {
   MobileModelOption,
@@ -145,6 +148,9 @@ export function SettingsPanel({
   const [pairingClaimed, setPairingClaimed] = useState<boolean | null>(null);
   const [pluginDetail, setPluginDetail] = useState<MobilePluginDetailView | null>(null);
   const [pluginNotice, setPluginNotice] = useState("");
+  const [skillRootText, setSkillRootText] = useState("");
+  const [skillNotice, setSkillNotice] = useState("");
+  const [pluginSkillContent, setPluginSkillContent] = useState("");
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -313,6 +319,59 @@ export function SettingsPanel({
     }
   }
 
+  async function handleSetSkillRoots() {
+    const roots = skillRootText
+      .split(/\r?\n/)
+      .map((root) => root.trim())
+      .filter(Boolean);
+    setRemoteBusy(true);
+    setError("");
+    try {
+      await setSkillsExtraRoots(roots);
+      setSkillNotice("Skill 根目录已更新");
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法设置 Skill 根目录");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleWriteSkillConfig(name: string, enabled: boolean) {
+    setRemoteBusy(true);
+    setError("");
+    try {
+      const result = await writeSkillConfig({ name, enabled });
+      setSkillNotice(`${name} ${result.effectiveEnabled ? "已启用" : "已禁用"}`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法写入 Skill 配置");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadPluginSkill(skillName: string) {
+    if (!pluginDetail?.remotePluginId) {
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    try {
+      const skill = await readPluginSkill({
+        remoteMarketplaceName: pluginDetail.marketplaceName,
+        remotePluginId: pluginDetail.remotePluginId,
+        skillName
+      });
+      setPluginSkillContent(skill.contents || "");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取插件 Skill");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
   return (
     <section className="panel-view" aria-label="设置面板">
       <div className="section-title">
@@ -467,7 +526,46 @@ export function SettingsPanel({
               </div>
             </dl>
           ) : null}
+          {pluginDetail?.skills.length ? (
+            <div className="skill-control-panel">
+              {pluginDetail.skills.map((skill) => (
+                <button
+                  type="button"
+                  key={skill.name}
+                  onClick={() => handleReadPluginSkill(skill.name)}
+                  disabled={remoteBusy || !pluginDetail.remotePluginId}
+                >
+                  读取 Skill {skill.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {pluginSkillContent ? <pre className="settings-code">{pluginSkillContent}</pre> : null}
           {pluginNotice ? <p className="settings-note">{pluginNotice}</p> : null}
+        </div>
+      ) : null}
+      {settings ? (
+        <div className="skill-control-panel">
+          <textarea
+            value={skillRootText}
+            onChange={(event) => setSkillRootText(event.target.value)}
+            placeholder="额外 Skill 根目录"
+            disabled={remoteBusy}
+          />
+          <button type="button" onClick={handleSetSkillRoots} disabled={remoteBusy}>
+            设置 Skill 根目录
+          </button>
+          {settings.skills.map((skill) => (
+            <button
+              type="button"
+              key={`${skill.cwd}-${skill.name}`}
+              onClick={() => handleWriteSkillConfig(skill.name, !skill.enabled)}
+              disabled={remoteBusy}
+            >
+              {skill.enabled ? "禁用" : "启用"} {skill.name}
+            </button>
+          ))}
+          {skillNotice ? <p className="settings-note">{skillNotice}</p> : null}
         </div>
       ) : null}
     </section>

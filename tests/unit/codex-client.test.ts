@@ -785,7 +785,7 @@ class FakePeer implements AppServerPeer {
           },
           shareUrl: null,
           description: "用于移动端验证网页和截图。",
-          skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制" }],
+          skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制", enabled: true }],
           hooks: [{ name: "after-edit", description: "编辑后检查" }],
           apps: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }],
           appTemplates: [],
@@ -803,6 +803,18 @@ class FakePeer implements AppServerPeer {
 
     if (method === "plugin/uninstall") {
       return {};
+    }
+
+    if (method === "plugin/skill/read") {
+      return { contents: "# browser:control\n\n控制浏览器。" };
+    }
+
+    if (method === "skills/extraRoots/set") {
+      return {};
+    }
+
+    if (method === "skills/config/write") {
+      return { effectiveEnabled: false };
     }
 
     throw new Error(`unexpected method ${method}`);
@@ -1392,6 +1404,7 @@ describe("CodexAppServerClient", () => {
       marketplaceName: "个人插件市场",
       marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
       id: "browser-tools",
+      remotePluginId: null,
       name: "browser-tools",
       displayName: "浏览器工具",
       description: "用于移动端验证网页和截图。",
@@ -1401,6 +1414,7 @@ describe("CodexAppServerClient", () => {
       installPolicy: "AVAILABLE",
       availability: "AVAILABLE",
       skillCount: 1,
+      skills: [{ name: "browser:control", description: "控制浏览器", enabled: true }],
       hookCount: 1,
       appCount: 1,
       mcpServers: ["browser"]
@@ -1432,6 +1446,38 @@ describe("CodexAppServerClient", () => {
           }
         },
         { method: "plugin/uninstall", params: { pluginId: "browser-tools" } }
+      ])
+    );
+  });
+
+  it("能读取插件 Skill、设置额外根目录并写入 Skill 配置", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.readPluginSkill({
+        remoteMarketplaceName: "个人插件市场",
+        remotePluginId: "remote-browser-tools",
+        skillName: "browser:control"
+      })
+    ).resolves.toEqual({ contents: "# browser:control\n\n控制浏览器。" });
+    await expect(client.setSkillsExtraRoots(["C:\\Users\\huang\\workspace\\skills"])).resolves.toBeUndefined();
+    await expect(client.writeSkillConfig({ name: "openai-docs", enabled: false })).resolves.toEqual({
+      effectiveEnabled: false
+    });
+
+    expect(peer.calls).toEqual(
+      expect.arrayContaining([
+        {
+          method: "plugin/skill/read",
+          params: {
+            remoteMarketplaceName: "个人插件市场",
+            remotePluginId: "remote-browser-tools",
+            skillName: "browser:control"
+          }
+        },
+        { method: "skills/extraRoots/set", params: { extraRoots: ["C:\\Users\\huang\\workspace\\skills"] } },
+        { method: "skills/config/write", params: { name: "openai-docs", path: null, enabled: false } }
       ])
     );
   });

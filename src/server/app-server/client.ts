@@ -25,6 +25,8 @@ import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/
 import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
 import type { PluginReadParams } from "../../../docs/generated/app-server-ts/v2/PluginReadParams";
 import type { PluginReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginReadResponse";
+import type { PluginSkillReadParams } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadParams";
+import type { PluginSkillReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadResponse";
 import type { PluginUninstallParams } from "../../../docs/generated/app-server-ts/v2/PluginUninstallParams";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlClientsRevokeParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsRevokeParams";
@@ -41,6 +43,9 @@ import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2
 import type { ReviewStartResponse } from "../../../docs/generated/app-server-ts/v2/ReviewStartResponse";
 import type { SkillsListParams } from "../../../docs/generated/app-server-ts/v2/SkillsListParams";
 import type { SkillsListResponse } from "../../../docs/generated/app-server-ts/v2/SkillsListResponse";
+import type { SkillsConfigWriteParams } from "../../../docs/generated/app-server-ts/v2/SkillsConfigWriteParams";
+import type { SkillsConfigWriteResponse } from "../../../docs/generated/app-server-ts/v2/SkillsConfigWriteResponse";
+import type { SkillsExtraRootsSetParams } from "../../../docs/generated/app-server-ts/v2/SkillsExtraRootsSetParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
 import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
@@ -90,6 +95,7 @@ import type {
   MobilePluginMarketplaceErrorView,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
+  MobilePluginSkillContentView,
   MobilePluginView,
   MobileRateLimitView,
   MobileRemoteControlClientView,
@@ -97,6 +103,7 @@ import type {
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
   MobileSettingsView,
+  MobileSkillConfigWriteResultView,
   MobileSkillErrorView,
   MobileSkillView,
   MobileThreadGoalView,
@@ -171,6 +178,18 @@ export type PluginLookupInput = {
   marketplacePath?: string | null;
   remoteMarketplaceName?: string | null;
   pluginName: string;
+};
+
+export type PluginSkillReadInput = {
+  remoteMarketplaceName: string;
+  remotePluginId: string;
+  skillName: string;
+};
+
+export type WriteSkillConfigInput = {
+  name?: string | null;
+  path?: string | null;
+  enabled: boolean;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -438,6 +457,7 @@ function pluginDetailView(plugin: PluginDetail): MobilePluginDetailView {
     marketplaceName: plugin.marketplaceName,
     marketplacePath: plugin.marketplacePath,
     id: plugin.summary.id,
+    remotePluginId: plugin.summary.remotePluginId,
     name: plugin.summary.name,
     displayName: plugin.summary.interface?.displayName ?? null,
     description: plugin.description ?? plugin.summary.interface?.longDescription ?? plugin.summary.interface?.shortDescription ?? null,
@@ -447,6 +467,11 @@ function pluginDetailView(plugin: PluginDetail): MobilePluginDetailView {
     installPolicy: plugin.summary.installPolicy,
     availability: plugin.summary.availability,
     skillCount: plugin.skills.length,
+    skills: plugin.skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      enabled: skill.enabled
+    })),
     hookCount: plugin.hooks.length,
     appCount: plugin.apps.length,
     mcpServers: plugin.mcpServers
@@ -677,6 +702,31 @@ export class CodexAppServerClient {
   async uninstallPlugin(pluginId: string): Promise<void> {
     const params: PluginUninstallParams = { pluginId };
     await this.peer.request("plugin/uninstall", params);
+  }
+
+  async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {
+    const params: PluginSkillReadParams = {
+      remoteMarketplaceName: input.remoteMarketplaceName,
+      remotePluginId: input.remotePluginId,
+      skillName: input.skillName
+    };
+    const response = (await this.peer.request("plugin/skill/read", params)) as PluginSkillReadResponse;
+    return { contents: response.contents };
+  }
+
+  async setSkillsExtraRoots(extraRoots: string[]): Promise<void> {
+    const params: SkillsExtraRootsSetParams = { extraRoots };
+    await this.peer.request("skills/extraRoots/set", params);
+  }
+
+  async writeSkillConfig(input: WriteSkillConfigInput): Promise<MobileSkillConfigWriteResultView> {
+    const params: SkillsConfigWriteParams = {
+      name: input.name ?? null,
+      path: input.path ?? null,
+      enabled: input.enabled
+    };
+    const response = (await this.peer.request("skills/config/write", params)) as SkillsConfigWriteResponse;
+    return { effectiveEnabled: response.effectiveEnabled };
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

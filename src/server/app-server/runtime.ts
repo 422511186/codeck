@@ -7,10 +7,12 @@ import type {
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
+  MobilePluginSkillContentView,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
   MobileSettingsView,
+  MobileSkillConfigWriteResultView,
   MobileThreadGoalView,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -25,11 +27,13 @@ import {
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
   type PluginLookupInput,
+  type PluginSkillReadInput,
   type SearchThreadsInput,
   type SetThreadGoalInput,
   type StartThreadInput,
   type StartTurnInput,
-  type UpdateThreadSettingsInput
+  type UpdateThreadSettingsInput,
+  type WriteSkillConfigInput
 } from "./client";
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
 import { normalizeAppServerNotification } from "./events";
@@ -962,6 +966,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {};
     }
 
+    if (method === "plugin/skill/read") {
+      return { contents: "# browser:control\n\n控制浏览器。" };
+    }
+
+    if (method === "skills/extraRoots/set") {
+      return {};
+    }
+
+    if (method === "skills/config/write") {
+      const configParams = params as { enabled?: boolean };
+      return { effectiveEnabled: Boolean(configParams.enabled) };
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
 
@@ -971,7 +988,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
       summary: {
         id: "browser-tools",
-        remotePluginId: null,
+        remotePluginId: "remote-browser-tools",
         localVersion: "1.0.0",
         name: "browser-tools",
         shareContext: null,
@@ -1004,7 +1021,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       },
       shareUrl: null,
       description: "用于移动端验证网页和截图。",
-      skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制" }],
+      skills: [{ name: "browser:control", description: "控制浏览器", shortDescription: "浏览器控制", enabled: true }],
       hooks: [{ name: "after-edit", description: "编辑后检查" }],
       apps: [{ id: "browser-app", name: "Browser", description: "浏览器应用", installUrl: null, category: "tool" }],
       appTemplates: [],
@@ -1378,6 +1395,21 @@ export class AppServerGateway {
   async uninstallPlugin(pluginId: string): Promise<void> {
     await this.ensureReady();
     return this.client.uninstallPlugin(pluginId);
+  }
+
+  async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {
+    await this.ensureReady();
+    return this.client.readPluginSkill(input);
+  }
+
+  async setSkillsExtraRoots(extraRoots: string[]): Promise<void> {
+    await this.ensureReady();
+    return this.client.setSkillsExtraRoots(extraRoots);
+  }
+
+  async writeSkillConfig(input: WriteSkillConfigInput): Promise<MobileSkillConfigWriteResultView> {
+    await this.ensureReady();
+    return this.client.writeSkillConfig(input);
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

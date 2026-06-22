@@ -458,6 +458,23 @@ describe("createAppServerGateway", () => {
     await expect(gateway.uninstallPlugin("browser-tools")).resolves.toBeUndefined();
   });
 
+  it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.readPluginSkill({
+        remoteMarketplaceName: "个人插件市场",
+        remotePluginId: "remote-browser-tools",
+        skillName: "browser:control"
+      })
+    ).resolves.toEqual({ contents: "# browser:control\n\n控制浏览器。" });
+    await expect(gateway.setSkillsExtraRoots(["C:\\Users\\huang\\workspace\\skills"])).resolves.toBeUndefined();
+    await expect(gateway.writeSkillConfig({ name: "openai-docs", enabled: false })).resolves.toEqual({
+      effectiveEnabled: false
+    });
+  });
+
   it("mock 模式支持切换记忆模式和重置记忆", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
