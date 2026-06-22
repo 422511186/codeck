@@ -18,13 +18,15 @@ describe("createAppServerGateway", () => {
       ],
       nextCursor: null
     });
-    await expect(gateway.listModels()).resolves.toMatchObject([
-      {
-        id: "gpt-5-codex",
-        label: "GPT-5 Codex",
-        isDefault: true
-      }
-    ]);
+    await expect(gateway.listModels()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gpt-5-codex",
+          label: "GPT-5 Codex",
+          isDefault: true
+        })
+      ])
+    );
   });
 
   it("off 模式会保留 disabled 状态并拒绝请求", async () => {

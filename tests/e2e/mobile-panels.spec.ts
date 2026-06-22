@@ -26,7 +26,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await expect(page.getByText("gpt-5-codex")).toBeVisible();
-  await expect(page.getByText("medium")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "medium" })).toBeVisible();
   await expect(page.getByText("connected")).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
@@ -37,4 +37,25 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "Run" }).click();
   await expect(page.getByRole("heading", { name: "Diff" })).toBeVisible();
   await expect(page.getByText("diff --git a/mock.txt b/mock.txt")).toBeVisible();
+});
+
+test("手机端可以切换模型、思考强度和权限并用于后续发送", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("模型").selectOption("gpt-5-mini");
+  await page.getByLabel("思考强度").selectOption("high");
+  await page.getByLabel("权限配置").selectOption("full-auto");
+
+  await page.getByRole("button", { name: "Chats" }).click();
+  await expect(page.getByText("GPT-5 Mini")).toBeVisible();
+  await expect(page.getByText("high · full-auto")).toBeVisible();
+
+  await page.getByRole("button", { name: "新会话" }).click();
+  await expect(page.getByRole("heading", { name: "新会话 full-auto" })).toBeVisible();
+
+  await page.getByPlaceholder("给 Codex 发送消息").fill("设置切换测试");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  await expect(page.getByText("已收到：设置切换测试（模型 gpt-5-mini，思考 high）")).toBeVisible();
 });

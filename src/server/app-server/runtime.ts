@@ -183,7 +183,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         sessionId: `mock-session-${Date.now()}`,
         preview: "",
         cwd: startParams.cwd || "C:\\Users\\huang\\workspace",
-        name: "新会话",
+        name: startParams.permissions ? `新会话 ${startParams.permissions}` : "新会话",
         turns: []
       };
       this.upsertThread(this.thread);
@@ -252,6 +252,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.selectThread(startParams.threadId);
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
+      const settingSuffix = startParams.model || startParams.effort
+        ? `（模型 ${startParams.model || "默认"}，思考 ${startParams.effort || "默认"}）`
+        : "";
       createTextUserInput(text);
       const turnId = `mock-turn-${++this.turnCounter}`;
       const userItemId = `mock-user-${++this.itemCounter}`;
@@ -275,7 +278,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           {
             type: "agentMessage",
             id: agentItemId,
-            text: `已收到：${text}`,
+            text: `已收到：${text}${settingSuffix}`,
             phase: "final_answer",
             memoryCitation: null
           }
@@ -413,6 +416,24 @@ class MockAppServerPeer implements ManagedAppServerPeer {
             serviceTiers: [],
             defaultServiceTier: null,
             isDefault: true
+          },
+          {
+            id: "gpt-5-mini",
+            model: "gpt-5-mini",
+            upgrade: null,
+            upgradeInfo: null,
+            availabilityNux: null,
+            displayName: "GPT-5 Mini",
+            description: "更快的轻量模型",
+            hidden: false,
+            supportedReasoningEfforts: ["low", "medium", "high"],
+            defaultReasoningEffort: "medium",
+            inputModalities: ["text", "image"],
+            supportsPersonality: true,
+            additionalSpeedTiers: [],
+            serviceTiers: [],
+            defaultServiceTier: null,
+            isDefault: false
           }
         ],
         nextCursor: null

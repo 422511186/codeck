@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -422,6 +423,31 @@ pre {
   display: grid;
   gap: 8px;
   margin: 0;
+}
+
+.settings-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-controls span {
+  color: #8f9bad;
+  font-size: 12px;
+}
+
+.settings-controls select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #f2f2f2;
+  padding: 10px 12px;
 }
 
 .settings-row {

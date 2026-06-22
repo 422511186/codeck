@@ -2,11 +2,37 @@
 
 import { useEffect, useState } from "react";
 import { readSettings } from "../lib/client-api";
-import type { MobileSettingsView } from "../shared/codex";
+import type { MobileModelOption, MobileSettingsView } from "../shared/codex";
 
-export function SettingsPanel() {
+type SettingsPanelProps = {
+  models: MobileModelOption[];
+  selectedModelId: string;
+  selectedReasoningEffort: string;
+  selectedPermissions: string;
+  onModelChange(modelId: string): void;
+  onReasoningEffortChange(reasoningEffort: string): void;
+  onPermissionsChange(permissions: string): void;
+};
+
+const permissionOptions = [
+  { value: "default", label: "default" },
+  { value: "read-only", label: "read-only" },
+  { value: "full-auto", label: "full-auto" }
+];
+
+export function SettingsPanel({
+  models,
+  selectedModelId,
+  selectedReasoningEffort,
+  selectedPermissions,
+  onModelChange,
+  onReasoningEffortChange,
+  onPermissionsChange
+}: SettingsPanelProps) {
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
   const [error, setError] = useState("");
+  const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
+  const reasoningOptions = selectedModel?.supportedReasoningEfforts || [];
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +75,38 @@ export function SettingsPanel() {
         <span>{settings ? "已连接" : "读取中"}</span>
       </div>
       {error ? <p className="form-error">{error}</p> : null}
+      <div className="settings-controls">
+        <label>
+          <span>模型</span>
+          <select value={selectedModelId} onChange={(event) => onModelChange(event.target.value)}>
+            {models.map((model) => (
+              <option value={model.id} key={model.id}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>思考强度</span>
+          <select value={selectedReasoningEffort} onChange={(event) => onReasoningEffortChange(event.target.value)}>
+            {reasoningOptions.map((effort) => (
+              <option value={effort} key={effort}>
+                {effort}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>权限配置</span>
+          <select value={selectedPermissions} onChange={(event) => onPermissionsChange(event.target.value)}>
+            {permissionOptions.map((permission) => (
+              <option value={permission.value} key={permission.value}>
+                {permission.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <dl className="settings-list">
         {rows.map(([label, value]) => (
           <div className="settings-row" key={label}>

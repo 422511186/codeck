@@ -49,13 +49,37 @@ export function MobileWorkbench() {
   const [sending, setSending] = useState(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>("chats");
   const [rollbackNoticeVisible, setRollbackNoticeVisible] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
+  const [selectedPermissions, setSelectedPermissions] = useState("default");
   const selectedThreadIdRef = useRef<string | null>(null);
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
+  const selectedModel = models.find((model) => model.id === selectedModelId) || defaultModel;
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThread?.id || null;
   }, [selectedThread?.id]);
+
+  useEffect(() => {
+    if (!selectedModelId && defaultModel) {
+      setSelectedModelId(defaultModel.id);
+    }
+  }, [defaultModel, selectedModelId]);
+
+  useEffect(() => {
+    if (!selectedModel) {
+      return;
+    }
+
+    if (!selectedModel.supportedReasoningEfforts.includes(selectedReasoningEffort)) {
+      setSelectedReasoningEffort(
+        selectedModel.supportedReasoningEfforts.includes("medium")
+          ? "medium"
+          : selectedModel.supportedReasoningEfforts[0] || ""
+      );
+    }
+  }, [selectedModel, selectedReasoningEffort]);
 
   useEffect(() => {
     const socket = createReconnectingBrowserSocket({
@@ -193,8 +217,8 @@ export function MobileWorkbench() {
         threadId: selectedThread.id,
         text,
         imagePaths,
-        model: defaultModel?.id,
-        reasoningEffort: defaultModel?.supportedReasoningEfforts.includes("medium") ? "medium" : undefined
+        model: selectedModel?.id,
+        reasoningEffort: selectedReasoningEffort || undefined
       });
       setSelectedThread(thread);
       setThreads((current) =>
@@ -225,7 +249,7 @@ export function MobileWorkbench() {
     setSending(true);
     setLoadError("");
     try {
-      const thread = await startThread({ model: defaultModel?.id });
+      const thread = await startThread({ model: selectedModel?.id, permissions: selectedPermissions });
       setSelectedThread(thread);
       setThreads((current) => [
         {
@@ -298,7 +322,12 @@ export function MobileWorkbench() {
     setLoadError("");
     try {
       await rollbackThread(selectedThread.id, 1);
-      const thread = await startTurn({ threadId: selectedThread.id, text, model: defaultModel?.id });
+      const thread = await startTurn({
+        threadId: selectedThread.id,
+        text,
+        model: selectedModel?.id,
+        reasoningEffort: selectedReasoningEffort || undefined
+      });
       setSelectedThread(thread);
       upsertThreadSummary(thread);
       setRollbackNoticeVisible(true);
@@ -376,8 +405,8 @@ export function MobileWorkbench() {
         {activePanel === "chats" ? (
           <>
             <div className="model-strip">
-              <span>{defaultModel?.label || "模型加载中"}</span>
-              <span>{defaultModel?.supportedReasoningEfforts.join(" / ") || "reasoning"}</span>
+              <span>{selectedModel?.label || "模型加载中"}</span>
+              <span>{selectedReasoningEffort || "reasoning"} · {selectedPermissions}</span>
             </div>
 
             {loadError ? <p className="form-error">{loadError}</p> : null}
@@ -439,7 +468,17 @@ export function MobileWorkbench() {
         {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
         {activePanel === "files" && selectedThread ? <FilesPanel rootPath={selectedThread.cwd} /> : null}
         {activePanel === "terminal" && selectedThread ? <TerminalPanel cwd={selectedThread.cwd} /> : null}
-        {activePanel === "settings" ? <SettingsPanel /> : null}
+        {activePanel === "settings" ? (
+          <SettingsPanel
+            models={models}
+            selectedModelId={selectedModel?.id || ""}
+            selectedReasoningEffort={selectedReasoningEffort}
+            selectedPermissions={selectedPermissions}
+            onModelChange={setSelectedModelId}
+            onReasoningEffortChange={setSelectedReasoningEffort}
+            onPermissionsChange={setSelectedPermissions}
+          />
+        ) : null}
       </section>
 
       {activeRequest?.kind === "dynamic_tool" ? (
