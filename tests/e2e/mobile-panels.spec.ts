@@ -38,6 +38,13 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByPlaceholder("输入命令").fill("npm --version");
   await page.getByRole("button", { name: "运行" }).click();
   await expect(page.getByText("mock command: npm --version")).toBeVisible();
+  await page.getByRole("button", { name: "启动会话" }).click();
+  await expect(page.getByText("mock process: npm --version")).toBeVisible();
+  await page.getByPlaceholder("输入 stdin").fill("继续");
+  await page.getByRole("button", { name: "发送输入" }).click();
+  await expect(page.getByText("stdin: 继续")).toBeVisible();
+  await page.getByRole("button", { name: "终止会话" }).click();
+  await expect(page.getByText("已退出 143")).toBeVisible();
 
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();

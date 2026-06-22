@@ -226,6 +226,15 @@ export type MobileCommandResult = {
   stderr: string;
 };
 
+export type MobileTerminalSession = {
+  processHandle: string;
+  cwd: string;
+  command: string[];
+  output: string;
+  exitCode: number | null;
+  running: boolean;
+};
+
 export type MobileSettingsView = {
   model: string | null;
   modelProvider: string | null;

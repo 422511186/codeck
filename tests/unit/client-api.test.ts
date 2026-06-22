@@ -14,6 +14,7 @@ import {
   renameThread,
   readPlugin,
   readPluginSkill,
+  readProcessSession,
   readRemoteControlPairingStatus,
   resumeThread,
   resetMemory,
@@ -23,11 +24,14 @@ import {
   setThreadMemoryMode,
   setSkillsExtraRoots,
   startRemoteControlPairing,
+  startProcessSession,
   startReview,
   uninstallPlugin,
   updateThreadSettings,
   writeSkillConfig,
-  writeFile
+  writeFile,
+  writeProcessStdin,
+  killProcessSession
 } from "../../src/lib/client-api";
 
 describe("client-api", () => {
@@ -228,6 +232,63 @@ describe("client-api", () => {
       "/api/codex/fs/metadata?path=C%3A%5Crepo%5CREADME.md",
       { cache: "no-store" }
     );
+  });
+
+  it("管理交互式终端会话时调用 process 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session: {
+            processHandle: "mobile-process-1",
+            cwd: "C:\\repo",
+            command: ["npm", "test"],
+            output: "",
+            exitCode: null,
+            running: true
+          }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session: {
+            processHandle: "mobile-process-1",
+            cwd: "C:\\repo",
+            command: ["npm", "test"],
+            output: "测试输出",
+            exitCode: null,
+            running: true
+          }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startProcessSession({ command: ["npm", "test"], cwd: "C:\\repo" })).resolves.toMatchObject({
+      processHandle: "mobile-process-1",
+      running: true
+    });
+    await expect(writeProcessStdin("mobile-process-1", "y\n")).resolves.toBeUndefined();
+    await expect(readProcessSession("mobile-process-1")).resolves.toMatchObject({
+      output: "测试输出",
+      running: true
+    });
+    await expect(killProcessSession("mobile-process-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/process/spawn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: ["npm", "test"], cwd: "C:\\repo" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/process/mobile-process-1/stdin", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "y\n" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/process/mobile-process-1", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/process/mobile-process-1/kill", { method: "POST" });
   });
 
   it("切换记忆模式和重置记忆时调用 memory 端点", async () => {

@@ -13,6 +13,7 @@ import type {
   MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileSkillConfigWriteResultView,
+  MobileTerminalSession,
   MobileThreadDetail,
   MobileThreadGoalView,
   MobileThreadPage,
@@ -621,6 +622,52 @@ export async function execCommand(input: {
 
   const payload = (await response.json()) as { result: MobileCommandResult };
   return payload.result;
+}
+
+export async function startProcessSession(input: { command: string[]; cwd: string }): Promise<MobileTerminalSession> {
+  const response = await fetch("/api/codex/process/spawn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动终端会话");
+  }
+
+  const payload = (await response.json()) as { session: MobileTerminalSession };
+  return payload.session;
+}
+
+export async function writeProcessStdin(processHandle: string, text: string): Promise<void> {
+  const response = await fetch(`/api/codex/process/${encodeURIComponent(processHandle)}/stdin`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法写入终端输入");
+  }
+}
+
+export async function readProcessSession(processHandle: string): Promise<MobileTerminalSession> {
+  const response = await fetch(`/api/codex/process/${encodeURIComponent(processHandle)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取终端会话");
+  }
+
+  const payload = (await response.json()) as { session: MobileTerminalSession };
+  return payload.session;
+}
+
+export async function killProcessSession(processHandle: string): Promise<void> {
+  const response = await fetch(`/api/codex/process/${encodeURIComponent(processHandle)}/kill`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法终止终端会话");
+  }
 }
 
 export async function readSettings(): Promise<MobileSettingsView> {

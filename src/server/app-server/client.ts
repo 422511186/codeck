@@ -34,6 +34,9 @@ import type { PluginReadResponse } from "../../../docs/generated/app-server-ts/v
 import type { PluginSkillReadParams } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadParams";
 import type { PluginSkillReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadResponse";
 import type { PluginUninstallParams } from "../../../docs/generated/app-server-ts/v2/PluginUninstallParams";
+import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2/ProcessKillParams";
+import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v2/ProcessSpawnParams";
+import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlClientsRevokeParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsRevokeParams";
 import type { RemoteControlDisableParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlDisableParams";
@@ -146,6 +149,12 @@ export type ExecCommandInput = {
   command: string[];
   cwd?: string;
   timeoutMs?: number;
+};
+
+export type StartProcessInput = {
+  processHandle: string;
+  command: string[];
+  cwd: string;
 };
 
 export type ListThreadTurnsInput = {
@@ -880,6 +889,35 @@ export class CodexAppServerClient {
       stdout: response.stdout,
       stderr: response.stderr
     };
+  }
+
+  async startProcess(input: StartProcessInput): Promise<void> {
+    const params: ProcessSpawnParams = {
+      processHandle: input.processHandle,
+      command: input.command,
+      cwd: input.cwd,
+      tty: true,
+      streamStdin: true,
+      streamStdoutStderr: true,
+      outputBytesCap: null,
+      timeoutMs: null,
+      size: { cols: 80, rows: 24 }
+    };
+    await this.peer.request("process/spawn", params);
+  }
+
+  async writeProcessStdin(processHandle: string, text: string): Promise<void> {
+    const params: ProcessWriteStdinParams = {
+      processHandle,
+      deltaBase64: Buffer.from(text, "utf8").toString("base64"),
+      closeStdin: false
+    };
+    await this.peer.request("process/writeStdin", params);
+  }
+
+  async killProcess(processHandle: string): Promise<void> {
+    const params: ProcessKillParams = { processHandle };
+    await this.peer.request("process/kill", params);
   }
 
   async readSettings(): Promise<MobileSettingsView> {

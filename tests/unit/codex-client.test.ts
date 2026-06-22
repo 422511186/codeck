@@ -521,6 +521,10 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "process/spawn" || method === "process/writeStdin" || method === "process/kill") {
+      return {};
+    }
+
     if (method === "config/read") {
       return {
         config: {
@@ -1283,6 +1287,47 @@ describe("CodexAppServerClient", () => {
       method: "command/exec",
       params: { command: ["npm", "--version"], cwd: "C:\\repo", timeoutMs: 30_000 }
     });
+  });
+
+  it("能启动交互式终端会话、写入 stdin 并终止进程", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.startProcess({
+        processHandle: "mobile-process-1",
+        command: ["npm", "test"],
+        cwd: "C:\\repo"
+      })
+    ).resolves.toBeUndefined();
+    await expect(client.writeProcessStdin("mobile-process-1", "继续\n")).resolves.toBeUndefined();
+    await expect(client.killProcess("mobile-process-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-3)).toEqual([
+      {
+        method: "process/spawn",
+        params: {
+          processHandle: "mobile-process-1",
+          command: ["npm", "test"],
+          cwd: "C:\\repo",
+          tty: true,
+          streamStdin: true,
+          streamStdoutStderr: true,
+          outputBytesCap: null,
+          timeoutMs: null,
+          size: { cols: 80, rows: 24 }
+        }
+      },
+      {
+        method: "process/writeStdin",
+        params: {
+          processHandle: "mobile-process-1",
+          deltaBase64: Buffer.from("继续\n", "utf8").toString("base64"),
+          closeStdin: false
+        }
+      },
+      { method: "process/kill", params: { processHandle: "mobile-process-1" } }
+    ]);
   });
 
   it("能读取设置状态", async () => {

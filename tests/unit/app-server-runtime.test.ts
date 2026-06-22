@@ -338,6 +338,40 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持交互式终端会话", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    const session = await gateway.startProcessSession({
+      command: ["npm", "test"],
+      cwd: "C:\\Users\\huang\\workspace"
+    });
+
+    expect(session).toMatchObject({
+      cwd: "C:\\Users\\huang\\workspace",
+      command: ["npm", "test"],
+      exitCode: null,
+      running: true
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(gateway.readProcessSession(session.processHandle)).resolves.toMatchObject({
+      output: expect.stringContaining("mock process: npm test"),
+      running: true
+    });
+
+    await gateway.writeProcessStdin(session.processHandle, "继续\n");
+    await expect(gateway.readProcessSession(session.processHandle)).resolves.toMatchObject({
+      output: expect.stringContaining("stdin: 继续")
+    });
+
+    await gateway.killProcessSession(session.processHandle);
+    await expect(gateway.readProcessSession(session.processHandle)).resolves.toMatchObject({
+      exitCode: 143,
+      running: false
+    });
+  });
+
   it("mock 模式支持 turns 和 items 分页读取", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

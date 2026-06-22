@@ -14,6 +14,7 @@ import type {
   MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileSkillConfigWriteResultView,
+  MobileTerminalSession,
   MobileThreadGoalView,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -31,6 +32,7 @@ import {
   type PluginSkillReadInput,
   type SearchThreadsInput,
   type SetThreadGoalInput,
+  type StartProcessInput,
   type StartThreadInput,
   type StartTurnInput,
   type UpdateThreadSettingsInput,
@@ -66,6 +68,9 @@ import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-t
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
+import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2/ProcessKillParams";
+import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v2/ProcessSpawnParams";
+import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
@@ -123,6 +128,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       }
     ]
   ]);
+  private readonly mockProcesses = new Set<string>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -772,6 +778,47 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "process/spawn") {
+      const spawnParams = params as ProcessSpawnParams;
+      this.mockProcesses.add(spawnParams.processHandle);
+      setTimeout(() => {
+        if (!this.mockProcesses.has(spawnParams.processHandle)) {
+          return;
+        }
+        this.emitProcessOutput(
+          spawnParams.processHandle,
+          `mock process: ${spawnParams.command.join(" ")}\ncwd: ${spawnParams.cwd}\n`
+        );
+      }, 5);
+      return {};
+    }
+
+    if (method === "process/writeStdin") {
+      const stdinParams = params as ProcessWriteStdinParams;
+      if (stdinParams.deltaBase64) {
+        const text = Buffer.from(stdinParams.deltaBase64, "base64").toString("utf8").trimEnd();
+        this.emitProcessOutput(stdinParams.processHandle, `stdin: ${text}\n`);
+      }
+      return {};
+    }
+
+    if (method === "process/kill") {
+      const killParams = params as ProcessKillParams;
+      this.mockProcesses.delete(killParams.processHandle);
+      this.emitNotification({
+        method: "process/exited",
+        params: {
+          processHandle: killParams.processHandle,
+          exitCode: 143,
+          stdout: "",
+          stdoutCapReached: false,
+          stderr: "",
+          stderrCapReached: false
+        }
+      });
+      return {};
+    }
+
     if (method === "config/read") {
       return {
         config: {
@@ -1095,6 +1142,18 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     for (const handler of this.notificationHandlers) {
       handler(message);
     }
+  }
+
+  private emitProcessOutput(processHandle: string, text: string): void {
+    this.emitNotification({
+      method: "process/outputDelta",
+      params: {
+        processHandle,
+        stream: "stdout",
+        deltaBase64: Buffer.from(text, "utf8").toString("base64"),
+        capReached: false
+      }
+    });
   }
 
   private emitServerRequest(message: AppServerServerRequestMessage): void {
@@ -1430,10 +1489,13 @@ export class AppServerGateway {
   private readonly client: CodexAppServerClient;
   private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void>();
   private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
+  private readonly terminalSessions = new Map<string, MobileTerminalSession>();
+  private processCounter = 0;
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
     this.peer.onNotification((message) => {
+      this.recordProcessNotification(message);
       const event = normalizeAppServerNotification(message);
       if (!event) {
         return;
@@ -1476,6 +1538,38 @@ export class AppServerGateway {
   private emitBrowserEvent(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent): void {
     for (const handler of this.browserEventHandlers) {
       handler(event);
+    }
+  }
+
+  private recordProcessNotification(message: AppServerNotificationMessage): void {
+    const params = message.params as Record<string, unknown> | null | undefined;
+    if (!params || typeof params.processHandle !== "string") {
+      return;
+    }
+
+    const session = this.terminalSessions.get(params.processHandle);
+    if (!session) {
+      return;
+    }
+
+    if (message.method === "process/outputDelta" && typeof params.deltaBase64 === "string") {
+      const delta = Buffer.from(params.deltaBase64, "base64").toString("utf8");
+      this.terminalSessions.set(params.processHandle, {
+        ...session,
+        output: `${session.output}${delta}`
+      });
+      return;
+    }
+
+    if (message.method === "process/exited") {
+      const stdout = typeof params.stdout === "string" ? params.stdout : "";
+      const stderr = typeof params.stderr === "string" ? params.stderr : "";
+      this.terminalSessions.set(params.processHandle, {
+        ...session,
+        output: `${session.output}${stdout}${stderr}`,
+        exitCode: typeof params.exitCode === "number" ? params.exitCode : null,
+        running: false
+      });
     }
   }
 
@@ -1691,6 +1785,46 @@ export class AppServerGateway {
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
     await this.ensureReady();
     return this.client.execCommand(input);
+  }
+
+  async startProcessSession(input: Omit<StartProcessInput, "processHandle">): Promise<MobileTerminalSession> {
+    await this.ensureReady();
+    const processHandle = `mobile-process-${++this.processCounter}`;
+    const session: MobileTerminalSession = {
+      processHandle,
+      cwd: input.cwd,
+      command: input.command,
+      output: "",
+      exitCode: null,
+      running: true
+    };
+    this.terminalSessions.set(processHandle, session);
+    try {
+      await this.client.startProcess({ ...input, processHandle });
+    } catch (error) {
+      this.terminalSessions.delete(processHandle);
+      throw error;
+    }
+    return this.terminalSessions.get(processHandle) ?? session;
+  }
+
+  async writeProcessStdin(processHandle: string, text: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.writeProcessStdin(processHandle, text);
+  }
+
+  async killProcessSession(processHandle: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.killProcess(processHandle);
+  }
+
+  async readProcessSession(processHandle: string): Promise<MobileTerminalSession> {
+    await this.ensureReady();
+    const session = this.terminalSessions.get(processHandle);
+    if (!session) {
+      throw new Error("找不到终端会话");
+    }
+    return session;
   }
 
   async readSettings(): Promise<MobileSettingsView> {
