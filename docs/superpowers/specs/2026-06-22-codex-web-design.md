@@ -60,7 +60,7 @@
 
 ### 方案 C：安全协议代理 + 移动端 Web 工作台
 
-后端负责连接 app-server，把协议事件规范化后提供给浏览器，同时处理个人访问密钥登录、工作区边界、上传文件和内存态请求队列。
+后端负责连接 app-server，把协议事件规范化后提供给浏览器，同时处理个人登录 token、工作区边界、上传文件和内存态请求队列。
 
 优点：最接近 VS Code 插件能力，同时安全性和兼容性可控。后端可以通过重新生成协议绑定来吸收 app-server 变化。
 缺点：实现量更大，测试面更宽。
@@ -77,7 +77,7 @@
 
 2. Web 后端
 
-   使用 Node.js 服务端，负责校验个人访问密钥、启动或连接 Codex app-server、校验请求、代理协议调用，并向浏览器广播规范化事件。
+   使用 Node.js 服务端，负责校验个人登录 token、启动或连接 Codex app-server、校验请求、代理协议调用，并向浏览器广播规范化事件。
 
 3. Codex app-server 适配层
 
@@ -130,7 +130,7 @@
 
 后端负责：
 
-- 个人访问密钥登录。
+- 个人登录 token 校验：优先使用配置的 `CODEX_WEB_ACCESS_TOKEN`；未配置时启动阶段自动生成随机长 token。
 - 浏览器 signed session cookie 和 Codex thread 的映射。
 - 工作区 allowlist 和路径校验。
 - app-server 进程监督。
@@ -199,7 +199,7 @@ app-server notification 到浏览器流：
 
 最低安全要求：
 
-- 任何 app-server 访问前都必须先通过个人访问密钥登录 Web 应用。
+- 任何 app-server 访问前都必须先通过个人登录 token 登录 Web 应用。
 - app-server 尽量只绑定 loopback。
 - 如果 app-server 监听非 loopback 地址，必须使用 app-server WebSocket auth。
 - 永远不把原始 app-server endpoint 或 token 暴露给浏览器。
@@ -215,14 +215,14 @@ app-server notification 到浏览器流：
 
 配置来源：
 
-- `CODEX_WEB_ACCESS_TOKEN`：手机端登录用的访问密钥。可以设置成用户习惯的 `sk-...` 字符串，但如果它同时也是真实模型/API key，不建议在浏览器长期保存。
+- `CODEX_WEB_ACCESS_TOKEN`：手机端登录用的独立 token。可以设置成用户习惯的 `sk-...` 字符串。配置存在时优先使用配置值；未配置时后端启动时自动生成随机长 token，并打印到控制台供登录使用。这个 token 不需要等同于模型/API key。
 - `CODEX_WEB_WORKSPACE_ROOTS`：允许手机端操作的工作区根目录列表。
 - `CODEX_WEB_BIND_HOST` 和 `CODEX_WEB_BIND_PORT`：Web 服务监听地址。
 - Codex 模型/API key：优先留在后端环境变量或 Codex 自己的配置中，不放进前端代码。
 
 运行中状态：
 
-- signed session cookie：浏览器登录态，不需要用户表。
+- signed session cookie：浏览器登录态，不需要用户表。登录成功后写入 cookie；后续请求不再反复提交 token。
 - 内存 map：WebSocket 连接、thread 订阅、pending approvals/questions、request id 关联。
 - 本地上传目录：图片暂存文件，按时间清理。
 - 可选追加日志文件：记录敏感动作，个人模式下不需要数据库表。
@@ -281,7 +281,7 @@ Codex 会话内容仍保留在 Codex 状态里。Web 应用通过 app-server 方
 
 1. 搭建 TypeScript 项目，包含后端、前端、共享协议包、生成的 app-server bindings。
 2. 实现 app-server client：JSON-RPC transport、生成类型、request 关联、notification stream。
-3. 加入个人访问密钥登录、工作区 allowlist、app-server 进程监督、浏览器 WebSocket。
+3. 加入个人登录 token、工作区 allowlist、app-server 进程监督、浏览器 WebSocket。
 4. 实现会话列表、历史、resume 和实时 timeline 渲染。
 5. 实现文本输入、模型、思考强度、审批策略和图片上传。
 6. 实现来自 `ServerRequest` 的审批和 question。
