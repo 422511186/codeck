@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
-import { listModels, listThreads, readCodexStatus, readThread } from "../lib/client-api";
+import { listModels, listThreads, readCodexStatus, readThread, startTurn } from "../lib/client-api";
 import { createBrowserSocket } from "../lib/ws-client";
+import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
 
 export function MobileWorkbench() {
@@ -13,6 +14,7 @@ export function MobileWorkbench() {
   const [selectedThread, setSelectedThread] = useState<MobileThreadDetail | null>(null);
   const [models, setModels] = useState<MobileModelOption[]>([]);
   const [loadError, setLoadError] = useState("");
+  const [sending, setSending] = useState(false);
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
 
@@ -76,6 +78,45 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleSend(text: string) {
+    if (!selectedThread) {
+      setLoadError("请先选择一个会话");
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await startTurn({
+        threadId: selectedThread.id,
+        text,
+        model: defaultModel?.id,
+        reasoningEffort: defaultModel?.supportedReasoningEfforts.includes("medium") ? "medium" : undefined
+      });
+      setSelectedThread(thread);
+      setThreads((current) =>
+        current.map((summary) =>
+          summary.id === thread.id
+            ? {
+                id: thread.id,
+                title: thread.title,
+                preview: thread.preview,
+                cwd: thread.cwd,
+                modelProvider: thread.modelProvider,
+                status: thread.status,
+                updatedAt: thread.updatedAt
+              }
+            : summary
+        )
+      );
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法发送消息");
+      throw error;
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <main className="workbench">
       <header className="top-bar">
@@ -136,12 +177,7 @@ export function MobileWorkbench() {
         ) : null}
       </section>
 
-      <form className="composer">
-        <input placeholder="给 Codex 发送消息" disabled />
-        <button type="button" disabled>
-          发送
-        </button>
-      </form>
+      <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} />
 
       <nav className="bottom-nav" aria-label="移动端导航">
         <button type="button">Chats</button>

@@ -79,11 +79,11 @@
 - Test: `tests/unit/user-input.test.ts`
 - Test: `tests/e2e/send-message.spec.ts`
 
-- [ ] `thread/start` 支持 cwd、workspace roots、model、reasoning effort、permissions。
-- [ ] `turn/start` 支持文本输入。
-- [ ] 输入框适配手机键盘和安全区。
+- [x] `thread/start` 支持 cwd、workspace roots、model、permissions；思考强度按 app-server 协议在 `turn/start` 传递。
+- [x] `turn/start` 支持文本输入。
+- [x] 输入框适配手机键盘和安全区。
 - [ ] 发送后立即出现本地 pending 用户消息，并在 app-server 响应后替换为真实 turn。
-- [ ] 发送失败时保留输入草稿并展示错误。
+- [x] 发送失败时保留输入草稿并展示错误。
 
 ## Task 4: 实时事件流和 timeline 更新
 

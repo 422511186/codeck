@@ -99,6 +99,66 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/start") {
+      return {
+        thread: {
+          id: "new-thread-1",
+          sessionId: "new-session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 300,
+          updatedAt: 300,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: null,
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "C:\\Users\\huang\\workspace\\demo",
+        runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+        instructionSources: [],
+        approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: "medium"
+      };
+    }
+
+    if (method === "turn/start") {
+      return {
+        turn: {
+          id: "turn-new-1",
+          itemsView: "full",
+          status: "inProgress",
+          error: null,
+          startedAt: 301,
+          completedAt: null,
+          durationMs: null,
+          items: [
+            {
+              type: "userMessage",
+              id: "item-user-new-1",
+              clientId: "client-user-new-1",
+              content: [{ type: "text", text: "继续开发发送功能", text_elements: [] }]
+            }
+          ]
+        }
+      };
+    }
+
     if (method === "model/list") {
       return {
         data: [
@@ -206,5 +266,51 @@ describe("CodexAppServerClient", () => {
         text: "我会先阅读认证相关代码。"
       }
     ]);
+  });
+
+  it("能用 cwd、模型、思考强度和权限启动新会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const thread = await client.startThread({
+      cwd: "C:\\Users\\huang\\workspace\\demo",
+      workspaceRoots: ["C:\\Users\\huang\\workspace"],
+      model: "gpt-5-codex",
+      permissions: "default"
+    });
+
+    expect(thread.id).toBe("new-thread-1");
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/start",
+      params: {
+        cwd: "C:\\Users\\huang\\workspace\\demo",
+        runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+        model: "gpt-5-codex",
+        permissions: "default"
+      }
+    });
+  });
+
+  it("能把文本发送为 turn/start", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const result = await client.startTurn({
+      threadId: "thread-1",
+      text: "继续开发发送功能",
+      model: "gpt-5-codex",
+      reasoningEffort: "high"
+    });
+
+    expect(result.turnId).toBe("turn-new-1");
+    expect(peer.calls.at(-1)).toEqual({
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "继续开发发送功能", text_elements: [] }],
+        model: "gpt-5-codex",
+        effort: "high"
+      }
+    });
   });
 });

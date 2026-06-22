@@ -57,3 +57,24 @@ export async function readThread(threadId: string): Promise<MobileThreadDetail> 
   const payload = (await response.json()) as { thread: MobileThreadDetail };
   return payload.thread;
 }
+
+export async function startTurn(input: {
+  threadId: string;
+  text: string;
+  model?: string;
+  reasoningEffort?: string;
+}): Promise<MobileThreadDetail> {
+  const response = await fetch("/api/codex/turns/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法发送消息");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}

@@ -7,11 +7,30 @@ import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/Thread
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
+import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
+import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
+import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
+import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
 import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary, MobileTimelineItem } from "../../shared/codex";
+import { createTextUserInput } from "./user-input";
 
 export type AppServerPeer = {
   request(method: string, params: unknown): Promise<unknown>;
+};
+
+export type StartThreadInput = {
+  cwd?: string;
+  workspaceRoots?: string[];
+  model?: string;
+  permissions?: string;
+};
+
+export type StartTurnInput = {
+  threadId: string;
+  text: string;
+  model?: string;
+  reasoningEffort?: string;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -124,6 +143,30 @@ export class CodexAppServerClient {
       ...threadSummary(response.thread),
       timeline
     };
+  }
+
+  async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
+    const params: ThreadStartParams = {
+      cwd: input.cwd,
+      runtimeWorkspaceRoots: input.workspaceRoots,
+      model: input.model,
+      permissions: input.permissions
+    };
+
+    const response = (await this.peer.request("thread/start", params)) as ThreadStartResponse;
+    return threadSummary(response.thread);
+  }
+
+  async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
+    const params: TurnStartParams = {
+      threadId: input.threadId,
+      input: [createTextUserInput(input.text)],
+      model: input.model,
+      effort: input.reasoningEffort
+    };
+
+    const response = (await this.peer.request("turn/start", params)) as TurnStartResponse;
+    return { turnId: response.turn.id };
   }
 
   async listModels(params: ModelListParams = {}): Promise<MobileModelOption[]> {
