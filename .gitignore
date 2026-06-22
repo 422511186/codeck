@@ -4,10 +4,13 @@ node_modules/
 dist/
 build/
 coverage/
+test-results/
 .env
 .env.*
 !.env.example
 uploads/
+next-env.d.ts
+tsconfig.tsbuildinfo
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -13,12 +13,13 @@ if (config.generatedAccessToken) {
 }
 
 await app.prepare();
+const handleUpgrade = app.getUpgradeHandler();
 
 const server = createServer((req, res) => {
   handle(req, res);
 });
 
-attachBrowserWebSocket(server);
+attachBrowserWebSocket(server, handleUpgrade);
 
 server.listen(config.bindPort, config.bindHost, () => {
   console.log(`Codex Web 已启动: http://${config.bindHost}:${config.bindPort}`);
