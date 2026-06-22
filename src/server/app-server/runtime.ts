@@ -319,8 +319,8 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.selectThread(startParams.threadId);
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
-      const settingSuffix = startParams.model || startParams.effort
-        ? `（模型 ${startParams.model || "默认"}，思考 ${startParams.effort || "默认"}）`
+      const settingSuffix = startParams.model || startParams.effort || startParams.permissions
+        ? `（模型 ${startParams.model || "默认"}，思考 ${startParams.effort || "默认"}，权限 ${startParams.permissions || "默认"}）`
         : "";
       createTextUserInput(text);
       const turnId = `mock-turn-${++this.turnCounter}`;

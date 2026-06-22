@@ -107,6 +107,7 @@ export async function startTurn(input: {
   imagePaths?: string[];
   model?: string;
   reasoningEffort?: string;
+  permissions?: string;
 }): Promise<MobileThreadDetail> {
   const response = await fetch("/api/codex/turns/start", {
     method: "POST",

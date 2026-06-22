@@ -247,7 +247,8 @@ export function MobileWorkbench() {
         text,
         imagePaths,
         model: selectedModel?.id,
-        reasoningEffort: selectedReasoningEffort || undefined
+        reasoningEffort: selectedReasoningEffort || undefined,
+        permissions: selectedPermissions
       });
       setSelectedThread(thread);
       setThreads((current) =>
@@ -418,7 +419,8 @@ export function MobileWorkbench() {
         threadId: selectedThread.id,
         text,
         model: selectedModel?.id,
-        reasoningEffort: selectedReasoningEffort || undefined
+        reasoningEffort: selectedReasoningEffort || undefined,
+        permissions: selectedPermissions
       });
       setSelectedThread(thread);
       upsertThreadSummary(thread);

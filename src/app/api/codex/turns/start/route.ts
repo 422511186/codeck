@@ -16,6 +16,7 @@ export async function POST(request: Request): Promise<Response> {
       imagePaths?: string[];
       model?: string;
       reasoningEffort?: string;
+      permissions?: string;
     };
 
     if (!body.threadId) {
@@ -33,14 +34,16 @@ export async function POST(request: Request): Promise<Response> {
       textLength: body.text.length,
       imageCount: imagePaths?.length || 0,
       model: body.model,
-      reasoningEffort: body.reasoningEffort
+      reasoningEffort: body.reasoningEffort,
+      permissions: body.permissions
     });
     const result = await getAppServerGateway().startTurn({
       threadId: body.threadId,
       text: body.text,
       imagePaths,
       model: body.model,
-      reasoningEffort: body.reasoningEffort
+      reasoningEffort: body.reasoningEffort,
+      permissions: body.permissions
     });
     const thread = await getAppServerGateway().readThread(body.threadId);
 

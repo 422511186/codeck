@@ -606,7 +606,8 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-1",
       text: "继续开发发送功能",
       model: "gpt-5-codex",
-      reasoningEffort: "high"
+      reasoningEffort: "high",
+      permissions: "full-auto"
     });
 
     expect(result.turnId).toBe("turn-new-1");
@@ -616,7 +617,8 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         input: [{ type: "text", text: "继续开发发送功能", text_elements: [] }],
         model: "gpt-5-codex",
-        effort: "high"
+        effort: "high",
+        permissions: "full-auto"
       }
     });
   });

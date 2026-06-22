@@ -72,6 +72,7 @@ export type StartTurnInput = {
   imagePaths?: string[];
   model?: string;
   reasoningEffort?: string;
+  permissions?: string;
 };
 
 export type ExecCommandInput = {
@@ -284,7 +285,8 @@ export class CodexAppServerClient {
       threadId: input.threadId,
       input: createTurnUserInput(input.text, input.imagePaths),
       model: input.model,
-      effort: input.reasoningEffort
+      effort: input.reasoningEffort,
+      permissions: input.permissions
     };
 
     const response = (await this.peer.request("turn/start", params)) as TurnStartResponse;

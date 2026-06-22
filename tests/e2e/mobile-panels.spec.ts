@@ -57,5 +57,5 @@ test("手机端可以切换模型、思考强度和权限并用于后续发送",
   await page.getByPlaceholder("给 Codex 发送消息").fill("设置切换测试");
   await page.getByRole("button", { name: "发送" }).click();
 
-  await expect(page.getByText("已收到：设置切换测试（模型 gpt-5-mini，思考 high）")).toBeVisible();
+  await expect(page.getByText("已收到：设置切换测试（模型 gpt-5-mini，思考 high，权限 full-auto）")).toBeVisible();
 });
