@@ -33,7 +33,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("不需要")).toBeVisible();
   await expect(page.getByText("Codex 42%")).toBeVisible();
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
-  await expect(page.getByText("手机浏览器")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();
   await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
   await expect(page.getByText("Code / Ask")).toBeVisible();
   await expect(page.getByText("1 个启用 / 2 个 Skills")).toBeVisible();
@@ -111,4 +111,27 @@ test("设置面板会响应 app-server 集成状态更新", async ({ page }) => 
   });
 
   await expect(page.getByText("Codex 64%")).toBeVisible();
+});
+
+test("设置面板可以管理远程控制配对和客户端", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("button", { name: "撤销 手机浏览器" })).toBeVisible();
+
+  await page.getByRole("button", { name: "开始配对" }).click();
+  await expect(page.getByText("123-456")).toBeVisible();
+  await expect(page.getByText("pair-code-1")).toBeVisible();
+
+  await page.getByRole("button", { name: "刷新配对状态" }).click();
+  await expect(page.getByText("配对已领取")).toBeVisible();
+
+  await page.getByRole("button", { name: "撤销 手机浏览器" }).click();
+  await expect(page.getByText("无客户端")).toBeVisible();
+
+  await page.getByRole("button", { name: "关闭远控" }).click();
+  await expect(page.getByText("disabled")).toBeVisible();
+
+  await page.getByRole("button", { name: "启用远控" }).click();
+  await expect(page.getByText("connected")).toBeVisible();
 });

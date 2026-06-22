@@ -4,6 +4,9 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileModelOption,
+  MobileRemoteControlPairingStatusView,
+  MobileRemoteControlPairingView,
+  MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileThreadDetail,
   MobileThreadGoalView,
@@ -286,6 +289,69 @@ export async function resetMemory(): Promise<void> {
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法重置记忆");
+  }
+}
+
+export async function enableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+  const response = await fetch("/api/codex/remote-control/enable", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启用远程控制");
+  }
+
+  const payload = (await response.json()) as { status: MobileRemoteControlStatusView };
+  return payload.status;
+}
+
+export async function disableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+  const response = await fetch("/api/codex/remote-control/disable", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法关闭远程控制");
+  }
+
+  const payload = (await response.json()) as { status: MobileRemoteControlStatusView };
+  return payload.status;
+}
+
+export async function startRemoteControlPairing(): Promise<MobileRemoteControlPairingView> {
+  const response = await fetch("/api/codex/remote-control/pairing", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法开始配对");
+  }
+
+  const payload = (await response.json()) as { pairing: MobileRemoteControlPairingView };
+  return payload.pairing;
+}
+
+export async function readRemoteControlPairingStatus(input: {
+  pairingCode?: string | null;
+  manualPairingCode?: string | null;
+}): Promise<MobileRemoteControlPairingStatusView> {
+  const response = await fetch("/api/codex/remote-control/pairing/status", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取配对状态");
+  }
+
+  const payload = (await response.json()) as { pairingStatus: MobileRemoteControlPairingStatusView };
+  return payload.pairingStatus;
+}
+
+export async function revokeRemoteControlClient(environmentId: string, clientId: string): Promise<void> {
+  const response = await fetch(`/api/codex/remote-control/clients/${encodeURIComponent(clientId)}/revoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ environmentId })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法撤销远程客户端");
   }
 }
 

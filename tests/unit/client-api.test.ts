@@ -4,12 +4,17 @@ import {
   clearThreadGoal,
   compactThread,
   deleteThread,
+  disableRemoteControl,
+  enableRemoteControl,
   listThreads,
   renameThread,
+  readRemoteControlPairingStatus,
   resumeThread,
   resetMemory,
+  revokeRemoteControlClient,
   setThreadGoal,
   setThreadMemoryMode,
+  startRemoteControlPairing,
   startReview,
   updateThreadSettings
 } from "../../src/lib/client-api";
@@ -171,5 +176,62 @@ describe("client-api", () => {
       body: JSON.stringify({ mode: "disabled" })
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/memory/reset", { method: "POST" });
+  });
+
+  it("管理远程控制时调用对应端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: { status: "connected", environmentId: "env-1" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: { status: "disabled", environmentId: null } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          pairing: {
+            pairingCode: "pair-code-1",
+            manualPairingCode: "123-456",
+            environmentId: "env-1",
+            expiresAt: 1_800_000_500
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ pairingStatus: { claimed: true } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(enableRemoteControl()).resolves.toMatchObject({ status: "connected", environmentId: "env-1" });
+    await expect(disableRemoteControl()).resolves.toMatchObject({ status: "disabled", environmentId: null });
+    await expect(startRemoteControlPairing()).resolves.toMatchObject({
+      pairingCode: "pair-code-1",
+      manualPairingCode: "123-456"
+    });
+    await expect(
+      readRemoteControlPairingStatus({ pairingCode: "pair-code-1", manualPairingCode: "123-456" })
+    ).resolves.toEqual({ claimed: true });
+    await expect(revokeRemoteControlClient("env-1", "phone-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/remote-control/enable", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/remote-control/disable", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/remote-control/pairing", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/remote-control/pairing/status", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pairingCode: "pair-code-1", manualPairingCode: "123-456" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/codex/remote-control/clients/phone-1/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ environmentId: "env-1" })
+    });
   });
 });

@@ -21,6 +21,15 @@ import type { PermissionProfileListResponse } from "../../../docs/generated/app-
 import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/PluginListParams";
 import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
+import type { RemoteControlClientsRevokeParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsRevokeParams";
+import type { RemoteControlDisableParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlDisableParams";
+import type { RemoteControlDisableResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlDisableResponse";
+import type { RemoteControlEnableParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlEnableParams";
+import type { RemoteControlEnableResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlEnableResponse";
+import type { RemoteControlPairingStartParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlPairingStartParams";
+import type { RemoteControlPairingStartResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlPairingStartResponse";
+import type { RemoteControlPairingStatusParams } from "../../../docs/generated/app-server-ts/v2/RemoteControlPairingStatusParams";
+import type { RemoteControlPairingStatusResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlPairingStatusResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2/ReviewStartParams";
 import type { ReviewStartResponse } from "../../../docs/generated/app-server-ts/v2/ReviewStartResponse";
@@ -76,6 +85,9 @@ import type {
   MobilePluginView,
   MobileRateLimitView,
   MobileRemoteControlClientView,
+  MobileRemoteControlPairingStatusView,
+  MobileRemoteControlPairingView,
+  MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileSkillErrorView,
   MobileSkillView,
@@ -327,6 +339,17 @@ function remoteControlClientViews(response: RemoteControlClientsListResponse): M
     platform: client.platform,
     lastSeenAt: client.lastSeenAt === null ? null : Number(client.lastSeenAt)
   }));
+}
+
+function remoteControlStatusView(
+  response: RemoteControlEnableResponse | RemoteControlDisableResponse | RemoteControlStatusReadResponse
+): MobileRemoteControlStatusView {
+  return {
+    status: response.status,
+    serverName: response.serverName,
+    installationId: response.installationId,
+    environmentId: response.environmentId
+  };
 }
 
 function mcpServerViews(response: ListMcpServerStatusResponse): MobileMcpServerView[] {
@@ -594,6 +617,48 @@ export class CodexAppServerClient {
     await this.peer.request("memory/reset", undefined);
   }
 
+  async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+    const params: RemoteControlEnableParams = { ephemeral: false };
+    const response = (await this.peer.request("remoteControl/enable", params)) as RemoteControlEnableResponse;
+    return remoteControlStatusView(response);
+  }
+
+  async disableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+    const params: RemoteControlDisableParams = { ephemeral: false };
+    const response = (await this.peer.request("remoteControl/disable", params)) as RemoteControlDisableResponse;
+    return remoteControlStatusView(response);
+  }
+
+  async startRemoteControlPairing(): Promise<MobileRemoteControlPairingView> {
+    const params: RemoteControlPairingStartParams = { manualCode: true };
+    const response = (await this.peer.request(
+      "remoteControl/pairing/start",
+      params
+    )) as RemoteControlPairingStartResponse;
+
+    return {
+      pairingCode: response.pairingCode,
+      manualPairingCode: response.manualPairingCode,
+      environmentId: response.environmentId,
+      expiresAt: Number(response.expiresAt)
+    };
+  }
+
+  async readRemoteControlPairingStatus(
+    params: RemoteControlPairingStatusParams
+  ): Promise<MobileRemoteControlPairingStatusView> {
+    const response = (await this.peer.request(
+      "remoteControl/pairing/status",
+      params
+    )) as RemoteControlPairingStatusResponse;
+    return { claimed: response.claimed };
+  }
+
+  async revokeRemoteControlClient(environmentId: string, clientId: string): Promise<void> {
+    const params: RemoteControlClientsRevokeParams = { environmentId, clientId };
+    await this.peer.request("remoteControl/client/revoke", params);
+  }
+
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     const params: TurnInterruptParams = {
       threadId,
@@ -705,6 +770,9 @@ export class CodexAppServerClient {
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
       remoteControlStatus: remoteControl.status,
+      remoteControlServerName: remoteControl.serverName,
+      remoteControlInstallationId: remoteControl.installationId,
+      remoteControlEnvironmentId: remoteControl.environmentId,
       account: accountView(accountResponse as GetAccountResponse),
       rateLimit: rateLimitView(rateLimitsResponse as GetAccountRateLimitsResponse),
       providerCapabilities: providerCapabilitiesView(providerCapabilitiesResponse as ModelProviderCapabilitiesReadResponse),

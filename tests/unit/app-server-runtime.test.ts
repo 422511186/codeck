@@ -196,6 +196,9 @@ describe("createAppServerGateway", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       remoteControlStatus: "connected",
+      remoteControlServerName: "mock",
+      remoteControlInstallationId: "mock-installation",
+      remoteControlEnvironmentId: "mock-env",
       account: {
         type: "chatgpt",
         email: "dev@example.com",
@@ -395,6 +398,33 @@ describe("createAppServerGateway", () => {
         expect.objectContaining({ role: "agent", text: "已开始审查未提交改动" })
       ])
     });
+  });
+
+  it("mock 模式支持管理远程控制配对和客户端", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.startRemoteControlPairing()).resolves.toMatchObject({
+      pairingCode: "pair-code-1",
+      manualPairingCode: "123-456",
+      environmentId: "mock-env"
+    });
+    await expect(
+      gateway.readRemoteControlPairingStatus({ pairingCode: "pair-code-1", manualPairingCode: "123-456" })
+    ).resolves.toEqual({ claimed: true });
+
+    await expect(gateway.revokeRemoteControlClient("mock-env", "mock-phone")).resolves.toBeUndefined();
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      remoteControlClients: []
+    });
+
+    await expect(gateway.disableRemoteControl()).resolves.toMatchObject({ status: "disabled", environmentId: null });
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      remoteControlStatus: "disabled",
+      remoteControlEnvironmentId: null
+    });
+
+    await expect(gateway.enableRemoteControl()).resolves.toMatchObject({ status: "connected", environmentId: "mock-env" });
   });
 
   it("mock 模式支持切换记忆模式和重置记忆", async () => {

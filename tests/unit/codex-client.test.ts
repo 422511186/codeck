@@ -548,6 +548,41 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "remoteControl/enable") {
+      return {
+        status: "connected",
+        serverName: "mock",
+        installationId: "install-1",
+        environmentId: "env-1"
+      };
+    }
+
+    if (method === "remoteControl/disable") {
+      return {
+        status: "disabled",
+        serverName: "mock",
+        installationId: "install-1",
+        environmentId: null
+      };
+    }
+
+    if (method === "remoteControl/pairing/start") {
+      return {
+        pairingCode: "pair-code-1",
+        manualPairingCode: "123-456",
+        environmentId: "env-1",
+        expiresAt: 1_800_000_500n
+      };
+    }
+
+    if (method === "remoteControl/pairing/status") {
+      return { claimed: true };
+    }
+
+    if (method === "remoteControl/client/revoke") {
+      return {};
+    }
+
     if (method === "account/read") {
       return {
         account: { type: "chatgpt", email: "dev@example.com", planType: "pro" },
@@ -1129,6 +1164,9 @@ describe("CodexAppServerClient", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       remoteControlStatus: "connected",
+      remoteControlServerName: "mock",
+      remoteControlInstallationId: "install-1",
+      remoteControlEnvironmentId: "env-1",
       account: {
         type: "chatgpt",
         email: "dev@example.com",
@@ -1241,6 +1279,43 @@ describe("CodexAppServerClient", () => {
         { method: "skills/list", params: { forceReload: false } },
         { method: "plugin/list", params: { cwds: null, marketplaceKinds: null } },
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
+      ])
+    );
+  });
+
+  it("能管理远程控制连接、配对和客户端授权", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.enableRemoteControl()).resolves.toMatchObject({
+      status: "connected",
+      environmentId: "env-1"
+    });
+    await expect(client.disableRemoteControl()).resolves.toMatchObject({
+      status: "disabled",
+      environmentId: null
+    });
+    await expect(client.startRemoteControlPairing()).resolves.toEqual({
+      pairingCode: "pair-code-1",
+      manualPairingCode: "123-456",
+      environmentId: "env-1",
+      expiresAt: 1_800_000_500
+    });
+    await expect(
+      client.readRemoteControlPairingStatus({ pairingCode: "pair-code-1", manualPairingCode: "123-456" })
+    ).resolves.toEqual({ claimed: true });
+    await expect(client.revokeRemoteControlClient("env-1", "phone-1")).resolves.toBeUndefined();
+
+    expect(peer.calls).toEqual(
+      expect.arrayContaining([
+        { method: "remoteControl/enable", params: { ephemeral: false } },
+        { method: "remoteControl/disable", params: { ephemeral: false } },
+        { method: "remoteControl/pairing/start", params: { manualCode: true } },
+        {
+          method: "remoteControl/pairing/status",
+          params: { pairingCode: "pair-code-1", manualPairingCode: "123-456" }
+        },
+        { method: "remoteControl/client/revoke", params: { environmentId: "env-1", clientId: "phone-1" } }
       ])
     );
   });

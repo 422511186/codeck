@@ -61,6 +61,24 @@ export type MobileRemoteControlClientView = {
   lastSeenAt: number | null;
 };
 
+export type MobileRemoteControlStatusView = {
+  status: string;
+  serverName: string;
+  installationId: string;
+  environmentId: string | null;
+};
+
+export type MobileRemoteControlPairingView = {
+  pairingCode: string;
+  manualPairingCode: string | null;
+  environmentId: string;
+  expiresAt: number;
+};
+
+export type MobileRemoteControlPairingStatusView = {
+  claimed: boolean;
+};
+
 export type MobileMcpServerView = {
   name: string;
   authStatus: string;
@@ -163,6 +181,9 @@ export type MobileSettingsView = {
   approvalPolicy: string | null;
   sandboxMode: string | null;
   remoteControlStatus: string;
+  remoteControlServerName: string;
+  remoteControlInstallationId: string;
+  remoteControlEnvironmentId: string | null;
   account: MobileAccountView;
   rateLimit: MobileRateLimitView | null;
   providerCapabilities: MobileModelProviderCapabilitiesView;

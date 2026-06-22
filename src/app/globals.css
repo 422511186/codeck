@@ -630,6 +630,20 @@ pre {
   color: #f2f2f2;
 }
 
+.remote-control-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.remote-control-panel button {
+  min-height: 40px;
+  border: 1px solid #435166;
+  border-radius: 8px;
+  background: #1d2734;
+  color: #f2f2f2;
+  font-size: 12px;
+}
+
 .turn-action-form input {
   border: 1px solid #343942;
   background: #181b20;

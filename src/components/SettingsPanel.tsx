@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { readSettings } from "../lib/client-api";
-import type { MobileModelOption, MobileSettingsView } from "../shared/codex";
+import {
+  disableRemoteControl,
+  enableRemoteControl,
+  readRemoteControlPairingStatus,
+  readSettings,
+  revokeRemoteControlClient,
+  startRemoteControlPairing
+} from "../lib/client-api";
+import type { MobileModelOption, MobileRemoteControlPairingView, MobileSettingsView } from "../shared/codex";
 
 type SettingsPanelProps = {
   models: MobileModelOption[];
@@ -126,12 +133,20 @@ export function SettingsPanel({
   onPermissionsChange
 }: SettingsPanelProps) {
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
+  const [pairing, setPairing] = useState<MobileRemoteControlPairingView | null>(null);
+  const [pairingClaimed, setPairingClaimed] = useState<boolean | null>(null);
   const [error, setError] = useState("");
+  const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
   const reasoningOptions = selectedModel?.supportedReasoningEfforts || [];
   const permissionOptions = settings?.permissionProfiles.length
     ? settings.permissionProfiles
     : [{ id: selectedPermissions, label: selectedPermissions, description: null }];
+
+  async function reloadSettings(): Promise<void> {
+    const nextSettings = await readSettings();
+    setSettings(nextSettings);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -178,6 +193,55 @@ export function SettingsPanel({
         ["插件列表", pluginNamesLabel(settings)]
       ]
     : [];
+
+  async function runRemoteAction(action: () => Promise<unknown>) {
+    setRemoteBusy(true);
+    setError("");
+    try {
+      await action();
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "远程控制操作失败");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleStartPairing() {
+    setRemoteBusy(true);
+    setError("");
+    try {
+      const nextPairing = await startRemoteControlPairing();
+      setPairing(nextPairing);
+      setPairingClaimed(null);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法开始配对");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleRefreshPairingStatus() {
+    if (!pairing) {
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    try {
+      const nextStatus = await readRemoteControlPairingStatus({
+        pairingCode: pairing.pairingCode,
+        manualPairingCode: pairing.manualPairingCode
+      });
+      setPairingClaimed(nextStatus.claimed);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取配对状态");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
 
   return (
     <section className="panel-view" aria-label="设置面板">
@@ -226,6 +290,72 @@ export function SettingsPanel({
           </div>
         ))}
       </dl>
+      {settings ? (
+        <div className="remote-control-panel">
+          <div className="turn-actions-row">
+            <button type="button" onClick={() => runRemoteAction(enableRemoteControl)} disabled={remoteBusy}>
+              启用远控
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                runRemoteAction(async () => {
+                  await disableRemoteControl();
+                  setPairing(null);
+                  setPairingClaimed(null);
+                })
+              }
+              disabled={remoteBusy}
+            >
+              关闭远控
+            </button>
+          </div>
+          <div className="turn-actions-row">
+            <button type="button" onClick={handleStartPairing} disabled={remoteBusy}>
+              开始配对
+            </button>
+            <button type="button" onClick={handleRefreshPairingStatus} disabled={remoteBusy || !pairing}>
+              刷新配对状态
+            </button>
+          </div>
+          {pairing ? (
+            <dl className="settings-list">
+              <div className="settings-row">
+                <dt>配对码</dt>
+                <dd>{pairing.pairingCode}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>手动码</dt>
+                <dd>{pairing.manualPairingCode || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>配对状态</dt>
+                <dd>{pairingClaimed === null ? "等待领取" : pairingClaimed ? "配对已领取" : "未领取"}</dd>
+              </div>
+            </dl>
+          ) : null}
+          {settings.remoteControlClients.map((client) => {
+            const label = client.displayName || client.platform || client.deviceType || client.clientId;
+            return (
+              <button
+                type="button"
+                className="remote-client-button"
+                key={client.clientId}
+                onClick={() =>
+                  settings.remoteControlEnvironmentId
+                    ? runRemoteAction(() =>
+                        revokeRemoteControlClient(settings.remoteControlEnvironmentId as string, client.clientId)
+                      )
+                    : undefined
+                }
+                disabled={remoteBusy || !settings.remoteControlEnvironmentId}
+              >
+                撤销 {label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }

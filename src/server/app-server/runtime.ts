@@ -5,6 +5,9 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileModelOption,
+  MobileRemoteControlPairingStatusView,
+  MobileRemoteControlPairingView,
+  MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileThreadGoalView,
   MobileTimelinePage,
@@ -65,6 +68,21 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private itemCounter = 2;
   private requestCounter = 0;
   private rateLimitUsedPercent = 42;
+  private remoteControlEnabled = true;
+  private remoteControlEnvironmentId: string | null = "mock-env";
+  private remoteControlClients = [
+    {
+      clientId: "mock-phone",
+      displayName: "手机浏览器",
+      deviceType: "phone",
+      platform: "web",
+      osVersion: null,
+      deviceModel: null,
+      appVersion: "0.1.0",
+      lastSeenAt: 1_800_000_001
+    }
+  ];
+  private remotePairingClaimed = false;
   private goals = new Map<string, MobileThreadGoalView>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
@@ -701,29 +719,63 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "remoteControl/status/read") {
       return {
-        status: "connected",
+        status: this.remoteControlEnabled ? "connected" : "disabled",
         serverName: "mock",
         installationId: "mock-installation",
-        environmentId: "mock-env"
+        environmentId: this.remoteControlEnvironmentId
       };
     }
 
     if (method === "remoteControl/client/list") {
       return {
-        data: [
-          {
-            clientId: "mock-phone",
-            displayName: "手机浏览器",
-            deviceType: "phone",
-            platform: "web",
-            osVersion: null,
-            deviceModel: null,
-            appVersion: "0.1.0",
-            lastSeenAt: 1_800_000_001
-          }
-        ],
+        data: this.remoteControlClients,
         nextCursor: null
       };
+    }
+
+    if (method === "remoteControl/enable") {
+      this.remoteControlEnabled = true;
+      this.remoteControlEnvironmentId = "mock-env";
+      return {
+        status: "connected",
+        serverName: "mock",
+        installationId: "mock-installation",
+        environmentId: this.remoteControlEnvironmentId
+      };
+    }
+
+    if (method === "remoteControl/disable") {
+      this.remoteControlEnabled = false;
+      this.remoteControlEnvironmentId = null;
+      return {
+        status: "disabled",
+        serverName: "mock",
+        installationId: "mock-installation",
+        environmentId: null
+      };
+    }
+
+    if (method === "remoteControl/pairing/start") {
+      this.remoteControlEnabled = true;
+      this.remoteControlEnvironmentId = "mock-env";
+      this.remotePairingClaimed = false;
+      return {
+        pairingCode: "pair-code-1",
+        manualPairingCode: "123-456",
+        environmentId: "mock-env",
+        expiresAt: 1_800_000_500
+      };
+    }
+
+    if (method === "remoteControl/pairing/status") {
+      this.remotePairingClaimed = true;
+      return { claimed: this.remotePairingClaimed };
+    }
+
+    if (method === "remoteControl/client/revoke") {
+      const revokeParams = params as { clientId?: string };
+      this.remoteControlClients = this.remoteControlClients.filter((client) => client.clientId !== revokeParams.clientId);
+      return {};
     }
 
     if (method === "account/read") {
@@ -1242,6 +1294,34 @@ export class AppServerGateway {
   async resetMemory(): Promise<void> {
     await this.ensureReady();
     await this.client.resetMemory();
+  }
+
+  async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+    await this.ensureReady();
+    return this.client.enableRemoteControl();
+  }
+
+  async disableRemoteControl(): Promise<MobileRemoteControlStatusView> {
+    await this.ensureReady();
+    return this.client.disableRemoteControl();
+  }
+
+  async startRemoteControlPairing(): Promise<MobileRemoteControlPairingView> {
+    await this.ensureReady();
+    return this.client.startRemoteControlPairing();
+  }
+
+  async readRemoteControlPairingStatus(input: {
+    pairingCode?: string | null;
+    manualPairingCode?: string | null;
+  }): Promise<MobileRemoteControlPairingStatusView> {
+    await this.ensureReady();
+    return this.client.readRemoteControlPairingStatus(input);
+  }
+
+  async revokeRemoteControlClient(environmentId: string, clientId: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.revokeRemoteControlClient(environmentId, clientId);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
