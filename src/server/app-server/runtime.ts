@@ -418,6 +418,16 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           method: "item/agentMessage/delta",
           params: { ...baseParams, itemId: liveItemId, delta: `实时事件：${text}` }
         });
+        if (text.toLowerCase().includes("warning")) {
+          this.emitNotification({
+            method: "warning",
+            params: { threadId: startParams.threadId, message: "线程级 warning 测试" }
+          });
+          this.emitNotification({
+            method: "configWarning",
+            params: { summary: "配置 warning 测试", details: "请检查 Codex 配置" }
+          });
+        }
       }, 25);
 
       return {

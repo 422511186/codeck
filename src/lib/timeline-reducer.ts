@@ -36,6 +36,21 @@ export function applyCodexTimelineEvent(
   thread: MobileThreadDetail,
   event: BrowserCodexEvent
 ): MobileThreadDetail {
+  if (event.kind === "warning") {
+    if (!event.threadId || thread.id !== event.threadId) {
+      return thread;
+    }
+
+    return {
+      ...thread,
+      timeline: upsertTimelineItem(
+        thread.timeline,
+        { id: `warning-${event.threadId}`, role: "tool", text: `警告：${event.message}` },
+        "replace"
+      )
+    };
+  }
+
   if (thread.id !== event.threadId) {
     return thread;
   }

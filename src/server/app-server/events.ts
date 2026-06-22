@@ -54,6 +54,11 @@ export type BrowserCodexEvent =
       outputTokens: number;
       reasoningOutputTokens: number;
       modelContextWindow: number | null;
+    }
+  | {
+      kind: "warning";
+      threadId: string | null;
+      message: string;
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -160,6 +165,39 @@ export function normalizeAppServerNotification(
         reasoningOutputTokens: numberOrZero(params.tokenUsage.total.reasoningOutputTokens),
         modelContextWindow:
           typeof params.tokenUsage.modelContextWindow === "number" ? params.tokenUsage.modelContextWindow : null
+      }
+    };
+  }
+
+  if (message.method === "warning") {
+    const params = message.params as { threadId?: unknown; message?: unknown } | null | undefined;
+    if (!params || typeof params.message !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "warning",
+        threadId: typeof params.threadId === "string" ? params.threadId : null,
+        message: params.message
+      }
+    };
+  }
+
+  if (message.method === "configWarning") {
+    const params = message.params as { summary?: unknown; details?: unknown } | null | undefined;
+    if (!params || typeof params.summary !== "string") {
+      return null;
+    }
+    const details = typeof params.details === "string" && params.details.trim() ? `：${params.details}` : "";
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "warning",
+        threadId: null,
+        message: `${params.summary}${details}`
       }
     };
   }

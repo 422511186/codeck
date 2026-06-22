@@ -110,6 +110,45 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把线程 warning 映射为浏览器警告事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "warning",
+        params: {
+          threadId: "thread-1",
+          message: "模型额度即将耗尽"
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "warning",
+        threadId: "thread-1",
+        message: "模型额度即将耗尽"
+      }
+    });
+  });
+
+  it("把 config warning 映射为全局警告事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "configWarning",
+        params: {
+          summary: "配置有误",
+          details: "请检查 config.toml",
+          path: "C:\\Users\\huang\\.codex\\config.toml"
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "warning",
+        threadId: null,
+        message: "配置有误：请检查 config.toml"
+      }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

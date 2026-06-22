@@ -91,6 +91,16 @@ describe("applyCodexTimelineEvent", () => {
     expect(next.tokenUsageTotal).toBe(100);
   });
 
+  it("把线程 warning 写入稳定的警告 timeline item", () => {
+    const next = applyCodexTimelineEvent(thread(), {
+      kind: "warning",
+      threadId: "thread-1",
+      message: "配置有误"
+    });
+
+    expect(next.timeline).toEqual([{ id: "warning-thread-1", role: "tool", text: "警告：配置有误" }]);
+  });
+
   it("同一 item 的重复 delta 不会重复追加", () => {
     const event: BrowserCodexEvent = {
       kind: "agent_message_delta",

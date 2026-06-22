@@ -19,3 +19,16 @@ test("手机端可以接收 app-server 实时事件", async ({ page }) => {
   await expect(page.getByText("Tokens 128")).toBeVisible();
   await expect(page.getByText("实时事件：实时流测试")).toBeVisible();
 });
+
+test("手机端可以显示 app-server warning 和配置警告", async ({ page }) => {
+  await page.goto("/");
+  await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await expect(page.getByText("会话内容")).toBeVisible();
+  await page.getByPlaceholder("给 Codex 发送消息").fill("warning 测试");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  await expect(page.getByText("警告：线程级 warning 测试")).toBeVisible();
+  await expect(page.getByText("配置 warning 测试：请检查 Codex 配置")).toBeVisible();
+});

@@ -108,6 +108,9 @@ export function MobileWorkbench() {
         }
         if ((event as { type: string }).type === "codex-event") {
           const codexEvent = event as BrowserCodexEventEnvelope;
+          if (codexEvent.event?.kind === "warning" && !codexEvent.event.threadId) {
+            setLoadError(codexEvent.event.message);
+          }
           if (codexEvent.event?.kind && codexEvent.event.threadId) {
             setSelectedThread((current) => {
               if (!current || current.id !== codexEvent.event?.threadId) {
