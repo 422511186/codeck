@@ -94,6 +94,10 @@ pre {
   color: #ff8b8b;
 }
 
+.form-success {
+  color: #7ddf9b;
+}
+
 .workbench {
   display: grid;
   grid-template-rows: auto 1fr auto auto;
@@ -384,6 +388,48 @@ pre {
   font-size: 11px;
 }
 
+.file-toolbox {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #15191f;
+  padding: 10px;
+}
+
+.file-toolbox label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #8f9bad;
+  font-size: 12px;
+}
+
+.file-toolbox input {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #f2f2f2;
+  padding: 9px 10px;
+}
+
+.file-toolbox button,
+.file-preview button {
+  min-height: 42px;
+  border: 1px solid #39404a;
+  border-radius: 8px;
+  background: #202734;
+  color: #f2f2f2;
+  font-weight: 600;
+}
+
+.file-toolbox button:disabled,
+.file-preview button:disabled {
+  opacity: 0.55;
+}
+
 .file-preview,
 .terminal-output,
 .diff-preview {
@@ -401,6 +447,52 @@ pre {
   font-size: 12px;
   font-weight: 500;
   overflow-wrap: anywhere;
+}
+
+.file-preview textarea {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #0f1217;
+  color: #f2f2f2;
+  padding: 10px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+}
+
+.file-metadata {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #15191f;
+  padding: 10px;
+}
+
+.file-metadata div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.file-metadata dt,
+.file-metadata dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.file-metadata dt {
+  color: #8f9bad;
+}
+
+.file-metadata dd {
+  color: #f2f2f2;
 }
 
 .terminal-form {

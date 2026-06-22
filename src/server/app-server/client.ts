@@ -6,10 +6,16 @@ import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/Thr
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
+import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
+import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
+import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
+import type { FsGetMetadataResponse } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataResponse";
 import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
 import type { FsReadDirectoryResponse } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryResponse";
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
+import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
+import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
 import type { CollaborationModeListResponse } from "../../../docs/generated/app-server-ts/v2/CollaborationModeListResponse";
@@ -89,6 +95,7 @@ import type {
   MobileCollaborationModeView,
   MobileFileContent,
   MobileFileEntry,
+  MobileFileMetadata,
   MobileMcpServerView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
@@ -822,6 +829,41 @@ export class CodexAppServerClient {
     return {
       path: filePath,
       text: Buffer.from(response.dataBase64, "base64").toString("utf8")
+    };
+  }
+
+  async writeFile(filePath: string, text: string): Promise<void> {
+    const params: FsWriteFileParams = {
+      path: filePath,
+      dataBase64: Buffer.from(text, "utf8").toString("base64")
+    };
+    await this.peer.request("fs/writeFile", params);
+  }
+
+  async createDirectory(directoryPath: string): Promise<void> {
+    const params: FsCreateDirectoryParams = { path: directoryPath, recursive: true };
+    await this.peer.request("fs/createDirectory", params);
+  }
+
+  async removePath(targetPath: string): Promise<void> {
+    const params: FsRemoveParams = { path: targetPath, recursive: true, force: true };
+    await this.peer.request("fs/remove", params);
+  }
+
+  async copyPath(sourcePath: string, destinationPath: string): Promise<void> {
+    const params: FsCopyParams = { sourcePath, destinationPath, recursive: true };
+    await this.peer.request("fs/copy", params);
+  }
+
+  async getMetadata(targetPath: string): Promise<MobileFileMetadata> {
+    const params: FsGetMetadataParams = { path: targetPath };
+    const response = (await this.peer.request("fs/getMetadata", params)) as FsGetMetadataResponse;
+    return {
+      isDirectory: response.isDirectory,
+      isFile: response.isFile,
+      isSymlink: response.isSymlink,
+      createdAtMs: response.createdAtMs,
+      modifiedAtMs: response.modifiedAtMs
     };
   }
 

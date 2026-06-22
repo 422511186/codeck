@@ -499,6 +499,20 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "fs/writeFile" || method === "fs/createDirectory" || method === "fs/remove" || method === "fs/copy") {
+      return {};
+    }
+
+    if (method === "fs/getMetadata") {
+      return {
+        isDirectory: false,
+        isFile: true,
+        isSymlink: false,
+        createdAtMs: 1_700_000_000_000,
+        modifiedAtMs: 1_800_000_000_000
+      };
+    }
+
     if (method === "command/exec") {
       return {
         exitCode: 0,
@@ -1208,6 +1222,52 @@ describe("CodexAppServerClient", () => {
       path: "C:\\Users\\huang\\workspace\\demo\\README.md",
       text: "# README"
     });
+  });
+
+  it("能写入、创建、复制、删除文件并读取元数据", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.writeFile("C:\\Users\\huang\\workspace\\demo\\README.md", "# 已更新")).resolves.toBeUndefined();
+    await expect(client.createDirectory("C:\\Users\\huang\\workspace\\demo\\docs")).resolves.toBeUndefined();
+    await expect(
+      client.copyPath("C:\\Users\\huang\\workspace\\demo\\README.md", "C:\\Users\\huang\\workspace\\demo\\README.copy.md")
+    ).resolves.toBeUndefined();
+    await expect(client.removePath("C:\\Users\\huang\\workspace\\demo\\README.copy.md")).resolves.toBeUndefined();
+    await expect(client.getMetadata("C:\\Users\\huang\\workspace\\demo\\README.md")).resolves.toEqual({
+      isDirectory: false,
+      isFile: true,
+      isSymlink: false,
+      createdAtMs: 1_700_000_000_000,
+      modifiedAtMs: 1_800_000_000_000
+    });
+
+    expect(peer.calls.slice(-5)).toEqual([
+      {
+        method: "fs/writeFile",
+        params: {
+          path: "C:\\Users\\huang\\workspace\\demo\\README.md",
+          dataBase64: Buffer.from("# 已更新", "utf8").toString("base64")
+        }
+      },
+      {
+        method: "fs/createDirectory",
+        params: { path: "C:\\Users\\huang\\workspace\\demo\\docs", recursive: true }
+      },
+      {
+        method: "fs/copy",
+        params: {
+          sourcePath: "C:\\Users\\huang\\workspace\\demo\\README.md",
+          destinationPath: "C:\\Users\\huang\\workspace\\demo\\README.copy.md",
+          recursive: true
+        }
+      },
+      {
+        method: "fs/remove",
+        params: { path: "C:\\Users\\huang\\workspace\\demo\\README.copy.md", recursive: true, force: true }
+      },
+      { method: "fs/getMetadata", params: { path: "C:\\Users\\huang\\workspace\\demo\\README.md" } }
+    ]);
   });
 
   it("能执行终端命令", async () => {

@@ -3,9 +3,12 @@ import {
   archiveThread,
   clearThreadGoal,
   compactThread,
+  copyPath,
+  createDirectory,
   deleteThread,
   disableRemoteControl,
   enableRemoteControl,
+  getMetadata,
   installPlugin,
   listThreads,
   renameThread,
@@ -14,6 +17,7 @@ import {
   readRemoteControlPairingStatus,
   resumeThread,
   resetMemory,
+  removePath,
   revokeRemoteControlClient,
   setThreadGoal,
   setThreadMemoryMode,
@@ -21,8 +25,9 @@ import {
   startRemoteControlPairing,
   startReview,
   uninstallPlugin,
+  updateThreadSettings,
   writeSkillConfig,
-  updateThreadSettings
+  writeFile
 } from "../../src/lib/client-api";
 
 describe("client-api", () => {
@@ -164,6 +169,65 @@ describe("client-api", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/review", { method: "POST" });
+  });
+
+  it("管理文件时调用 fs 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          metadata: {
+            isDirectory: false,
+            isFile: true,
+            isSymlink: false,
+            createdAtMs: 1_700_000_000_000,
+            modifiedAtMs: 1_800_000_000_000
+          }
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(writeFile("C:\\repo\\README.md", "# 已更新")).resolves.toBeUndefined();
+    await expect(createDirectory("C:\\repo\\docs")).resolves.toBeUndefined();
+    await expect(copyPath("C:\\repo\\README.md", "C:\\repo\\README.copy.md")).resolves.toBeUndefined();
+    await expect(removePath("C:\\repo\\README.copy.md")).resolves.toBeUndefined();
+    await expect(getMetadata("C:\\repo\\README.md")).resolves.toEqual({
+      isDirectory: false,
+      isFile: true,
+      isSymlink: false,
+      createdAtMs: 1_700_000_000_000,
+      modifiedAtMs: 1_800_000_000_000
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/fs/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "C:\\repo\\README.md", text: "# 已更新" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/fs/directory", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "C:\\repo\\docs" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/fs/copy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourcePath: "C:\\repo\\README.md", destinationPath: "C:\\repo\\README.copy.md" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/fs/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "C:\\repo\\README.copy.md" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/codex/fs/metadata?path=C%3A%5Crepo%5CREADME.md",
+      { cache: "no-store" }
+    );
   });
 
   it("切换记忆模式和重置记忆时调用 memory 端点", async () => {

@@ -184,6 +184,42 @@ describe("createAppServerGateway", () => {
       path: "C:\\Users\\huang\\workspace\\README.md",
       text: "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
     });
+    await expect(gateway.getMetadata("C:\\Users\\huang\\workspace\\README.md")).resolves.toMatchObject({
+      isDirectory: false,
+      isFile: true,
+      isSymlink: false,
+      createdAtMs: expect.any(Number),
+      modifiedAtMs: expect.any(Number)
+    });
+    await gateway.writeFile("C:\\Users\\huang\\workspace\\README.md", "# 已保存\n\n来自移动端。");
+    await expect(gateway.readFile("C:\\Users\\huang\\workspace\\README.md")).resolves.toEqual({
+      path: "C:\\Users\\huang\\workspace\\README.md",
+      text: "# 已保存\n\n来自移动端。"
+    });
+    await gateway.createDirectory("C:\\Users\\huang\\workspace\\docs");
+    await expect(gateway.readDirectory("C:\\Users\\huang\\workspace")).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          name: "docs",
+          path: "C:\\Users\\huang\\workspace\\docs",
+          isDirectory: true,
+          isFile: false
+        }
+      ])
+    );
+    await gateway.copyPath("C:\\Users\\huang\\workspace\\README.md", "C:\\Users\\huang\\workspace\\README.copy.md");
+    await expect(gateway.readFile("C:\\Users\\huang\\workspace\\README.copy.md")).resolves.toEqual({
+      path: "C:\\Users\\huang\\workspace\\README.copy.md",
+      text: "# 已保存\n\n来自移动端。"
+    });
+    await gateway.removePath("C:\\Users\\huang\\workspace\\README.copy.md");
+    await expect(gateway.readDirectory("C:\\Users\\huang\\workspace")).resolves.toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({
+          path: "C:\\Users\\huang\\workspace\\README.copy.md"
+        })
+      ])
+    );
     await expect(gateway.execCommand({ command: ["npm", "--version"], cwd: "C:\\Users\\huang\\workspace" })).resolves.toEqual({
       exitCode: 0,
       stdout: "mock command: npm --version\ncwd: C:\\Users\\huang\\workspace",

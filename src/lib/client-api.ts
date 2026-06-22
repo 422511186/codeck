@@ -3,6 +3,7 @@ import type {
   MobileCommandResult,
   MobileFileContent,
   MobileFileEntry,
+  MobileFileMetadata,
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -542,6 +543,65 @@ export async function readFile(path: string): Promise<MobileFileContent> {
 
   const payload = (await response.json()) as { file: MobileFileContent };
   return payload.file;
+}
+
+export async function writeFile(path: string, text: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/file", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, text })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法写入文件");
+  }
+}
+
+export async function createDirectory(path: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/directory", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法创建目录");
+  }
+}
+
+export async function copyPath(sourcePath: string, destinationPath: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/copy", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourcePath, destinationPath })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法复制路径");
+  }
+}
+
+export async function removePath(path: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法删除路径");
+  }
+}
+
+export async function getMetadata(path: string): Promise<MobileFileMetadata> {
+  const response = await fetch(`/api/codex/fs/metadata?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取元数据");
+  }
+
+  const payload = (await response.json()) as { metadata: MobileFileMetadata };
+  return payload.metadata;
 }
 
 export async function execCommand(input: {

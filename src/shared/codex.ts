@@ -212,6 +212,14 @@ export type MobileFileContent = {
   text: string;
 };
 
+export type MobileFileMetadata = {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+  createdAtMs: number;
+  modifiedAtMs: number;
+};
+
 export type MobileCommandResult = {
   exitCode: number;
   stdout: string;

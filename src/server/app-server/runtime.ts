@@ -4,6 +4,7 @@ import type {
   MobileCommandResult,
   MobileFileContent,
   MobileFileEntry,
+  MobileFileMetadata,
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -58,14 +59,25 @@ import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
+import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
+import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
+import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
 import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
+import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
+import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 
 type TextUserInput = { type: "text"; text: string };
+type MockFsNode = {
+  type: "directory" | "file";
+  createdAtMs: number;
+  modifiedAtMs: number;
+  text?: string;
+};
 
 class MockAppServerPeer implements ManagedAppServerPeer {
   private status: AppServerStatus = { state: "idle" };
@@ -91,6 +103,26 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   ];
   private remotePairingClaimed = false;
   private goals = new Map<string, MobileThreadGoalView>();
+  private readonly workspaceRoot = "C:\\Users\\huang\\workspace";
+  private readonly mockFs = new Map<string, MockFsNode>([
+    [
+      "C:\\Users\\huang\\workspace",
+      { type: "directory", createdAtMs: 1_700_000_000_000, modifiedAtMs: 1_700_000_000_000 }
+    ],
+    [
+      "C:\\Users\\huang\\workspace\\src",
+      { type: "directory", createdAtMs: 1_700_000_000_000, modifiedAtMs: 1_700_000_000_000 }
+    ],
+    [
+      "C:\\Users\\huang\\workspace\\README.md",
+      {
+        type: "file",
+        createdAtMs: 1_700_000_000_000,
+        modifiedAtMs: 1_700_000_000_000,
+        text: "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
+      }
+    ]
+  ]);
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -682,22 +714,52 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "fs/readDirectory") {
       const readParams = params as FsReadDirectoryParams;
       return {
-        entries: [
-          { fileName: "src", isDirectory: true, isFile: false },
-          { fileName: "README.md", isDirectory: false, isFile: true }
-        ],
-        path: readParams.path
+        entries: this.listMockDirectory(readParams.path)
       };
     }
 
     if (method === "fs/readFile") {
       const readParams = params as FsReadFileParams;
-      const fileText = readParams.path.endsWith("README.md")
-        ? "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
-        : `mock file: ${readParams.path}`;
+      const fileText = this.readMockFile(readParams.path);
 
       return {
         dataBase64: Buffer.from(fileText, "utf8").toString("base64")
+      };
+    }
+
+    if (method === "fs/writeFile") {
+      const writeParams = params as FsWriteFileParams;
+      this.writeMockFile(writeParams.path, Buffer.from(writeParams.dataBase64, "base64").toString("utf8"));
+      return {};
+    }
+
+    if (method === "fs/createDirectory") {
+      const createParams = params as FsCreateDirectoryParams;
+      this.createMockDirectory(createParams.path);
+      return {};
+    }
+
+    if (method === "fs/remove") {
+      const removeParams = params as FsRemoveParams;
+      this.removeMockPath(removeParams.path);
+      return {};
+    }
+
+    if (method === "fs/copy") {
+      const copyParams = params as FsCopyParams;
+      this.copyMockPath(copyParams.sourcePath, copyParams.destinationPath);
+      return {};
+    }
+
+    if (method === "fs/getMetadata") {
+      const metadataParams = params as FsGetMetadataParams;
+      const node = this.getMockNode(metadataParams.path);
+      return {
+        isDirectory: node.type === "directory",
+        isFile: node.type === "file",
+        isSymlink: false,
+        createdAtMs: node.createdAtMs,
+        modifiedAtMs: node.modifiedAtMs
       };
     }
 
@@ -1049,6 +1111,147 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
   private upsertThread(thread: Thread): void {
     this.threads = [thread, ...this.threads.filter((item) => item.id !== thread.id)];
+  }
+
+  private normalizeMockPath(path: string): string {
+    const normalized = path.replace(/\//g, "\\");
+    if (/^[A-Za-z]:\\$/.test(normalized)) {
+      return normalized;
+    }
+    return normalized.replace(/\\+$/, "");
+  }
+
+  private getMockNode(path: string): MockFsNode {
+    const normalizedPath = this.normalizeMockPath(path);
+    const node = this.mockFs.get(normalizedPath);
+    if (!node) {
+      throw new Error(`mock 文件不存在: ${normalizedPath}`);
+    }
+    return node;
+  }
+
+  private getMockParentPath(path: string): string {
+    const normalizedPath = this.normalizeMockPath(path);
+    const index = normalizedPath.lastIndexOf("\\");
+    if (index <= 2) {
+      return normalizedPath.slice(0, index + 1);
+    }
+    return normalizedPath.slice(0, index);
+  }
+
+  private getMockBaseName(path: string): string {
+    const normalizedPath = this.normalizeMockPath(path);
+    return normalizedPath.slice(normalizedPath.lastIndexOf("\\") + 1);
+  }
+
+  private touchMockPath(path: string): void {
+    const node = this.mockFs.get(this.normalizeMockPath(path));
+    if (node) {
+      node.modifiedAtMs = Date.now();
+    }
+  }
+
+  private createMockDirectory(path: string): void {
+    const normalizedPath = this.normalizeMockPath(path);
+    if (this.mockFs.has(normalizedPath)) {
+      return;
+    }
+
+    const parentPath = this.getMockParentPath(normalizedPath);
+    if (parentPath && !this.mockFs.has(parentPath)) {
+      this.createMockDirectory(parentPath);
+    }
+
+    const now = Date.now();
+    this.mockFs.set(normalizedPath, {
+      type: "directory",
+      createdAtMs: now,
+      modifiedAtMs: now
+    });
+    this.touchMockPath(parentPath);
+  }
+
+  private listMockDirectory(path: string): Array<{ fileName: string; isDirectory: boolean; isFile: boolean }> {
+    const normalizedPath = this.normalizeMockPath(path);
+    const directory = this.getMockNode(normalizedPath);
+    if (directory.type !== "directory") {
+      throw new Error(`不是目录: ${normalizedPath}`);
+    }
+
+    return [...this.mockFs.entries()]
+      .filter(([candidatePath]) => candidatePath !== normalizedPath && this.getMockParentPath(candidatePath) === normalizedPath)
+      .map(([candidatePath, node]) => ({
+        fileName: this.getMockBaseName(candidatePath),
+        isDirectory: node.type === "directory",
+        isFile: node.type === "file"
+      }))
+      .sort((left, right) => {
+        if (left.isDirectory !== right.isDirectory) {
+          return left.isDirectory ? -1 : 1;
+        }
+        return left.fileName.localeCompare(right.fileName);
+      });
+  }
+
+  private readMockFile(path: string): string {
+    const normalizedPath = this.normalizeMockPath(path);
+    const node = this.getMockNode(normalizedPath);
+    if (node.type !== "file") {
+      throw new Error(`不是文件: ${normalizedPath}`);
+    }
+    return node.text ?? "";
+  }
+
+  private writeMockFile(path: string, text: string): void {
+    const normalizedPath = this.normalizeMockPath(path);
+    const parentPath = this.getMockParentPath(normalizedPath);
+    this.createMockDirectory(parentPath);
+    const previous = this.mockFs.get(normalizedPath);
+    const now = Date.now();
+    this.mockFs.set(normalizedPath, {
+      type: "file",
+      createdAtMs: previous?.createdAtMs ?? now,
+      modifiedAtMs: now,
+      text
+    });
+    this.touchMockPath(parentPath);
+  }
+
+  private copyMockPath(sourcePath: string, destinationPath: string): void {
+    const normalizedSourcePath = this.normalizeMockPath(sourcePath);
+    const normalizedDestinationPath = this.normalizeMockPath(destinationPath);
+    const source = this.getMockNode(normalizedSourcePath);
+    const now = Date.now();
+
+    if (source.type === "file") {
+      this.writeMockFile(normalizedDestinationPath, source.text ?? "");
+      return;
+    }
+
+    this.createMockDirectory(normalizedDestinationPath);
+    for (const [candidatePath, node] of [...this.mockFs.entries()]) {
+      if (candidatePath === normalizedSourcePath || !candidatePath.startsWith(`${normalizedSourcePath}\\`)) {
+        continue;
+      }
+      const targetPath = `${normalizedDestinationPath}${candidatePath.slice(normalizedSourcePath.length)}`;
+      this.mockFs.set(targetPath, {
+        ...node,
+        createdAtMs: now,
+        modifiedAtMs: now
+      });
+    }
+    this.touchMockPath(this.getMockParentPath(normalizedDestinationPath));
+  }
+
+  private removeMockPath(path: string): void {
+    const normalizedPath = this.normalizeMockPath(path);
+    const parentPath = this.getMockParentPath(normalizedPath);
+    for (const candidatePath of [...this.mockFs.keys()]) {
+      if (candidatePath === normalizedPath || candidatePath.startsWith(`${normalizedPath}\\`)) {
+        this.mockFs.delete(candidatePath);
+      }
+    }
+    this.touchMockPath(parentPath);
   }
 
   private threadMatchesSearch(thread: Thread, searchTerm: string): boolean {
@@ -1458,6 +1661,31 @@ export class AppServerGateway {
   async readFile(path: string): Promise<MobileFileContent> {
     await this.ensureReady();
     return this.client.readFile(path);
+  }
+
+  async writeFile(path: string, text: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.writeFile(path, text);
+  }
+
+  async createDirectory(path: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.createDirectory(path);
+  }
+
+  async removePath(path: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.removePath(path);
+  }
+
+  async copyPath(sourcePath: string, destinationPath: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.copyPath(sourcePath, destinationPath);
+  }
+
+  async getMetadata(path: string): Promise<MobileFileMetadata> {
+    await this.ensureReady();
+    return this.client.getMetadata(path);
   }
 
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {

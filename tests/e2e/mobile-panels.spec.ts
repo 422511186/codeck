@@ -14,8 +14,24 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByRole("heading", { name: "文件" })).toBeVisible();
   await expect(page.getByRole("button", { name: "src" })).toBeVisible();
   await page.getByRole("button", { name: "README.md" }).click();
-  await expect(page.getByText("# Codex Web")).toBeVisible();
-  await expect(page.getByText("移动端 Web 工作台 mock 文件。")).toBeVisible();
+  await expect(page.locator(".file-preview textarea")).toHaveValue("# Codex Web\n\n移动端 Web 工作台 mock 文件。");
+  await page.locator(".file-preview textarea").fill("# 已保存\n\n来自手机端 E2E。");
+  await page.getByRole("button", { name: "保存文件" }).click();
+  await expect(page.getByText("文件已保存")).toBeVisible();
+  await expect(page.locator(".file-preview textarea")).toHaveValue("# 已保存\n\n来自手机端 E2E。");
+  await page.getByLabel("新目录").fill("docs");
+  await page.getByRole("button", { name: "创建目录" }).click();
+  await expect(page.getByRole("button", { name: "docs" })).toBeVisible();
+  await page.getByLabel("复制到").fill("README.copy.md");
+  await page.getByRole("button", { name: "复制" }).click();
+  await expect(page.getByRole("button", { name: "README.copy.md" })).toBeVisible();
+  await page.getByRole("button", { name: "README.copy.md" }).click();
+  await page.getByRole("button", { name: "查看元数据" }).click();
+  await expect(page.getByText("类型")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "文件" })).toBeVisible();
+  await page.getByRole("button", { name: "删除" }).click();
+  await expect(page.getByText("路径已删除")).toBeVisible();
+  await expect(page.getByRole("button", { name: "README.copy.md" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Terminal" }).click();
   await expect(page.getByRole("heading", { name: "终端" })).toBeVisible();
