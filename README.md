@@ -43,6 +43,22 @@
 - `docs/generated/app-server-ts`：Codex app-server TypeScript 协议快照。
 - `docs/generated/app-server-json-schema`：Codex app-server JSON Schema 协议快照。
 
+## 本地运行
+
+安装依赖：
+
+```bash
+npm install
+```
+
+启动开发服务：
+
+```bash
+npm run dev
+```
+
+如果没有配置 `CODEX_WEB_ACCESS_TOKEN`，启动日志会打印临时登录 token。手机访问 `http://<后端机器局域网 IP>:3000` 后输入该 token 登录。
+
 ## 个人模式配置
 
 个人自用场景不需要数据库和用户表。可以使用环境变量显式配置登录 token：
