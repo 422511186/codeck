@@ -5,7 +5,7 @@ Workspace: `C:\Users\huang\workspace\codex-web`
 
 ## Goal
 
-Build a web version of Codex that remotely operates Codex on the server machine through the Codex app-server protocol. The product target is a 1:1 functional recreation of the VS Code Codex extension experience in a browser: threads, history, fork, edit-and-resend, model and reasoning controls, image input, permission approval, questions, terminal/file-change output, and workspace-aware remote development.
+Build a mobile web version of Codex that remotely operates Codex on the server machine through the Codex app-server protocol. The product target is a 1:1 functional recreation of the VS Code Codex extension capabilities in a phone-first browser experience: threads, history, fork, edit-and-resend, model and reasoning controls, image input, permission approval, questions, terminal/file-change output, and workspace-aware remote development.
 
 The backend must not reimplement Codex agent behavior. Codex remains the authority for execution, permissions, persistence, model routing, tools, and thread state. The web app acts as a secure, browser-friendly client for the app-server protocol.
 
@@ -73,7 +73,7 @@ The system has four layers:
 
 1. Web frontend
 
-   React/Next.js browser workbench that renders Codex threads, message timeline, approvals, questions, file changes, terminal output, model controls, reasoning controls, history, and fork/edit flows.
+   React/Next.js mobile browser workbench that renders Codex threads, message timeline, approvals, questions, file changes, terminal output, model controls, reasoning controls, history, and fork/edit flows in touch-first views.
 
 2. Web backend
 
@@ -100,16 +100,19 @@ For local development, explicit listen mode is simplest. For production-like rem
 
 Browser transport should use WebSocket for live events and HTTP for durable queries where streaming is unnecessary. The backend may expose a single browser WebSocket that multiplexes normalized protocol events.
 
-## Frontend Product Surface
+## Mobile Frontend Product Surface
 
-The first screen is the workbench, not a landing page.
+The first screen is the mobile workbench, not a landing page. The app is optimized for phone screens and touch input. Desktop layout is not a product target.
 
-Core layout:
+Core mobile layout:
 
-- Left sidebar: workspace selector, thread search, thread list, archived/history filters, loaded/running indicators.
-- Center timeline: user messages, agent deltas, reasoning summaries, plans, command executions, tool calls, approvals, file changes, diffs, images, and final answers.
-- Bottom composer: text input, image upload, local file/image attach, model selector, reasoning effort selector, approval mode selector, send, interrupt, steer.
-- Right panel: file changes/diff, terminal/output details, thread settings, model/provider info, token usage, MCP/tool status.
+- Top app bar: current thread title, run state, model indicator, compact menu, connection state.
+- Main timeline view: user messages, agent deltas, reasoning summaries, plans, command executions, tool calls, approvals, file changes, diffs, images, and final answers.
+- Sticky bottom composer: text input, image attach, send, interrupt, and a compact settings trigger. It must respect mobile keyboard safe areas.
+- Bottom navigation: `Chats`, `Run`, `Files`, `Terminal`, `Settings`.
+- Drawer/sheet views: thread search/history, fork/edit actions, model selector, reasoning selector, approval mode selector, permissions, token usage, MCP/tool status.
+- Diff/file view: full-screen or bottom-sheet mode with horizontal code scrolling and stable tap targets.
+- Approval/question UI: modal sheet with large actions, clear command/file summaries, and session-scoped approval choices when app-server offers them.
 
 Required interactions:
 
@@ -252,22 +255,23 @@ Integration tests:
 - Roll back and resend edited input.
 - Resume historical thread and paginate turns/items.
 
-Browser tests:
+Mobile browser tests:
 
-- Workbench loads without a landing page.
-- Thread list switches history.
-- Composer sends text and image.
-- Approval modal responds.
-- Question modal responds.
-- Model and reasoning controls update the next turn.
-- Fork and edit-resend flows are visible and functional.
+- Workbench loads on a phone viewport without a landing page.
+- Thread list opens as a mobile sheet and switches history.
+- Sticky composer sends text and image while the virtual keyboard is open.
+- Approval sheet responds with touch-friendly controls.
+- Question sheet responds with touch-friendly controls.
+- Model and reasoning controls update the next turn from compact sheets.
+- Fork and edit-resend flows are reachable without desktop-only sidebars.
+- Diff, terminal, and settings panels are usable on narrow viewports.
 
 Manual verification:
 
-- Run the web app on another device in the LAN.
+- Run the web app on a phone or phone-sized browser in the LAN.
 - Confirm raw app-server is not reachable from the browser.
 - Confirm all remote actions appear in audit logs.
-- Confirm Codex behavior matches the desktop/VS Code app for approvals, questions, output, and history.
+- Confirm Codex behavior matches the VS Code extension capabilities for approvals, questions, output, and history, while using mobile-specific navigation.
 
 ## Implementation Order
 
