@@ -2,8 +2,18 @@
 
 import { useEffect, useState } from "react";
 import type { BrowserCodexEventEnvelope } from "../server/app-server/events";
+import type { BrowserServerRequestEnvelope, PendingServerRequestView } from "../server/app-server/pending-requests";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
-import { listModels, listThreads, readCodexStatus, readThread, startThread, startTurn } from "../lib/client-api";
+import {
+  listModels,
+  listPendingServerRequests,
+  listThreads,
+  readCodexStatus,
+  readThread,
+  resolveServerRequest,
+  startThread,
+  startTurn
+} from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
 import { createBrowserSocket } from "../lib/ws-client";
 import { Composer } from "./Composer";
@@ -15,6 +25,7 @@ export function MobileWorkbench() {
   const [threads, setThreads] = useState<MobileThreadSummary[]>([]);
   const [selectedThread, setSelectedThread] = useState<MobileThreadDetail | null>(null);
   const [models, setModels] = useState<MobileModelOption[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<PendingServerRequestView[]>([]);
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -42,6 +53,17 @@ export function MobileWorkbench() {
             });
           }
         }
+        if ((event as { type: string }).type === "server-request") {
+          const serverRequestEvent = event as BrowserServerRequestEnvelope;
+          setPendingRequests((current) => [
+            serverRequestEvent.request,
+            ...current.filter((request) => request.requestId !== serverRequestEvent.request.requestId)
+          ]);
+        }
+        if ((event as { type: string }).type === "server-request-resolved") {
+          const resolvedEvent = event as { requestId?: number };
+          setPendingRequests((current) => current.filter((request) => request.requestId !== resolvedEvent.requestId));
+        }
       }
     });
 
@@ -56,12 +78,14 @@ export function MobileWorkbench() {
       setLoadError("");
       try {
         const [threadPage, modelOptions] = await Promise.all([listThreads(), listModels()]);
+        const requests = await listPendingServerRequests();
         const status = await readCodexStatus();
 
         if (!cancelled) {
           setAppServerStatus(status);
           setThreads(threadPage.threads);
           setModels(modelOptions);
+          setPendingRequests(requests);
         }
 
         if (!cancelled && threadPage.threads[0]) {
@@ -156,6 +180,16 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleResolveRequest(request: PendingServerRequestView, value: string) {
+    setLoadError("");
+    try {
+      await resolveServerRequest(request.requestId, { decision: value });
+      setPendingRequests((current) => current.filter((item) => item.requestId !== request.requestId));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法处理请求");
+    }
+  }
+
   return (
     <main className="workbench">
       <header className="top-bar">
@@ -218,6 +252,27 @@ export function MobileWorkbench() {
           </section>
         ) : null}
       </section>
+
+      {pendingRequests[0] ? (
+        <section className="approval-sheet" aria-label="待确认请求">
+          <div>
+            <p className="eyebrow">{pendingRequests[0].kind}</p>
+            <h2>{pendingRequests[0].title}</h2>
+            <p>{pendingRequests[0].description}</p>
+          </div>
+          <div className="approval-actions">
+            {pendingRequests[0].options.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                onClick={() => handleResolveRequest(pendingRequests[0]!, option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} />
 

@@ -4,11 +4,13 @@ type PendingRequest = {
 };
 
 type NotificationHandler = (message: { method: string; params?: unknown }) => void;
+type ServerRequestHandler = (message: { id: number; method: string; params?: unknown }) => void;
 
 export class JsonRpcPeer {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notificationHandlers = new Set<NotificationHandler>();
+  private readonly serverRequestHandlers = new Set<ServerRequestHandler>();
 
   constructor(private readonly sendRaw: (message: string) => void) {}
 
@@ -29,6 +31,15 @@ export class JsonRpcPeer {
     return () => this.notificationHandlers.delete(handler);
   }
 
+  onServerRequest(handler: ServerRequestHandler): () => void {
+    this.serverRequestHandlers.add(handler);
+    return () => this.serverRequestHandlers.delete(handler);
+  }
+
+  respond(id: number, result: unknown): void {
+    this.sendRaw(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  }
+
   handleMessage(raw: string): void {
     const message = JSON.parse(raw) as {
       id?: number;
@@ -37,6 +48,13 @@ export class JsonRpcPeer {
       result?: unknown;
       error?: { message?: string };
     };
+
+    if (typeof message.id === "number" && message.method) {
+      for (const handler of this.serverRequestHandlers) {
+        handler({ id: message.id, method: message.method, params: message.params });
+      }
+      return;
+    }
 
     if (typeof message.id === "number") {
       const pending = this.pending.get(message.id);

@@ -116,11 +116,13 @@
 - Test: `tests/unit/pending-requests.test.ts`
 - Test: `tests/e2e/approval-question.spec.ts`
 
-- [ ] JSON-RPC peer 能区分 server request、notification、response。
-- [ ] 命令审批、文件变更审批、权限审批显示为底部 sheet。
+- [x] JSON-RPC peer 能区分 server request、notification、response。
+- [x] 命令审批显示为底部 sheet。
+- [ ] 文件变更审批、权限审批显示为底部 sheet。
 - [ ] `ToolRequestUserInput` 和 MCP elicitation 显示问题、选项、输入框。
-- [ ] 用户选择会回传 JSON-RPC response。
-- [ ] `serverRequest/resolved` 后自动关闭对应 sheet。
+- [x] 命令审批的用户选择会回传 JSON-RPC response。
+- [ ] question、MCP elicitation、文件审批、权限审批的用户选择会回传 JSON-RPC response。
+- [x] `serverRequest/resolved` 后自动关闭对应 sheet。
 
 ## Task 6: 图片发送和附件暂存
 

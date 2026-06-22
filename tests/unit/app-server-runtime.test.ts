@@ -116,4 +116,30 @@ describe("createAppServerGateway", () => {
       }
     });
   });
+
+  it("mock 模式收到 server request 时会进入 pending 队列并广播给浏览器", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+    await gateway.startTurn({ threadId: "mock-thread-1", text: "审批测试" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(gateway.listPendingServerRequests()).toHaveLength(1);
+    expect(events).toContainEqual({
+      type: "server-request",
+      request: expect.objectContaining({
+        requestId: 1,
+        kind: "command_approval",
+        title: "命令审批",
+        description: "npm test"
+      })
+    });
+
+    await gateway.resolveServerRequest(1, { decision: "accept" });
+
+    expect(gateway.listPendingServerRequests()).toEqual([]);
+    expect(events).toContainEqual({ type: "server-request-resolved", requestId: 1 });
+  });
 });

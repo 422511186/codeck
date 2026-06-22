@@ -5,6 +5,7 @@ import type { AppServerConfig } from "../../config/env";
 import { JsonRpcPeer } from "./json-rpc";
 import type { AppServerPeer } from "./client";
 import type { AppServerNotificationMessage } from "./events";
+import type { AppServerServerRequestMessage } from "./pending-requests";
 
 export type AppServerStatus =
   | { state: "disabled" }
@@ -19,6 +20,8 @@ export type ManagedAppServerPeer = AppServerPeer & {
   close(): void;
   getStatus(): AppServerStatus;
   onNotification(handler: (message: AppServerNotificationMessage) => void): () => void;
+  onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void;
+  respondToServerRequest(id: number, result: unknown): Promise<void>;
 };
 
 async function findAvailablePort(host: string): Promise<number> {
@@ -44,6 +47,7 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
   private status: AppServerStatus = { state: "idle" };
   private connecting: Promise<void> | null = null;
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+  private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
   constructor(protected url: string) {}
 
@@ -54,6 +58,11 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
   onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void {
+    this.serverRequestHandlers.add(handler);
+    return () => this.serverRequestHandlers.delete(handler);
   }
 
   connect(): Promise<void> {
@@ -106,6 +115,11 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
             handler(message);
           }
         });
+        this.rpc.onServerRequest((message) => {
+          for (const handler of this.serverRequestHandlers) {
+            handler(message);
+          }
+        });
         this.status = { state: "ready" };
         resolve();
       });
@@ -137,6 +151,15 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
     }
 
     return this.rpc.request(method, params);
+  }
+
+  async respondToServerRequest(id: number, result: unknown): Promise<void> {
+    await this.connect();
+    if (!this.rpc) {
+      throw new Error("app-server 尚未连接");
+    }
+
+    this.rpc.respond(id, result);
   }
 
   close(): void {

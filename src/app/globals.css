@@ -301,6 +301,43 @@ input {
   border-top: 1px solid #242830;
 }
 
+.approval-sheet {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #394252;
+  background: #15191f;
+  padding: 12px 16px;
+}
+
+.approval-sheet h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.approval-sheet p {
+  margin: 0;
+  color: #dce6f6;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.approval-actions button {
+  min-height: 42px;
+  border: 1px solid #435166;
+  border-radius: 8px;
+  background: #223147;
+  color: #f2f2f2;
+  padding: 10px;
+}
+
 .bottom-nav {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

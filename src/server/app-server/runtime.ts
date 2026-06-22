@@ -4,6 +4,12 @@ import { getRuntimeConfig } from "../runtime";
 import { CodexAppServerClient, type AppServerPeer, type StartThreadInput, type StartTurnInput } from "./client";
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
 import { normalizeAppServerNotification } from "./events";
+import {
+  normalizePendingServerRequest,
+  type AppServerServerRequestMessage,
+  type BrowserServerRequestEvent,
+  type PendingServerRequestView
+} from "./pending-requests";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
@@ -17,7 +23,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private thread: Thread = this.createThread();
   private turnCounter = 1;
   private itemCounter = 2;
+  private requestCounter = 0;
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+  private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
   private createThread(): Thread {
     return {
@@ -80,6 +88,15 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void {
+    this.serverRequestHandlers.add(handler);
+    return () => this.serverRequestHandlers.delete(handler);
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
   }
 
   close(): void {
@@ -181,6 +198,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           threadId: startParams.threadId,
           turnId
         };
+        this.emitServerRequest({
+          id: ++this.requestCounter,
+          method: "item/commandExecution/requestApproval",
+          params: {
+            ...baseParams,
+            itemId: `mock-approval-${this.itemCounter}`,
+            startedAtMs: Date.now(),
+            command: "npm test",
+            cwd: this.thread.cwd,
+            reason: "mock 命令审批",
+            availableDecisions: ["accept", "decline"]
+          }
+        });
         this.emitNotification({
           method: "item/reasoning/textDelta",
           params: { ...baseParams, itemId: `mock-reasoning-${this.itemCounter}`, delta: `思考：${text}` }
@@ -269,6 +299,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       handler(message);
     }
   }
+
+  private emitServerRequest(message: AppServerServerRequestMessage): void {
+    for (const handler of this.serverRequestHandlers) {
+      handler(message);
+    }
+  }
 }
 
 class DisabledAppServerPeer implements ManagedAppServerPeer {
@@ -284,6 +320,14 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
     return () => undefined;
   }
 
+  onServerRequest(): () => void {
+    return () => undefined;
+  }
+
+  respondToServerRequest(): Promise<void> {
+    return Promise.reject(new Error("app-server 已关闭"));
+  }
+
   close(): void {
     return undefined;
   }
@@ -296,7 +340,8 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
 export class AppServerGateway {
   private initialized: Promise<void> | null = null;
   private readonly client: CodexAppServerClient;
-  private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope) => void>();
+  private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void>();
+  private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
@@ -310,15 +355,40 @@ export class AppServerGateway {
         handler(event);
       }
     });
+    this.peer.onServerRequest((message) => {
+      const request = normalizePendingServerRequest(message);
+      this.pendingServerRequests.set(request.requestId, request);
+      this.emitBrowserEvent({ type: "server-request", request });
+    });
   }
 
   getStatus(): AppServerStatus {
     return this.peer.getStatus();
   }
 
-  onBrowserEvent(handler: (event: BrowserCodexEventEnvelope) => void): () => void {
+  onBrowserEvent(handler: (event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void): () => void {
     this.browserEventHandlers.add(handler);
     return () => this.browserEventHandlers.delete(handler);
+  }
+
+  listPendingServerRequests(): PendingServerRequestView[] {
+    return [...this.pendingServerRequests.values()];
+  }
+
+  async resolveServerRequest(requestId: number, response: unknown): Promise<void> {
+    if (!this.pendingServerRequests.has(requestId)) {
+      throw new Error("找不到待处理请求");
+    }
+
+    await this.peer.respondToServerRequest(requestId, response);
+    this.pendingServerRequests.delete(requestId);
+    this.emitBrowserEvent({ type: "server-request-resolved", requestId });
+  }
+
+  private emitBrowserEvent(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent): void {
+    for (const handler of this.browserEventHandlers) {
+      handler(event);
+    }
   }
 
   ensureReady(): Promise<void> {

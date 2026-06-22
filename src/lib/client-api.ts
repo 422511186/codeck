@@ -1,4 +1,5 @@
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadPage } from "../shared/codex";
+import type { PendingServerRequestView } from "../server/app-server/pending-requests";
 
 export async function loginWithToken(token: string): Promise<boolean> {
   const response = await fetch("/api/auth/login", {
@@ -93,4 +94,27 @@ export async function startTurn(input: {
 
   const payload = (await response.json()) as { thread: MobileThreadDetail };
   return payload.thread;
+}
+
+export async function listPendingServerRequests(): Promise<PendingServerRequestView[]> {
+  const response = await fetch("/api/codex/requests", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("无法读取待确认请求");
+  }
+
+  const payload = (await response.json()) as { requests: PendingServerRequestView[] };
+  return payload.requests;
+}
+
+export async function resolveServerRequest(requestId: number, responsePayload: unknown): Promise<void> {
+  const response = await fetch(`/api/codex/requests/${requestId}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ response: responsePayload })
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法处理请求");
+  }
 }

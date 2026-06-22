@@ -35,4 +35,34 @@ describe("JsonRpcPeer", () => {
 
     expect(received).toEqual([{ method: "thread/status/changed", params: { threadId: "abc" } }]);
   });
+
+  it("能区分 server request 并回传 response", () => {
+    const sent: string[] = [];
+    const received: unknown[] = [];
+    const peer = new JsonRpcPeer((message) => sent.push(message));
+
+    peer.onServerRequest((request) => received.push(request));
+    peer.handleMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 99,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" }
+      })
+    );
+    peer.respond(99, { decision: "approved" });
+
+    expect(received).toEqual([
+      {
+        id: 99,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" }
+      }
+    ]);
+    expect(JSON.parse(sent[0]!)).toEqual({
+      jsonrpc: "2.0",
+      id: 99,
+      result: { decision: "approved" }
+    });
+  });
 });

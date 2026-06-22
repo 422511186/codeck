@@ -2,18 +2,20 @@ import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { BrowserCodexEventEnvelope } from "./app-server/events";
+import type { BrowserServerRequestEvent } from "./app-server/pending-requests";
 import type { AppServerStatus } from "./app-server/transport";
 
 export type BrowserEvent =
   | { type: "hello"; status: "connected" }
   | { type: "health"; appServer: AppServerStatus["state"]; detail?: string }
-  | BrowserCodexEventEnvelope;
+  | BrowserCodexEventEnvelope
+  | BrowserServerRequestEvent;
 
 type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>;
 type BrowserWebSocketOptions = {
   isAuthenticated(cookie: string | undefined): boolean;
   getAppServerStatus(): AppServerStatus;
-  subscribeToAppServerEvents(handler: (event: BrowserCodexEventEnvelope) => void): () => void;
+  subscribeToAppServerEvents(handler: (event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void): () => void;
 };
 
 export function attachBrowserWebSocket(
