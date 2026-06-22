@@ -198,6 +198,27 @@ export async function deleteThread(threadId: string): Promise<void> {
   }
 }
 
+export async function updateThreadSettings(input: {
+  threadId: string;
+  model?: string;
+  reasoningEffort?: string;
+  permissions?: string;
+}): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(input.threadId)}/settings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      permissions: input.permissions
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法更新会话设置");
+  }
+}
+
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   const response = await fetch(`/api/codex/turns/${encodeURIComponent(threadId)}/interrupt`, {
     method: "POST",

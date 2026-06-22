@@ -29,6 +29,7 @@ import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadSearchResponse } from "../../../docs/generated/app-server-ts/v2/ThreadSearchResponse";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
+import type { ThreadSettingsUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadSettingsUpdateParams";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
@@ -98,6 +99,13 @@ export type SearchThreadsInput = {
   searchTerm: string;
   cursor?: string | null;
   limit?: number | null;
+};
+
+export type UpdateThreadSettingsInput = {
+  threadId: string;
+  model?: string;
+  reasoningEffort?: string;
+  permissions?: string;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -324,6 +332,16 @@ export class CodexAppServerClient {
   async deleteThread(threadId: string): Promise<void> {
     const params: ThreadDeleteParams = { threadId };
     await this.peer.request("thread/delete", params);
+  }
+
+  async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
+    const params: ThreadSettingsUpdateParams = {
+      threadId: input.threadId,
+      model: input.model,
+      effort: input.reasoningEffort,
+      permissions: input.permissions
+    };
+    await this.peer.request("thread/settings/update", params);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

@@ -40,12 +40,27 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
 });
 
 test("手机端可以切换模型、思考强度和权限并用于后续发送", async ({ page }) => {
+  const settingsRequests: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().includes("/api/codex/threads/") && request.url().endsWith("/settings")) {
+      settingsRequests.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
   await login(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByLabel("模型").selectOption("gpt-5-mini");
   await page.getByLabel("思考强度").selectOption("high");
   await page.getByLabel("权限配置").selectOption("full-auto");
+  await expect.poll(() => settingsRequests.length).toBeGreaterThanOrEqual(3);
+  expect(settingsRequests).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ model: "gpt-5-mini" }),
+      expect.objectContaining({ reasoningEffort: "high" }),
+      expect.objectContaining({ permissions: "full-auto" })
+    ])
+  );
 
   await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.getByText("GPT-5 Mini")).toBeVisible();

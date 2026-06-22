@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveThread, deleteThread, listThreads, renameThread, resumeThread } from "../../src/lib/client-api";
+import {
+  archiveThread,
+  deleteThread,
+  listThreads,
+  renameThread,
+  resumeThread,
+  updateThreadSettings
+} from "../../src/lib/client-api";
 
 describe("client-api", () => {
   afterEach(() => {
@@ -58,5 +65,32 @@ describe("client-api", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/archive", { method: "POST" });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/delete", { method: "POST" });
+  });
+
+  it("更新会话设置时调用 settings 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateThreadSettings({
+        threadId: "thread-1",
+        model: "gpt-5-mini",
+        reasoningEffort: "high",
+        permissions: "full-auto"
+      })
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5-mini",
+        reasoningEffort: "high",
+        permissions: "full-auto"
+      })
+    });
   });
 });

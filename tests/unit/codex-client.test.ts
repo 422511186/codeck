@@ -351,6 +351,10 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/settings/update") {
+      return {};
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -694,6 +698,30 @@ describe("CodexAppServerClient", () => {
       { method: "thread/archive", params: { threadId: "thread-1" } },
       { method: "thread/delete", params: { threadId: "thread-1" } }
     ]);
+  });
+
+  it("能更新当前会话设置", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.updateThreadSettings({
+        threadId: "thread-1",
+        model: "gpt-5-mini",
+        reasoningEffort: "high",
+        permissions: "full-auto"
+      })
+    ).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/settings/update",
+      params: {
+        threadId: "thread-1",
+        model: "gpt-5-mini",
+        effort: "high",
+        permissions: "full-auto"
+      }
+    });
   });
 
   it("能中断运行中的 turn", async () => {

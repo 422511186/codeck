@@ -19,7 +19,8 @@ import {
   type ListThreadTurnsInput,
   type SearchThreadsInput,
   type StartThreadInput,
-  type StartTurnInput
+  type StartTurnInput,
+  type UpdateThreadSettingsInput
 } from "./client";
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
 import { normalizeAppServerNotification } from "./events";
@@ -37,6 +38,7 @@ import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
+import type { ThreadSettingsUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadSettingsUpdateParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
@@ -304,6 +306,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         updatedAt: Math.floor(Date.now() / 1000)
       };
       this.upsertThread(this.thread);
+      return {};
+    }
+
+    if (method === "thread/settings/update") {
+      const settingsParams = params as ThreadSettingsUpdateParams;
+      this.selectThread(settingsParams.threadId);
       return {};
     }
 
@@ -891,6 +899,11 @@ export class AppServerGateway {
   async deleteThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.deleteThread(threadId);
+  }
+
+  async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
+    await this.ensureReady();
+    await this.client.updateThreadSettings(input);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

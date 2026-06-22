@@ -24,7 +24,8 @@ import {
   rollbackThread,
   steerTurn,
   startThread,
-  startTurn
+  startTurn,
+  updateThreadSettings
 } from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
 import { appendPendingUserMessage } from "../lib/thread-state";
@@ -203,6 +204,41 @@ export function MobileWorkbench() {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法读取会话内容");
     }
+  }
+
+  async function persistThreadSettings(nextSettings: {
+    model?: string;
+    reasoningEffort?: string;
+    permissions?: string;
+  }) {
+    if (!selectedThread) {
+      return;
+    }
+
+    setLoadError("");
+    try {
+      await updateThreadSettings({
+        threadId: selectedThread.id,
+        ...nextSettings
+      });
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法更新会话设置");
+    }
+  }
+
+  function handleModelChange(modelId: string) {
+    setSelectedModelId(modelId);
+    void persistThreadSettings({ model: modelId });
+  }
+
+  function handleReasoningEffortChange(reasoningEffort: string) {
+    setSelectedReasoningEffort(reasoningEffort);
+    void persistThreadSettings({ reasoningEffort });
+  }
+
+  function handlePermissionsChange(permissions: string) {
+    setSelectedPermissions(permissions);
+    void persistThreadSettings({ permissions });
   }
 
   async function handleSearchThreads(searchTerm: string) {
@@ -576,9 +612,9 @@ export function MobileWorkbench() {
             selectedModelId={selectedModel?.id || ""}
             selectedReasoningEffort={selectedReasoningEffort}
             selectedPermissions={selectedPermissions}
-            onModelChange={setSelectedModelId}
-            onReasoningEffortChange={setSelectedReasoningEffort}
-            onPermissionsChange={setSelectedPermissions}
+            onModelChange={handleModelChange}
+            onReasoningEffortChange={handleReasoningEffortChange}
+            onPermissionsChange={handlePermissionsChange}
           />
         ) : null}
       </section>
