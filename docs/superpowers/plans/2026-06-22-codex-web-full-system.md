@@ -185,8 +185,8 @@
 - Modify: `README.md`
 - Create: `docs/testing.md`
 
-- [ ] 所有 cwd、runtime roots、文件路径都经过 allowlist 校验。
-- [ ] 原始 app-server URL 和 token 永远不返回给浏览器。
-- [ ] 敏感动作写入本地 append-only 审计日志。
-- [ ] README 说明真实运行、局域网访问、token、app-server 模式和安全边界。
-- [ ] 真实 Codex app-server 人工验收流程写入 `docs/testing.md`。
+- [x] 所有 cwd、runtime roots、文件路径都经过 allowlist 校验。
+- [x] 原始 app-server URL 和 token 永远不返回给浏览器。
+- [x] 敏感动作写入本地 append-only 审计日志。
+- [x] README 说明真实运行、局域网访问、token、app-server 模式和安全边界。
+- [x] 真实 Codex app-server 人工验收流程写入 `docs/testing.md`。

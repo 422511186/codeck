@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
+import { assertRuntimePathAllowed } from "../../../../../server/security";
 
 export async function GET(request: Request): Promise<Response> {
   if (!isRequestAuthenticated(request)) {
@@ -14,7 +15,8 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    const file = await getAppServerGateway().readFile(path);
+    const allowedPath = assertRuntimePathAllowed(path);
+    const file = await getAppServerGateway().readFile(allowedPath);
     return NextResponse.json({ ok: true, file });
   } catch (error) {
     return NextResponse.json(

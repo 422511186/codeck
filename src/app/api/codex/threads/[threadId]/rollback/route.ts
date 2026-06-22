@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
+import { audit } from "../../../../../../server/security";
 
 export async function POST(
   request: Request,
@@ -13,7 +14,9 @@ export async function POST(
   try {
     const { threadId } = await context.params;
     const body = (await request.json().catch(() => ({}))) as { numTurns?: number };
-    const thread = await getAppServerGateway().rollbackThread(threadId, body.numTurns || 1);
+    const numTurns = body.numTurns || 1;
+    await audit("thread.rollback", { threadId, numTurns });
+    const thread = await getAppServerGateway().rollbackThread(threadId, numTurns);
     return NextResponse.json({ ok: true, thread });
   } catch (error) {
     return NextResponse.json(

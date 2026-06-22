@@ -36,6 +36,15 @@ describe("createRuntimeConfig", () => {
     expect(config.uploadDir).toBe("C:\\Users\\huang\\workspace\\codex-web\\.uploads");
   });
 
+  it("可以配置审计日志路径", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_AUDIT_LOG_PATH: "C:\\Users\\huang\\workspace\\codex-web\\logs\\audit.jsonl"
+    });
+
+    expect(config.auditLogPath).toBe("C:\\Users\\huang\\workspace\\codex-web\\logs\\audit.jsonl");
+  });
+
   it("配置外部 app-server endpoint 时自动使用 external 模式", () => {
     const config = createRuntimeConfig({
       CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",

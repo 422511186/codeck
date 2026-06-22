@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
+import { getRuntimeConfig } from "../../../../../server/runtime";
+import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
 
 export async function POST(request: Request): Promise<Response> {
   if (!isRequestAuthenticated(request)) {
@@ -24,10 +26,19 @@ export async function POST(request: Request): Promise<Response> {
       return NextResponse.json({ ok: false, error: "消息不能为空" }, { status: 400 });
     }
 
+    const config = getRuntimeConfig();
+    const imagePaths = body.imagePaths?.map((imagePath) => assertRuntimePathAllowed(imagePath, [config.uploadDir]));
+    await audit("turn.start", {
+      threadId: body.threadId,
+      textLength: body.text.length,
+      imageCount: imagePaths?.length || 0,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort
+    });
     const result = await getAppServerGateway().startTurn({
       threadId: body.threadId,
       text: body.text,
-      imagePaths: body.imagePaths,
+      imagePaths,
       model: body.model,
       reasoningEffort: body.reasoningEffort
     });

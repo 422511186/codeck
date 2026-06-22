@@ -9,6 +9,7 @@ test-results/
 .env.*
 !.env.example
 /uploads/
+/logs/
 next-env.d.ts
 tsconfig.tsbuildinfo
 *.sqlite

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
+import { audit } from "../../../../../server/security";
 import { cleanupExpiredUploads, saveUploadedImage } from "../../../../../server/uploads";
 
 export async function POST(request: Request): Promise<Response> {
@@ -22,6 +23,11 @@ export async function POST(request: Request): Promise<Response> {
       bytes: Buffer.from(await file.arrayBuffer()),
       mimeType: file.type,
       originalName: file.name
+    });
+    await audit("upload.image", {
+      path: saved.path,
+      mimeType: saved.mimeType,
+      size: saved.size
     });
 
     return NextResponse.json({ ok: true, image: saved });

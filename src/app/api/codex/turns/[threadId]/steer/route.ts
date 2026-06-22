@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
+import { audit } from "../../../../../../server/security";
 
 export async function POST(
   request: Request,
@@ -20,6 +21,11 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "追加指令不能为空" }, { status: 400 });
     }
 
+    await audit("turn.steer", {
+      threadId,
+      expectedTurnId: body.expectedTurnId,
+      textLength: body.text.length
+    });
     const result = await getAppServerGateway().steerTurn({
       threadId,
       expectedTurnId: body.expectedTurnId,

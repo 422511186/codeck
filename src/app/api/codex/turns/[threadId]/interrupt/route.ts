@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
+import { audit } from "../../../../../../server/security";
 
 export async function POST(
   request: Request,
@@ -17,6 +18,7 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "turnId 不能为空" }, { status: 400 });
     }
 
+    await audit("turn.interrupt", { threadId, turnId: body.turnId });
     await getAppServerGateway().interruptTurn(threadId, body.turnId);
     return NextResponse.json({ ok: true });
   } catch (error) {

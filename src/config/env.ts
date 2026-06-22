@@ -8,6 +8,7 @@ export type RuntimeConfig = {
   bindHost: string;
   bindPort: number;
   uploadDir: string;
+  auditLogPath: string;
   appServer: AppServerConfig;
 };
 
@@ -106,6 +107,7 @@ export function createRuntimeConfig(env: RuntimeEnv = process.env): RuntimeConfi
     bindHost: env.CODEX_WEB_BIND_HOST || "127.0.0.1",
     bindPort: parsePort(env.CODEX_WEB_BIND_PORT),
     uploadDir: env.CODEX_WEB_UPLOAD_DIR?.trim() || resolve("uploads"),
+    auditLogPath: env.CODEX_WEB_AUDIT_LOG_PATH?.trim() || resolve("logs", "audit.jsonl"),
     appServer: parseAppServerConfig(env)
   };
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
+import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
 
 export async function POST(request: Request): Promise<Response> {
   if (!isRequestAuthenticated(request)) {
@@ -13,9 +14,11 @@ export async function POST(request: Request): Promise<Response> {
       return NextResponse.json({ ok: false, error: "command 不能为空" }, { status: 400 });
     }
 
+    const cwd = body.cwd ? assertRuntimePathAllowed(body.cwd) : undefined;
+    await audit("terminal.exec", { command: body.command, cwd });
     const result = await getAppServerGateway().execCommand({
       command: body.command,
-      cwd: body.cwd,
+      cwd,
       timeoutMs: body.timeoutMs
     });
     return NextResponse.json({ ok: true, result });

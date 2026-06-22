@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
+import { audit } from "../../../../../../server/security";
 
 export async function POST(
   request: Request,
@@ -18,6 +19,7 @@ export async function POST(
     }
 
     const body = (await request.json()) as { response?: unknown };
+    await audit("request.resolve", { requestId: id, response: body.response });
     await getAppServerGateway().resolveServerRequest(id, body.response);
     return NextResponse.json({ ok: true });
   } catch (error) {
