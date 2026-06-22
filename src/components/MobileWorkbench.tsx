@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
-import { listModels, listThreads, readCodexStatus, readThread, startTurn } from "../lib/client-api";
+import { listModels, listThreads, readCodexStatus, readThread, startThread, startTurn } from "../lib/client-api";
 import { createBrowserSocket } from "../lib/ws-client";
 import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
@@ -117,6 +117,31 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleStartThread() {
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await startThread({ model: defaultModel?.id });
+      setSelectedThread(thread);
+      setThreads((current) => [
+        {
+          id: thread.id,
+          title: thread.title,
+          preview: thread.preview,
+          cwd: thread.cwd,
+          modelProvider: thread.modelProvider,
+          status: thread.status,
+          updatedAt: thread.updatedAt
+        },
+        ...current.filter((summary) => summary.id !== thread.id)
+      ]);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法新建会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <main className="workbench">
       <header className="top-bar">
@@ -125,6 +150,9 @@ export function MobileWorkbench() {
           <h1>{selectedThread?.title || threads[0]?.title || "新会话"}</h1>
         </div>
         <div className="status-stack">
+          <button className="new-thread-button" type="button" aria-label="新会话" title="新会话" onClick={handleStartThread}>
+            +
+          </button>
           <ConnectionBadge connected={connected} />
           <span className="app-server-state">{appServerStatus.state}</span>
         </div>
