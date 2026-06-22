@@ -1,0 +1,16 @@
+node_modules/
+.next/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+uploads/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
