@@ -159,4 +159,41 @@ describe("createAppServerGateway", () => {
       gateway.steerTurn({ threadId: forked.id, expectedTurnId: rolledBack.lastTurnId || "mock-turn-1", text: "请继续" })
     ).resolves.toMatchObject({ turnId: expect.any(String) });
   });
+
+  it("mock 模式支持文件、终端和设置面板所需数据", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.readDirectory("C:\\Users\\huang\\workspace")).resolves.toEqual([
+      {
+        name: "src",
+        path: "C:\\Users\\huang\\workspace\\src",
+        isDirectory: true,
+        isFile: false
+      },
+      {
+        name: "README.md",
+        path: "C:\\Users\\huang\\workspace\\README.md",
+        isDirectory: false,
+        isFile: true
+      }
+    ]);
+    await expect(gateway.readFile("C:\\Users\\huang\\workspace\\README.md")).resolves.toEqual({
+      path: "C:\\Users\\huang\\workspace\\README.md",
+      text: "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
+    });
+    await expect(gateway.execCommand({ command: ["npm", "--version"], cwd: "C:\\Users\\huang\\workspace" })).resolves.toEqual({
+      exitCode: 0,
+      stdout: "mock command: npm --version\ncwd: C:\\Users\\huang\\workspace",
+      stderr: ""
+    });
+    await expect(gateway.readSettings()).resolves.toEqual({
+      model: "gpt-5-codex",
+      modelProvider: "openai",
+      reasoningEffort: "medium",
+      approvalPolicy: "untrusted",
+      sandboxMode: "workspace-write",
+      remoteControlStatus: "connected"
+    });
+  });
 });

@@ -36,3 +36,30 @@ export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
   timeline: MobileTimelineItem[];
 };
+
+export type MobileFileEntry = {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isFile: boolean;
+};
+
+export type MobileFileContent = {
+  path: string;
+  text: string;
+};
+
+export type MobileCommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type MobileSettingsView = {
+  model: string | null;
+  modelProvider: string | null;
+  reasoningEffort: string | null;
+  approvalPolicy: string | null;
+  sandboxMode: string | null;
+  remoteControlStatus: string;
+};

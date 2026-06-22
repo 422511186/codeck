@@ -258,6 +258,52 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "fs/readDirectory") {
+      return {
+        entries: [
+          { fileName: "src", isDirectory: true, isFile: false },
+          { fileName: "README.md", isDirectory: false, isFile: true }
+        ]
+      };
+    }
+
+    if (method === "fs/readFile") {
+      return {
+        dataBase64: Buffer.from("# README").toString("base64")
+      };
+    }
+
+    if (method === "command/exec") {
+      return {
+        exitCode: 0,
+        stdout: "ok",
+        stderr: ""
+      };
+    }
+
+    if (method === "config/read") {
+      return {
+        config: {
+          model: "gpt-5-codex",
+          model_provider: "openai",
+          model_reasoning_effort: "medium",
+          approval_policy: "untrusted",
+          sandbox_mode: "workspace-write"
+        },
+        origins: {},
+        layers: null
+      };
+    }
+
+    if (method === "remoteControl/status/read") {
+      return {
+        status: "connected",
+        serverName: "mock",
+        installationId: "install-1",
+        environmentId: null
+      };
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
 }
@@ -466,6 +512,58 @@ describe("CodexAppServerClient", () => {
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "请继续", text_elements: [] }]
       }
+    });
+  });
+
+  it("能读取目录和文件内容", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readDirectory("C:\\Users\\huang\\workspace\\demo")).resolves.toEqual([
+      {
+        name: "src",
+        path: "C:\\Users\\huang\\workspace\\demo\\src",
+        isDirectory: true,
+        isFile: false
+      },
+      {
+        name: "README.md",
+        path: "C:\\Users\\huang\\workspace\\demo\\README.md",
+        isDirectory: false,
+        isFile: true
+      }
+    ]);
+    await expect(client.readFile("C:\\Users\\huang\\workspace\\demo\\README.md")).resolves.toEqual({
+      path: "C:\\Users\\huang\\workspace\\demo\\README.md",
+      text: "# README"
+    });
+  });
+
+  it("能执行终端命令", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.execCommand({ command: ["npm", "--version"], cwd: "C:\\repo" })).resolves.toEqual({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: ""
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "command/exec",
+      params: { command: ["npm", "--version"], cwd: "C:\\repo", timeoutMs: 30_000 }
+    });
+  });
+
+  it("能读取设置状态", async () => {
+    const client = new CodexAppServerClient(new FakePeer());
+
+    await expect(client.readSettings()).resolves.toEqual({
+      model: "gpt-5-codex",
+      modelProvider: "openai",
+      reasoningEffort: "medium",
+      approvalPolicy: "untrusted",
+      sandboxMode: "workspace-write",
+      remoteControlStatus: "connected"
     });
   });
 });

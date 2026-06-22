@@ -1,4 +1,13 @@
-import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadPage } from "../shared/codex";
+import type {
+  AppServerStatusView,
+  MobileCommandResult,
+  MobileFileContent,
+  MobileFileEntry,
+  MobileModelOption,
+  MobileSettingsView,
+  MobileThreadDetail,
+  MobileThreadPage
+} from "../shared/codex";
 import type { PendingServerRequestView } from "../server/app-server/pending-requests";
 
 export async function loginWithToken(token: string): Promise<boolean> {
@@ -192,4 +201,56 @@ export async function resolveServerRequest(requestId: number, responsePayload: u
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法处理请求");
   }
+}
+
+export async function readDirectory(path: string): Promise<MobileFileEntry[]> {
+  const response = await fetch(`/api/codex/fs/directory?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取目录");
+  }
+
+  const payload = (await response.json()) as { entries: MobileFileEntry[] };
+  return payload.entries;
+}
+
+export async function readFile(path: string): Promise<MobileFileContent> {
+  const response = await fetch(`/api/codex/fs/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取文件");
+  }
+
+  const payload = (await response.json()) as { file: MobileFileContent };
+  return payload.file;
+}
+
+export async function execCommand(input: {
+  command: string[];
+  cwd?: string;
+  timeoutMs?: number;
+}): Promise<MobileCommandResult> {
+  const response = await fetch("/api/codex/terminal/exec", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法执行命令");
+  }
+
+  const payload = (await response.json()) as { result: MobileCommandResult };
+  return payload.result;
+}
+
+export async function readSettings(): Promise<MobileSettingsView> {
+  const response = await fetch("/api/codex/settings", { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取设置");
+  }
+
+  const payload = (await response.json()) as { settings: MobileSettingsView };
+  return payload.settings;
 }

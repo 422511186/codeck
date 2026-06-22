@@ -1,7 +1,17 @@
+import { Buffer } from "node:buffer";
+import path from "node:path";
 import type { InitializeParams } from "../../../docs/generated/app-server-ts/InitializeParams";
 import type { InitializeResponse } from "../../../docs/generated/app-server-ts/InitializeResponse";
+import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
+import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
+import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
+import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
+import type { FsReadDirectoryResponse } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryResponse";
+import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
+import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
+import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
@@ -19,7 +29,17 @@ import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/T
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2/TurnSteerResponse";
-import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary, MobileTimelineItem } from "../../shared/codex";
+import type {
+  MobileCommandResult,
+  MobileFileContent,
+  MobileFileEntry,
+  MobileModelOption,
+  MobileSettingsView,
+  MobileThreadDetail,
+  MobileThreadPage,
+  MobileThreadSummary,
+  MobileTimelineItem
+} from "../../shared/codex";
 import { createTurnUserInput } from "./user-input";
 
 export type AppServerPeer = {
@@ -39,6 +59,12 @@ export type StartTurnInput = {
   imagePaths?: string[];
   model?: string;
   reasoningEffort?: string;
+};
+
+export type ExecCommandInput = {
+  command: string[];
+  cwd?: string;
+  timeoutMs?: number;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -118,6 +144,20 @@ function threadDetail(thread: Thread): MobileThreadDetail {
     lastTurnId: thread.turns.at(-1)?.id || null,
     timeline
   };
+}
+
+function joinChildPath(parentPath: string, childName: string): string {
+  const hasWindowsSeparator = parentPath.includes("\\");
+  const pathApi = hasWindowsSeparator ? path.win32 : path.posix;
+  return pathApi.join(parentPath, childName);
+}
+
+function settingsValue(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 export class CodexAppServerClient {
@@ -230,5 +270,60 @@ export class CodexAppServerClient {
         supportedReasoningEfforts: model.supportedReasoningEfforts.map(String),
         inputModalities: model.inputModalities.map(String)
       }));
+  }
+
+  async readDirectory(directoryPath: string): Promise<MobileFileEntry[]> {
+    const params: FsReadDirectoryParams = { path: directoryPath };
+    const response = (await this.peer.request("fs/readDirectory", params)) as FsReadDirectoryResponse;
+
+    return response.entries.map((entry) => ({
+      name: entry.fileName,
+      path: joinChildPath(directoryPath, entry.fileName),
+      isDirectory: entry.isDirectory,
+      isFile: entry.isFile
+    }));
+  }
+
+  async readFile(filePath: string): Promise<MobileFileContent> {
+    const params: FsReadFileParams = { path: filePath };
+    const response = (await this.peer.request("fs/readFile", params)) as FsReadFileResponse;
+
+    return {
+      path: filePath,
+      text: Buffer.from(response.dataBase64, "base64").toString("utf8")
+    };
+  }
+
+  async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
+    const params: CommandExecParams = {
+      command: input.command,
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs ?? 30_000
+    };
+    const response = (await this.peer.request("command/exec", params)) as CommandExecResponse;
+
+    return {
+      exitCode: response.exitCode,
+      stdout: response.stdout,
+      stderr: response.stderr
+    };
+  }
+
+  async readSettings(): Promise<MobileSettingsView> {
+    const [configResponse, remoteControlResponse] = await Promise.all([
+      this.peer.request("config/read", {}),
+      this.peer.request("remoteControl/status/read", {})
+    ]);
+    const config = (configResponse as ConfigReadResponse).config;
+    const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
+
+    return {
+      model: settingsValue(config.model),
+      modelProvider: settingsValue(config.model_provider),
+      reasoningEffort: settingsValue(config.model_reasoning_effort),
+      approvalPolicy: settingsValue(config.approval_policy),
+      sandboxMode: settingsValue(config.sandbox_mode),
+      remoteControlStatus: remoteControl.status
+    };
   }
 }

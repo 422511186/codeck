@@ -27,8 +27,14 @@ import { createBrowserSocket } from "../lib/ws-client";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
+import { DiffPanel } from "./DiffPanel";
+import { FilesPanel } from "./FilesPanel";
 import { QuestionSheet } from "./QuestionSheet";
+import { SettingsPanel } from "./SettingsPanel";
+import { TerminalPanel } from "./TerminalPanel";
 import { TurnActionsSheet } from "./TurnActionsSheet";
+
+type ActivePanel = "chats" | "run" | "files" | "terminal" | "settings";
 
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
@@ -39,6 +45,7 @@ export function MobileWorkbench() {
   const [pendingRequests, setPendingRequests] = useState<PendingServerRequestView[]>([]);
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
+  const [activePanel, setActivePanel] = useState<ActivePanel>("chats");
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
 
@@ -311,50 +318,59 @@ export function MobileWorkbench() {
       </header>
 
       <section className="timeline">
-        <div className="model-strip">
-          <span>{defaultModel?.label || "模型加载中"}</span>
-          <span>{defaultModel?.supportedReasoningEfforts.join(" / ") || "reasoning"}</span>
-        </div>
-
-        {loadError ? <p className="form-error">{loadError}</p> : null}
-
-        <section className="thread-list" aria-label="会话历史">
-          <div className="section-title">
-            <h2>历史会话</h2>
-            <span>{threads.length}</span>
-          </div>
-          {threads.length > 0 ? (
-            threads.map((thread) => (
-              <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
-                <span className="thread-title">{thread.title}</span>
-                <span className="thread-preview">{thread.preview || thread.cwd}</span>
-                <span className="thread-meta">
-                  {thread.modelProvider} · {thread.status}
-                </span>
-              </button>
-            ))
-          ) : (
-            <article className="empty-state">
-              <h2>新会话</h2>
-              <p>Codex</p>
-            </article>
-          )}
-        </section>
-
-        {selectedThread ? (
-          <section className="message-list" aria-label="会话内容">
-            <div className="section-title">
-              <h2>会话内容</h2>
-              <span>{selectedThread.timeline.length}</span>
+        {activePanel === "chats" ? (
+          <>
+            <div className="model-strip">
+              <span>{defaultModel?.label || "模型加载中"}</span>
+              <span>{defaultModel?.supportedReasoningEfforts.join(" / ") || "reasoning"}</span>
             </div>
-            {selectedThread.timeline.map((item) => (
-              <article className={`message-bubble message-${item.role}`} key={item.id}>
-                <span>{item.role}</span>
-                <p>{item.text}</p>
-              </article>
-            ))}
-          </section>
+
+            {loadError ? <p className="form-error">{loadError}</p> : null}
+
+            <section className="thread-list" aria-label="会话历史">
+              <div className="section-title">
+                <h2>历史会话</h2>
+                <span>{threads.length}</span>
+              </div>
+              {threads.length > 0 ? (
+                threads.map((thread) => (
+                  <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
+                    <span className="thread-title">{thread.title}</span>
+                    <span className="thread-preview">{thread.preview || thread.cwd}</span>
+                    <span className="thread-meta">
+                      {thread.modelProvider} · {thread.status}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <article className="empty-state">
+                  <h2>新会话</h2>
+                  <p>Codex</p>
+                </article>
+              )}
+            </section>
+
+            {selectedThread ? (
+              <section className="message-list" aria-label="会话内容">
+                <div className="section-title">
+                  <h2>会话内容</h2>
+                  <span>{selectedThread.timeline.length}</span>
+                </div>
+                {selectedThread.timeline.map((item) => (
+                  <article className={`message-bubble message-${item.role}`} key={item.id}>
+                    <span>{item.role}</span>
+                    <p>{item.text}</p>
+                  </article>
+                ))}
+              </section>
+            ) : null}
+          </>
         ) : null}
+
+        {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
+        {activePanel === "files" && selectedThread ? <FilesPanel rootPath={selectedThread.cwd} /> : null}
+        {activePanel === "terminal" && selectedThread ? <TerminalPanel cwd={selectedThread.cwd} /> : null}
+        {activePanel === "settings" ? <SettingsPanel /> : null}
       </section>
 
       {activeRequest?.kind === "question" || activeRequest?.kind === "mcp_elicitation" ? (
@@ -363,7 +379,7 @@ export function MobileWorkbench() {
         <ApprovalSheet request={activeRequest} onResolve={handleResolveRequest} />
       ) : null}
 
-      {selectedThread ? (
+      {activePanel === "chats" && selectedThread ? (
         <TurnActionsSheet
           thread={selectedThread}
           busy={sending}
@@ -374,14 +390,24 @@ export function MobileWorkbench() {
         />
       ) : null}
 
-      <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} />
+      {activePanel === "chats" ? <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} /> : null}
 
       <nav className="bottom-nav" aria-label="移动端导航">
-        <button type="button">Chats</button>
-        <button type="button">Run</button>
-        <button type="button">Files</button>
-        <button type="button">Terminal</button>
-        <button type="button">Settings</button>
+        <button type="button" className={activePanel === "chats" ? "active" : ""} onClick={() => setActivePanel("chats")}>
+          Chats
+        </button>
+        <button type="button" className={activePanel === "run" ? "active" : ""} onClick={() => setActivePanel("run")}>
+          Run
+        </button>
+        <button type="button" className={activePanel === "files" ? "active" : ""} onClick={() => setActivePanel("files")}>
+          Files
+        </button>
+        <button type="button" className={activePanel === "terminal" ? "active" : ""} onClick={() => setActivePanel("terminal")}>
+          Terminal
+        </button>
+        <button type="button" className={activePanel === "settings" ? "active" : ""} onClick={() => setActivePanel("settings")}>
+          Settings
+        </button>
       </nav>
     </main>
   );

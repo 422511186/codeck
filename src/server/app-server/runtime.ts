@@ -1,7 +1,22 @@
 import type { AppServerConfig } from "../../config/env";
-import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary } from "../../shared/codex";
+import type {
+  MobileCommandResult,
+  MobileFileContent,
+  MobileFileEntry,
+  MobileModelOption,
+  MobileSettingsView,
+  MobileThreadDetail,
+  MobileThreadPage,
+  MobileThreadSummary
+} from "../../shared/codex";
 import { getRuntimeConfig } from "../runtime";
-import { CodexAppServerClient, type AppServerPeer, type StartThreadInput, type StartTurnInput } from "./client";
+import {
+  CodexAppServerClient,
+  type AppServerPeer,
+  type ExecCommandInput,
+  type StartThreadInput,
+  type StartTurnInput
+} from "./client";
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
 import { normalizeAppServerNotification } from "./events";
 import {
@@ -18,6 +33,9 @@ import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
+import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
+import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
+import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 
 type TextUserInput = { type: "text"; text: string };
 
@@ -362,6 +380,60 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "fs/readDirectory") {
+      const readParams = params as FsReadDirectoryParams;
+      return {
+        entries: [
+          { fileName: "src", isDirectory: true, isFile: false },
+          { fileName: "README.md", isDirectory: false, isFile: true }
+        ],
+        path: readParams.path
+      };
+    }
+
+    if (method === "fs/readFile") {
+      const readParams = params as FsReadFileParams;
+      const fileText = readParams.path.endsWith("README.md")
+        ? "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
+        : `mock file: ${readParams.path}`;
+
+      return {
+        dataBase64: Buffer.from(fileText, "utf8").toString("base64")
+      };
+    }
+
+    if (method === "command/exec") {
+      const execParams = params as CommandExecParams;
+      return {
+        exitCode: 0,
+        stdout: `mock command: ${execParams.command.join(" ")}\ncwd: ${execParams.cwd || this.thread.cwd}`,
+        stderr: ""
+      };
+    }
+
+    if (method === "config/read") {
+      return {
+        config: {
+          model: "gpt-5-codex",
+          model_provider: "openai",
+          model_reasoning_effort: "medium",
+          approval_policy: "untrusted",
+          sandbox_mode: "workspace-write"
+        },
+        origins: {},
+        layers: null
+      };
+    }
+
+    if (method === "remoteControl/status/read") {
+      return {
+        status: "connected",
+        serverName: "mock",
+        installationId: "mock-installation",
+        environmentId: null
+      };
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
 
@@ -606,6 +678,26 @@ export class AppServerGateway {
   async steerTurn(input: { threadId: string; expectedTurnId: string; text: string }): Promise<{ turnId: string }> {
     await this.ensureReady();
     return this.client.steerTurn(input);
+  }
+
+  async readDirectory(path: string): Promise<MobileFileEntry[]> {
+    await this.ensureReady();
+    return this.client.readDirectory(path);
+  }
+
+  async readFile(path: string): Promise<MobileFileContent> {
+    await this.ensureReady();
+    return this.client.readFile(path);
+  }
+
+  async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
+    await this.ensureReady();
+    return this.client.execCommand(input);
+  }
+
+  async readSettings(): Promise<MobileSettingsView> {
+    await this.ensureReady();
+    return this.client.readSettings();
   }
 
   close(): void {

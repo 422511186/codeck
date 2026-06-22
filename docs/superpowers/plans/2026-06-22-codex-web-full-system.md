@@ -171,10 +171,10 @@
 - Create: `src/app/api/codex/terminal/*`
 - Test: `tests/e2e/mobile-panels.spec.ts`
 
-- [ ] Files 面板使用 `fs/readDirectory`、`fs/readFile`。
-- [ ] Diff 面板使用 `turn/diff/updated` 和 thread diff 数据。
-- [ ] Terminal 面板展示 `command/exec` 或 `process/*` 输出。
-- [ ] Settings 面板支持模型、思考强度、权限配置、remote-control 状态。
+- [x] Files 面板使用 `fs/readDirectory`、`fs/readFile`。
+- [x] Diff 面板使用 `turn/diff/updated` 和 thread diff 数据。
+- [x] Terminal 面板展示 `command/exec` 或 `process/*` 输出。
+- [x] Settings 面板支持模型、思考强度、权限配置、remote-control 状态。
 
 ## Task 9: 安全、审计和生产验证
 

@@ -21,6 +21,13 @@ input {
   font: inherit;
 }
 
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
 .loading-screen,
 .login-screen,
 .workbench {
@@ -275,6 +282,134 @@ input {
   background: #171f1b;
 }
 
+.panel-view {
+  display: grid;
+  gap: 12px;
+}
+
+.path-line {
+  margin: 0;
+  color: #8f9bad;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #171a1f;
+  color: #f2f2f2;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.file-row span,
+.file-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row small {
+  color: #8f9bad;
+  font-size: 11px;
+}
+
+.file-preview,
+.terminal-output,
+.diff-preview {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #15191f;
+  padding: 12px;
+}
+
+.file-preview h3 {
+  margin: 0;
+  color: #b7bfcc;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.terminal-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.terminal-form input {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #f2f2f2;
+  padding: 10px 12px;
+}
+
+.terminal-form button {
+  min-width: 68px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: #2f7df6;
+  color: #fff;
+  padding: 10px 12px;
+}
+
+.terminal-output p {
+  margin: 0;
+  color: #8f9bad;
+  font-size: 12px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 44px;
+  align-items: center;
+  border-bottom: 1px solid #242830;
+}
+
+.settings-row dt,
+.settings-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.settings-row dt {
+  color: #8f9bad;
+}
+
+.settings-row dd {
+  color: #eef3fb;
+  text-align: right;
+}
+
 .empty-state {
   border: 1px solid #272c35;
   border-radius: 8px;
@@ -416,4 +551,9 @@ input {
   color: #b7bfcc;
   padding: 10px 4px;
   font-size: 12px;
+}
+
+.bottom-nav button.active {
+  background: #1d2734;
+  color: #f2f2f2;
 }
