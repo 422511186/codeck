@@ -14,3 +14,16 @@ test("手机端登录后进入工作台", async ({ page }) => {
   await expect(page.getByText("Chats")).toBeVisible();
   await expect(page.getByText("Terminal")).toBeVisible();
 });
+
+test("手机端可以从历史列表切换会话", async ({ page }) => {
+  await page.goto("/");
+  await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await expect(page.getByRole("heading", { name: "示例会话" })).toBeVisible();
+  await page.getByRole("button", { name: "新会话" }).click();
+  await expect(page.getByRole("heading", { name: "新会话" })).toBeVisible();
+
+  await page.getByRole("button", { name: /^示例会话 这是用于移动端联调的示例会话/ }).click();
+  await expect(page.getByRole("heading", { name: "示例会话" })).toBeVisible();
+});

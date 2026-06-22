@@ -106,8 +106,8 @@ export function createRuntimeConfig(env: RuntimeEnv = process.env): RuntimeConfi
     workspaceRoots: parseWorkspaceRoots(env.CODEX_WEB_WORKSPACE_ROOTS),
     bindHost: env.CODEX_WEB_BIND_HOST || "127.0.0.1",
     bindPort: parsePort(env.CODEX_WEB_BIND_PORT),
-    uploadDir: env.CODEX_WEB_UPLOAD_DIR?.trim() || resolve("uploads"),
-    auditLogPath: env.CODEX_WEB_AUDIT_LOG_PATH?.trim() || resolve("logs", "audit.jsonl"),
+    uploadDir: env.CODEX_WEB_UPLOAD_DIR?.trim() || resolve(/*turbopackIgnore: true*/ "uploads"),
+    auditLogPath: env.CODEX_WEB_AUDIT_LOG_PATH?.trim() || resolve(/*turbopackIgnore: true*/ "logs", "audit.jsonl"),
     appServer: parseAppServerConfig(env)
   };
 }

@@ -28,6 +28,15 @@ E2E 默认使用 mock app-server，并在 `playwright.config.ts` 内配置：
 
 推荐先在本机局域网内验收，不要直接暴露公网。
 
+如需运行真实 `spawn` 集成测试：
+
+```powershell
+$env:CODEX_WEB_RUN_SPAWN_INTEGRATION="1"
+npm run test -- tests/integration/spawn-app-server.test.ts
+```
+
+该测试会启动真实 Codex app-server，并调用 initialize、`thread/list`、`model/list`。默认自动化测试不会运行它，避免在没有真实 Codex 登录或本机 app-server 条件时误失败。
+
 ### 1. 准备环境变量
 
 PowerShell 示例：

@@ -120,6 +120,15 @@ pre {
   white-space: nowrap;
 }
 
+.thread-status-line {
+  margin: 4px 0 0;
+  color: #8f9bad;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-stack {
   display: grid;
   justify-items: end;

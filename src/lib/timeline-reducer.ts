@@ -55,6 +55,7 @@ export function applyCodexTimelineEvent(
     const contextText = event.modelContextWindow === null ? "" : `，上下文 ${event.modelContextWindow}`;
     return {
       ...thread,
+      tokenUsageTotal: event.totalTokens,
       timeline: upsertTimelineItem(
         thread.timeline,
         {

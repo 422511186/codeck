@@ -88,6 +88,7 @@ describe("applyCodexTimelineEvent", () => {
         text: "Token 用量：总计 100，输入 30，输出 50，推理 20，上下文 200000"
       }
     ]);
+    expect(next.tokenUsageTotal).toBe(100);
   });
 
   it("同一 item 的重复 delta 不会重复追加", () => {

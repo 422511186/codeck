@@ -92,6 +92,30 @@ export function MobileWorkbench() {
             serverRequestEvent.request,
             ...current.filter((request) => request.requestId !== serverRequestEvent.request.requestId)
           ]);
+          if (serverRequestEvent.request.kind === "dynamic_tool") {
+            setSelectedThread((current) => {
+              if (!current || current.id !== serverRequestEvent.request.threadId) {
+                return current;
+              }
+
+              const itemId = `request-${serverRequestEvent.request.requestId}`;
+              if (current.timeline.some((item) => item.id === itemId)) {
+                return current;
+              }
+
+              return {
+                ...current,
+                timeline: [
+                  ...current.timeline,
+                  {
+                    id: itemId,
+                    role: "tool",
+                    text: `工具调用：${serverRequestEvent.request.description.split("\n")[0]}`
+                  }
+                ]
+              };
+            });
+          }
         }
         if ((event as { type: string }).type === "server-request-resolved") {
           const resolvedEvent = event as { requestId?: number };
@@ -331,6 +355,13 @@ export function MobileWorkbench() {
         <div>
           <p className="eyebrow">当前会话</p>
           <h1>{selectedThread?.title || threads[0]?.title || "新会话"}</h1>
+          {selectedThread ? (
+            <p className="thread-status-line">
+              {[selectedThread.modelProvider, selectedThread.status, selectedThread.tokenUsageTotal ? `Tokens ${selectedThread.tokenUsageTotal}` : null]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          ) : null}
         </div>
         <div className="status-stack">
           <button className="new-thread-button" type="button" aria-label="新会话" title="新会话" onClick={handleStartThread}>

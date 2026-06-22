@@ -47,6 +47,7 @@ type TextUserInput = { type: "text"; text: string };
 class MockAppServerPeer implements ManagedAppServerPeer {
   private status: AppServerStatus = { state: "idle" };
   private thread: Thread = this.createThread();
+  private threads: Thread[] = [this.thread];
   private turnCounter = 1;
   private itemCounter = 2;
   private requestCounter = 0;
@@ -141,15 +142,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/list") {
       return {
-        data: [{ ...this.thread, turns: [] }],
+        data: this.threads.map((thread) => ({ ...thread, turns: [] })),
         nextCursor: null,
         backwardsCursor: null
       };
     }
 
     if (method === "thread/read") {
+      const readParams = params as { threadId?: string };
+      const thread = this.selectThread(readParams.threadId);
       return {
-        thread: this.thread
+        thread
       };
     }
 
@@ -183,6 +186,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         name: "新会话",
         turns: []
       };
+      this.upsertThread(this.thread);
 
       return {
         thread: this.thread,
@@ -202,8 +206,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/fork") {
       const forkParams = params as ThreadForkParams;
+      const sourceThread = this.selectThread(forkParams.threadId);
       this.thread = {
-        ...this.thread,
+        ...sourceThread,
         id: `mock-fork-${Date.now()}`,
         sessionId: `mock-session-${Date.now()}`,
         forkedFromId: forkParams.threadId,
@@ -211,6 +216,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         name: `${this.thread.name || "会话"} fork`,
         updatedAt: Math.floor(Date.now() / 1000)
       };
+      this.upsertThread(this.thread);
 
       return {
         thread: this.thread,
@@ -230,17 +236,20 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/rollback") {
       const rollbackParams = params as ThreadRollbackParams;
+      this.selectThread(rollbackParams.threadId);
       this.thread = {
         ...this.thread,
         turns: this.thread.turns.slice(0, Math.max(0, this.thread.turns.length - rollbackParams.numTurns)),
         updatedAt: Math.floor(Date.now() / 1000)
       };
+      this.upsertThread(this.thread);
 
       return { thread: this.thread };
     }
 
     if (method === "turn/start") {
       const startParams = params as TurnStartParams;
+      this.selectThread(startParams.threadId);
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
       createTextUserInput(text);
@@ -277,6 +286,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         preview: this.thread.preview || text,
         updatedAt: Math.floor(Date.now() / 1000)
       };
+      this.upsertThread(this.thread);
       setTimeout(() => {
         const baseParams = {
           threadId: startParams.threadId,
@@ -338,15 +348,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     }
 
     if (method === "turn/interrupt") {
+      const interruptParams = params as { threadId?: string };
+      this.selectThread(interruptParams.threadId);
       this.thread = {
         ...this.thread,
         status: { type: "idle" }
       };
+      this.upsertThread(this.thread);
       return {};
     }
 
     if (method === "turn/steer") {
       const steerParams = params as TurnSteerParams;
+      this.selectThread(steerParams.threadId);
       const textInput = steerParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
       createTextUserInput(text);
@@ -375,6 +389,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           }
         ]
       });
+      this.upsertThread(this.thread);
       return { turnId };
     }
 
@@ -471,6 +486,16 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     for (const handler of this.serverRequestHandlers) {
       handler(message);
     }
+  }
+
+  private selectThread(threadId: string | undefined): Thread {
+    const thread = this.threads.find((item) => item.id === threadId) || this.thread;
+    this.thread = thread;
+    return thread;
+  }
+
+  private upsertThread(thread: Thread): void {
+    this.threads = [thread, ...this.threads.filter((item) => item.id !== thread.id)];
   }
 
   private createMockServerRequest(

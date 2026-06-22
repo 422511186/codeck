@@ -47,7 +47,7 @@
 - [x] `mock` 模式返回稳定会话和模型，供浏览器测试使用。
 - [x] HTTP API 读取状态、会话列表、模型列表。
 - [x] 移动端登录后展示会话历史和默认模型。
-- [ ] 真实 `spawn` 模式下增加集成测试：启动 app-server、initialize、`thread/list`、`model/list`。
+- [x] 真实 `spawn` 模式下增加集成测试：启动 app-server、initialize、`thread/list`、`model/list`。
 
 ## Task 2: 会话读取、切换和分页
 
@@ -63,9 +63,9 @@
 
 - [x] `thread/read` 支持 `includeTurns=true`。
 - [x] `thread/turns/list` 和 `thread/turns/items/list` 支持分页。
-- [ ] 移动端可以从历史列表切换会话。
-- [ ] timeline 渲染 user message、agent message、reasoning、plan、command、file change、tool call。
-- [ ] 会话切换后顶部标题、状态、模型和 token 用量同步。
+- [x] 移动端可以从历史列表切换会话。
+- [x] timeline 渲染 user message、agent message、reasoning、plan、command、file change、tool call。
+- [x] 会话切换后顶部标题、状态、模型和 token 用量同步。
 
 ## Task 3: 新建会话和发送输入
 

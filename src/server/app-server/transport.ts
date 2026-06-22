@@ -41,6 +41,21 @@ async function findAvailablePort(host: string): Promise<number> {
   });
 }
 
+export function createAppServerSpawnInvocation(
+  codexBin: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform
+): { command: string; args: string[] } {
+  if (platform === "win32" && !/\.(exe|cmd|bat)$/i.test(codexBin)) {
+    return {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", codexBin, ...args]
+    };
+  }
+
+  return { command: codexBin, args };
+}
+
 export class WebSocketAppServerPeer implements ManagedAppServerPeer {
   private socket: WebSocket | null = null;
   private rpc: JsonRpcPeer | null = null;
@@ -187,7 +202,8 @@ class SpawnedAppServerPeer extends WebSocketAppServerPeer {
       const port = this.config.port ?? (await findAvailablePort(this.config.host));
       this.endpointUrl = `ws://${this.config.host}:${port}`;
       this.url = this.endpointUrl;
-      this.child = spawn(this.config.codexBin, ["app-server", "--listen", this.endpointUrl], {
+      const invocation = createAppServerSpawnInvocation(this.config.codexBin, ["app-server", "--listen", this.endpointUrl]);
+      this.child = spawn(/*turbopackIgnore: true*/ invocation.command, invocation.args, {
         windowsHide: true,
         env: process.env
       });
