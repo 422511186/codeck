@@ -137,6 +137,71 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/fork") {
+      return {
+        thread: {
+          id: "fork-thread-1",
+          sessionId: "fork-session-1",
+          forkedFromId: "thread-1",
+          parentThreadId: "thread-1",
+          preview: "帮我修复登录",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 400,
+          updatedAt: 400,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "登录修复 fork",
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "C:\\Users\\huang\\workspace\\demo",
+        runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+        instructionSources: [],
+        approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: "medium"
+      };
+    }
+
+    if (method === "thread/rollback") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "帮我修复登录",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 100,
+          updatedAt: 500,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "登录修复",
+          turns: []
+        }
+      };
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -157,6 +222,14 @@ class FakePeer implements AppServerPeer {
           ]
         }
       };
+    }
+
+    if (method === "turn/interrupt") {
+      return {};
+    }
+
+    if (method === "turn/steer") {
+      return { turnId: "turn-steer-1" };
     }
 
     if (method === "model/list") {
@@ -254,6 +327,7 @@ describe("CodexAppServerClient", () => {
     const detail = await client.readThread("thread-1");
 
     expect(detail.id).toBe("thread-1");
+    expect(detail.lastTurnId).toBe("turn-1");
     expect(detail.timeline).toEqual([
       {
         id: "item-user-1",
@@ -332,6 +406,65 @@ describe("CodexAppServerClient", () => {
           { type: "text", text: "看图", text_elements: [] },
           { type: "localImage", path: "C:\\Users\\huang\\workspace\\codex-web\\uploads\\shot.png" }
         ]
+      }
+    });
+  });
+
+  it("能 fork 当前会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const thread = await client.forkThread("thread-1");
+
+    expect(thread.id).toBe("fork-thread-1");
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/fork",
+      params: { threadId: "thread-1", excludeTurns: false }
+    });
+  });
+
+  it("能 rollback 当前会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const thread = await client.rollbackThread("thread-1", 1);
+
+    expect(thread.id).toBe("thread-1");
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/rollback",
+      params: { threadId: "thread-1", numTurns: 1 }
+    });
+  });
+
+  it("能中断运行中的 turn", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.interruptTurn("thread-1", "turn-1");
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "turn/interrupt",
+      params: { threadId: "thread-1", turnId: "turn-1" }
+    });
+  });
+
+  it("能向运行中的 turn 追加 steer 指令", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const result = await client.steerTurn({
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      text: "请继续"
+    });
+
+    expect(result.turnId).toBe("turn-steer-1");
+    expect(peer.calls.at(-1)).toEqual({
+      method: "turn/steer",
+      params: {
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "请继续", text_elements: [] }]
       }
     });
   });

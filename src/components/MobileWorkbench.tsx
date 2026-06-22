@@ -9,12 +9,16 @@ import {
 } from "../server/app-server/pending-requests";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
 import {
+  forkThread,
+  interruptTurn,
   listModels,
   listPendingServerRequests,
   listThreads,
   readCodexStatus,
   readThread,
   resolveServerRequest,
+  rollbackThread,
+  steerTurn,
   startThread,
   startTurn
 } from "../lib/client-api";
@@ -24,6 +28,7 @@ import { ApprovalSheet } from "./ApprovalSheet";
 import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { QuestionSheet } from "./QuestionSheet";
+import { TurnActionsSheet } from "./TurnActionsSheet";
 
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
@@ -197,6 +202,96 @@ export function MobileWorkbench() {
     }
   }
 
+  function upsertThreadSummary(thread: MobileThreadDetail) {
+    setThreads((current) => [
+      {
+        id: thread.id,
+        title: thread.title,
+        preview: thread.preview,
+        cwd: thread.cwd,
+        modelProvider: thread.modelProvider,
+        status: thread.status,
+        updatedAt: thread.updatedAt
+      },
+      ...current.filter((summary) => summary.id !== thread.id)
+    ]);
+  }
+
+  async function handleForkThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await forkThread(selectedThread.id);
+      setSelectedThread(thread);
+      upsertThreadSummary(thread);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法 fork 会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleEditResend(text: string) {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await rollbackThread(selectedThread.id, 1);
+      const thread = await startTurn({ threadId: selectedThread.id, text, model: defaultModel?.id });
+      setSelectedThread(thread);
+      upsertThreadSummary(thread);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法编辑重发");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleInterruptTurn() {
+    if (!selectedThread?.lastTurnId) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await interruptTurn(selectedThread.id, selectedThread.lastTurnId);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法 interrupt turn");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleSteerTurn(text: string) {
+    if (!selectedThread?.lastTurnId) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await steerTurn({
+        threadId: selectedThread.id,
+        expectedTurnId: selectedThread.lastTurnId,
+        text
+      });
+      setSelectedThread(thread);
+      upsertThreadSummary(thread);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法追加指令");
+    } finally {
+      setSending(false);
+    }
+  }
+
   const activeRequest = pendingRequests[0] || null;
 
   return (
@@ -266,6 +361,17 @@ export function MobileWorkbench() {
         <QuestionSheet request={activeRequest} onResolve={handleResolveRequest} />
       ) : activeRequest ? (
         <ApprovalSheet request={activeRequest} onResolve={handleResolveRequest} />
+      ) : null}
+
+      {selectedThread ? (
+        <TurnActionsSheet
+          thread={selectedThread}
+          busy={sending}
+          onFork={handleForkThread}
+          onEditResend={handleEditResend}
+          onInterrupt={handleInterruptTurn}
+          onSteer={handleSteerTurn}
+        />
       ) : null}
 
       <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} />

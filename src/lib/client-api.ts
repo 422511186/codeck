@@ -114,6 +114,63 @@ export async function uploadImage(file: File): Promise<{ path: string }> {
   return { path: payload.image.path };
 }
 
+export async function forkThread(threadId: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/fork`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法 fork 会话");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
+export async function rollbackThread(threadId: string, numTurns = 1): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/rollback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ numTurns })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法 rollback 会话");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
+export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
+  const response = await fetch(`/api/codex/turns/${encodeURIComponent(threadId)}/interrupt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ turnId })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法 interrupt turn");
+  }
+}
+
+export async function steerTurn(input: {
+  threadId: string;
+  expectedTurnId: string;
+  text: string;
+}): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/turns/${encodeURIComponent(input.threadId)}/steer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法 steer turn");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
 export async function listPendingServerRequests(): Promise<PendingServerRequestView[]> {
   const response = await fetch("/api/codex/requests", { cache: "no-store" });
   if (!response.ok) {

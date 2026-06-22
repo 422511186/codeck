@@ -12,6 +12,7 @@ function thread(timeline: MobileThreadDetail["timeline"] = []): MobileThreadDeta
     modelProvider: "openai",
     status: "running",
     updatedAt: 1,
+    lastTurnId: "turn-1",
     timeline
   };
 }

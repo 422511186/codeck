@@ -142,4 +142,21 @@ describe("createAppServerGateway", () => {
     expect(gateway.listPendingServerRequests()).toEqual([]);
     expect(events).toContainEqual({ type: "server-request-resolved", requestId: 1 });
   });
+
+  it("mock 模式支持 fork、rollback、interrupt 和 steer", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    const forked = await gateway.forkThread("mock-thread-1");
+    expect(forked.id).not.toBe("mock-thread-1");
+
+    await gateway.startTurn({ threadId: forked.id, text: "需要回滚" });
+    const rolledBack = await gateway.rollbackThread(forked.id, 1);
+    expect(rolledBack.timeline.some((item) => item.text.includes("需要回滚"))).toBe(false);
+
+    await expect(gateway.interruptTurn(forked.id, rolledBack.lastTurnId || "mock-turn-1")).resolves.toBeUndefined();
+    await expect(
+      gateway.steerTurn({ threadId: forked.id, expectedTurnId: rolledBack.lastTurnId || "mock-turn-1", text: "请继续" })
+    ).resolves.toMatchObject({ turnId: expect.any(String) });
+  });
 });

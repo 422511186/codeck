@@ -5,13 +5,20 @@ import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
+import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
+import type { ThreadForkResponse } from "../../../docs/generated/app-server-ts/v2/ThreadForkResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
+import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
+import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
+import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
+import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
+import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2/TurnSteerResponse";
 import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary, MobileTimelineItem } from "../../shared/codex";
 import { createTurnUserInput } from "./user-input";
 
@@ -98,6 +105,21 @@ function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   return null;
 }
 
+function threadDetail(thread: Thread): MobileThreadDetail {
+  const timeline = thread.turns.flatMap((turn) =>
+    turn.items.flatMap((item) => {
+      const mapped = timelineItem(item);
+      return mapped ? [mapped] : [];
+    })
+  );
+
+  return {
+    ...threadSummary(thread),
+    lastTurnId: thread.turns.at(-1)?.id || null,
+    timeline
+  };
+}
+
 export class CodexAppServerClient {
   constructor(private readonly peer: AppServerPeer) {}
 
@@ -133,17 +155,7 @@ export class CodexAppServerClient {
       includeTurns: true
     })) as ThreadReadResponse;
 
-    const timeline = response.thread.turns.flatMap((turn) =>
-      turn.items.flatMap((item) => {
-        const mapped = timelineItem(item);
-        return mapped ? [mapped] : [];
-      })
-    );
-
-    return {
-      ...threadSummary(response.thread),
-      timeline
-    };
+    return threadDetail(response.thread);
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -168,6 +180,42 @@ export class CodexAppServerClient {
 
     const response = (await this.peer.request("turn/start", params)) as TurnStartResponse;
     return { turnId: response.turn.id };
+  }
+
+  async forkThread(threadId: string): Promise<MobileThreadDetail> {
+    const params: ThreadForkParams = {
+      threadId,
+      excludeTurns: false
+    };
+    const response = (await this.peer.request("thread/fork", params)) as ThreadForkResponse;
+    return threadDetail(response.thread);
+  }
+
+  async rollbackThread(threadId: string, numTurns: number): Promise<MobileThreadDetail> {
+    const params: ThreadRollbackParams = {
+      threadId,
+      numTurns
+    };
+    const response = (await this.peer.request("thread/rollback", params)) as ThreadRollbackResponse;
+    return threadDetail(response.thread);
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    const params: TurnInterruptParams = {
+      threadId,
+      turnId
+    };
+    await this.peer.request("turn/interrupt", params);
+  }
+
+  async steerTurn(input: { threadId: string; expectedTurnId: string; text: string }): Promise<{ turnId: string }> {
+    const params: TurnSteerParams = {
+      threadId: input.threadId,
+      expectedTurnId: input.expectedTurnId,
+      input: createTurnUserInput(input.text)
+    };
+    const response = (await this.peer.request("turn/steer", params)) as TurnSteerResponse;
+    return { turnId: response.turnId };
   }
 
   async listModels(params: ModelListParams = {}): Promise<MobileModelOption[]> {

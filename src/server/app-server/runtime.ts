@@ -14,6 +14,9 @@ import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServer
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
+import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
+import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
+import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 
 type TextUserInput = { type: "text"; text: string };
@@ -155,6 +158,45 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "thread/fork") {
+      const forkParams = params as ThreadForkParams;
+      this.thread = {
+        ...this.thread,
+        id: `mock-fork-${Date.now()}`,
+        sessionId: `mock-session-${Date.now()}`,
+        forkedFromId: forkParams.threadId,
+        parentThreadId: forkParams.threadId,
+        name: `${this.thread.name || "会话"} fork`,
+        updatedAt: Math.floor(Date.now() / 1000)
+      };
+
+      return {
+        thread: this.thread,
+        model: forkParams.model || "gpt-5-codex",
+        modelProvider: forkParams.modelProvider || "openai",
+        serviceTier: null,
+        cwd: this.thread.cwd,
+        runtimeWorkspaceRoots: forkParams.runtimeWorkspaceRoots || ["C:\\Users\\huang\\workspace"],
+        instructionSources: [],
+        approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: null
+      };
+    }
+
+    if (method === "thread/rollback") {
+      const rollbackParams = params as ThreadRollbackParams;
+      this.thread = {
+        ...this.thread,
+        turns: this.thread.turns.slice(0, Math.max(0, this.thread.turns.length - rollbackParams.numTurns)),
+        updatedAt: Math.floor(Date.now() / 1000)
+      };
+
+      return { thread: this.thread };
+    }
+
     if (method === "turn/start") {
       const startParams = params as TurnStartParams;
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
@@ -251,6 +293,47 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {
         turn: this.thread.turns.at(-1)
       };
+    }
+
+    if (method === "turn/interrupt") {
+      this.thread = {
+        ...this.thread,
+        status: { type: "idle" }
+      };
+      return {};
+    }
+
+    if (method === "turn/steer") {
+      const steerParams = params as TurnSteerParams;
+      const textInput = steerParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
+      const text = textInput?.text.trim() || "";
+      createTextUserInput(text);
+      const turnId = `mock-steer-${++this.turnCounter}`;
+      this.thread.turns.push({
+        id: turnId,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: Math.floor(Date.now() / 1000),
+        completedAt: Math.floor(Date.now() / 1000),
+        durationMs: 1,
+        items: [
+          {
+            type: "userMessage",
+            id: `mock-steer-user-${++this.itemCounter}`,
+            clientId: `mock-steer-user-${this.itemCounter}`,
+            content: steerParams.input
+          },
+          {
+            type: "agentMessage",
+            id: `mock-steer-agent-${++this.itemCounter}`,
+            text: `已追加：${text}`,
+            phase: "final_answer",
+            memoryCitation: null
+          }
+        ]
+      });
+      return { turnId };
     }
 
     if (method === "model/list") {
@@ -503,6 +586,26 @@ export class AppServerGateway {
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
     await this.ensureReady();
     return this.client.startTurn(input);
+  }
+
+  async forkThread(threadId: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.forkThread(threadId);
+  }
+
+  async rollbackThread(threadId: string, numTurns: number): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.rollbackThread(threadId, numTurns);
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.interruptTurn(threadId, turnId);
+  }
+
+  async steerTurn(input: { threadId: string; expectedTurnId: string; text: string }): Promise<{ turnId: string }> {
+    await this.ensureReady();
+    return this.client.steerTurn(input);
   }
 
   close(): void {

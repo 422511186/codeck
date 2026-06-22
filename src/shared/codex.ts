@@ -33,5 +33,6 @@ export type MobileTimelineItem = {
 };
 
 export type MobileThreadDetail = MobileThreadSummary & {
+  lastTurnId: string | null;
   timeline: MobileTimelineItem[];
 };

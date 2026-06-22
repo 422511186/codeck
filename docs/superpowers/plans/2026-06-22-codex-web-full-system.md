@@ -153,11 +153,11 @@
 - Create: `src/components/TurnActionsSheet.tsx`
 - Test: `tests/e2e/fork-edit-resend.spec.ts`
 
-- [ ] Fork 后切换到新 thread。
-- [ ] 编辑重发先 rollback，再以新输入 `turn/start`。
+- [x] Fork 后切换到新 thread。
+- [x] 编辑重发先 rollback，再以新输入 `turn/start`。
 - [ ] rollback 涉及文件变更时提示用户查看 diff。
-- [ ] 运行中可以 interrupt。
-- [ ] 可 steer 时显示追加指令入口。
+- [x] 运行中可以 interrupt。
+- [x] 可 steer 时显示追加指令入口。
 
 ## Task 8: Files、Diff、Terminal、Settings 面板
 
