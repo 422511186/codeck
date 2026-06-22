@@ -27,6 +27,7 @@ import {
   rollbackThread,
   setThreadGoal,
   setThreadMemoryMode,
+  startReview,
   steerTurn,
   startThread,
   startTurn,
@@ -497,6 +498,24 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleStartReview() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await startReview(selectedThread.id);
+      setSelectedThread(thread);
+      upsertThreadSummary(thread);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法启动代码审查");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleSetMemoryMode(mode: "enabled" | "disabled") {
     if (!selectedThread) {
       return;
@@ -760,6 +779,7 @@ export function MobileWorkbench() {
           onArchive={handleArchiveThread}
           onDelete={handleDeleteThread}
           onCompact={handleCompactThread}
+          onReview={handleStartReview}
           onSetMemoryMode={handleSetMemoryMode}
           onResetMemory={handleResetMemory}
           onSetGoal={handleSetThreadGoal}

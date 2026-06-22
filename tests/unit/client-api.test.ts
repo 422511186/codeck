@@ -10,6 +10,7 @@ import {
   resetMemory,
   setThreadGoal,
   setThreadMemoryMode,
+  startReview,
   updateThreadSettings
 } from "../../src/lib/client-api";
 
@@ -136,6 +137,22 @@ describe("client-api", () => {
     await expect(compactThread("thread-1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/compact", { method: "POST" });
+  });
+
+  it("启动代码审查时调用 review 端点并返回刷新后的线程", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ thread: { id: "thread-1", title: "登录修复", timeline: [{ text: "代码审查已开始" }] } })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startReview("thread-1")).resolves.toEqual({
+      id: "thread-1",
+      title: "登录修复",
+      timeline: [{ text: "代码审查已开始" }]
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/review", { method: "POST" });
   });
 
   it("切换记忆模式和重置记忆时调用 memory 端点", async () => {

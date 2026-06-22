@@ -60,6 +60,15 @@ test("手机端可以压缩当前会话上下文", async ({ page }) => {
   await expect(page.getByText("上下文已压缩")).toBeVisible();
 });
 
+test("手机端可以启动未提交改动代码审查", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "审查改动" }).click();
+
+  await expect(page.getByText("已开始审查未提交改动")).toBeVisible();
+  await expect(page.getByText("代码审查：未提交改动")).toBeVisible();
+});
+
 test("手机端可以切换记忆模式并重置记忆", async ({ page }) => {
   await login(page);
 

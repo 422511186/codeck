@@ -381,6 +381,22 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持启动未提交改动代码审查", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.startReview("mock-thread-1")).resolves.toEqual({
+      turnId: "mock-review-2",
+      reviewThreadId: "mock-thread-1"
+    });
+    await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ role: "tool", text: "代码审查：未提交改动" }),
+        expect.objectContaining({ role: "agent", text: "已开始审查未提交改动" })
+      ])
+    });
+  });
+
   it("mock 模式支持切换记忆模式和重置记忆", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

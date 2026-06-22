@@ -9,6 +9,7 @@ type TurnActionsSheetProps = {
   onArchive(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
+  onReview(): Promise<void>;
   onSetMemoryMode(mode: "enabled" | "disabled"): Promise<void>;
   onResetMemory(): Promise<void>;
   onSetGoal(objective: string, tokenBudget?: number | null): Promise<void>;
@@ -26,6 +27,7 @@ export function TurnActionsSheet({
   onArchive,
   onDelete,
   onCompact,
+  onReview,
   onSetMemoryMode,
   onResetMemory,
   onSetGoal,
@@ -100,11 +102,14 @@ export function TurnActionsSheet({
         <button type="button" onClick={onCompact} disabled={busy || !thread.lastTurnId}>
           压缩上下文
         </button>
-        <button type="button" onClick={onArchive} disabled={busy}>
-          归档
+        <button type="button" onClick={onReview} disabled={busy}>
+          审查改动
         </button>
       </div>
       <div className="turn-actions-row">
+        <button type="button" onClick={onArchive} disabled={busy}>
+          归档
+        </button>
         <button type="button" onClick={onDelete} disabled={busy}>
           删除
         </button>

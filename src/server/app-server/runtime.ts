@@ -44,6 +44,7 @@ import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { ThreadSettingsUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadSettingsUpdateParams";
 import type { ThreadGoalSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetParams";
+import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2/ReviewStartParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
@@ -374,6 +375,45 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         }
       });
       return {};
+    }
+
+    if (method === "review/start") {
+      const reviewParams = params as ReviewStartParams;
+      this.selectThread(reviewParams.threadId);
+      const turnId = `mock-review-${++this.turnCounter}`;
+      this.thread.turns.push({
+        id: turnId,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: Math.floor(Date.now() / 1000),
+        completedAt: Math.floor(Date.now() / 1000),
+        durationMs: 1,
+        items: [
+          {
+            type: "enteredReviewMode",
+            id: `mock-review-mode-${++this.itemCounter}`,
+            review: "未提交改动"
+          },
+          {
+            type: "agentMessage",
+            id: `mock-review-agent-${++this.itemCounter}`,
+            text: "已开始审查未提交改动",
+            phase: "final_answer",
+            memoryCitation: null
+          }
+        ]
+      });
+      this.thread = {
+        ...this.thread,
+        preview: this.thread.preview || "代码审查",
+        updatedAt: Math.floor(Date.now() / 1000)
+      };
+      this.upsertThread(this.thread);
+      return {
+        turn: this.thread.turns.at(-1),
+        reviewThreadId: this.thread.id
+      };
     }
 
     if (method === "thread/memoryMode/set") {
@@ -1187,6 +1227,11 @@ export class AppServerGateway {
   async compactThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.compactThread(threadId);
+  }
+
+  async startReview(threadId: string): Promise<{ turnId: string; reviewThreadId: string }> {
+    await this.ensureReady();
+    return this.client.startReview(threadId);
   }
 
   async setThreadMemoryMode(threadId: string, mode: ThreadMemoryMode): Promise<void> {

@@ -22,6 +22,8 @@ import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/
 import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
+import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2/ReviewStartParams";
+import type { ReviewStartResponse } from "../../../docs/generated/app-server-ts/v2/ReviewStartResponse";
 import type { SkillsListParams } from "../../../docs/generated/app-server-ts/v2/SkillsListParams";
 import type { SkillsListResponse } from "../../../docs/generated/app-server-ts/v2/SkillsListResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
@@ -196,6 +198,14 @@ function timelineItem(item: ThreadItem): MobileTimelineItem | null {
 
   if (item.type === "plan") {
     return { id: item.id, role: "plan", text: item.text };
+  }
+
+  if (item.type === "enteredReviewMode") {
+    return { id: item.id, role: "tool", text: `代码审查：${item.review}` };
+  }
+
+  if (item.type === "exitedReviewMode") {
+    return { id: item.id, role: "tool", text: `代码审查结束：${item.review}` };
   }
 
   if (item.type === "commandExecution") {
@@ -559,6 +569,20 @@ export class CodexAppServerClient {
   async compactThread(threadId: string): Promise<void> {
     const params: ThreadCompactStartParams = { threadId };
     await this.peer.request("thread/compact/start", params);
+  }
+
+  async startReview(threadId: string): Promise<{ turnId: string; reviewThreadId: string }> {
+    const params: ReviewStartParams = {
+      threadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline"
+    };
+    const response = (await this.peer.request("review/start", params)) as ReviewStartResponse;
+
+    return {
+      turnId: response.turn.id,
+      reviewThreadId: response.reviewThreadId
+    };
   }
 
   async setThreadMemoryMode(threadId: string, mode: ThreadMemoryMode): Promise<void> {

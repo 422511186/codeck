@@ -258,6 +258,17 @@ export async function compactThread(threadId: string): Promise<void> {
   }
 }
 
+export async function startReview(threadId: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/review`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动代码审查");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
 export async function setThreadMemoryMode(threadId: string, mode: "enabled" | "disabled"): Promise<void> {
   const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/memory`, {
     method: "POST",

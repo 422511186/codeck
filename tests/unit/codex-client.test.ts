@@ -393,6 +393,22 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "review/start") {
+      return {
+        reviewThreadId: "thread-1",
+        turn: {
+          id: "turn-review-1",
+          itemsView: "full",
+          status: "inProgress",
+          error: null,
+          startedAt: 1_800_000_300,
+          completedAt: null,
+          durationMs: null,
+          items: []
+        }
+      };
+    }
+
     if (method === "thread/memoryMode/set") {
       return {};
     }
@@ -850,6 +866,25 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.at(-1)).toEqual({
       method: "thread/compact/start",
       params: { threadId: "thread-1" }
+    });
+  });
+
+  it("能启动当前会话的未提交改动审查", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.startReview("thread-1")).resolves.toEqual({
+      turnId: "turn-review-1",
+      reviewThreadId: "thread-1"
+    });
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "review/start",
+      params: {
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline"
+      }
     });
   });
 
