@@ -330,12 +330,21 @@ input {
 }
 
 .approval-actions button {
+  display: grid;
+  gap: 3px;
+  place-items: center;
   min-height: 42px;
   border: 1px solid #435166;
   border-radius: 8px;
   background: #223147;
   color: #f2f2f2;
   padding: 10px;
+}
+
+.approval-actions small {
+  color: #aab6c8;
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .bottom-nav {

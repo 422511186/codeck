@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizePendingServerRequest } from "../../src/server/app-server/pending-requests";
+import {
+  buildPendingServerRequestResponse,
+  normalizePendingServerRequest
+} from "../../src/server/app-server/pending-requests";
 
 describe("normalizePendingServerRequest", () => {
   it("把命令审批 request 转成移动端 pending 视图", () => {
@@ -88,6 +91,97 @@ describe("normalizePendingServerRequest", () => {
       title: "需要你回答",
       description: "请选择模式",
       options: [{ value: "fast", label: "快速", description: "更快完成" }]
+    });
+  });
+
+  it("为文件审批构造 JSON-RPC response", () => {
+    const request = normalizePendingServerRequest({
+      id: 10,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", startedAtMs: 1 }
+    });
+
+    expect(buildPendingServerRequestResponse(request, "accept")).toEqual({ decision: "accept" });
+  });
+
+  it("为权限审批构造 JSON-RPC response", () => {
+    const request = normalizePendingServerRequest({
+      id: 11,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        environmentId: null,
+        startedAtMs: 1,
+        cwd: "C:/repo",
+        reason: "需要网络",
+        permissions: { network: { mode: "allowAll" }, fileSystem: null }
+      }
+    });
+
+    expect(buildPendingServerRequestResponse(request, "accept")).toEqual({
+      permissions: { network: { mode: "allowAll" }, fileSystem: null },
+      scope: "session"
+    });
+    expect(buildPendingServerRequestResponse(request, "decline")).toEqual({
+      permissions: {},
+      scope: "turn"
+    });
+  });
+
+  it("为 question 构造 JSON-RPC response", () => {
+    const request = normalizePendingServerRequest({
+      id: 12,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [
+          {
+            id: "mode",
+            header: "模式",
+            question: "请选择模式",
+            isOther: false,
+            isSecret: false,
+            options: [{ label: "快速", description: "更快完成" }]
+          }
+        ],
+        autoResolutionMs: null
+      }
+    });
+
+    expect(buildPendingServerRequestResponse(request, "快速")).toEqual({
+      answers: { mode: { answers: ["快速"] } }
+    });
+  });
+
+  it("为 MCP elicitation 构造 JSON-RPC response", () => {
+    const request = normalizePendingServerRequest({
+      id: 13,
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "demo",
+        mode: "url",
+        _meta: null,
+        message: "请确认外部授权",
+        url: "https://example.com",
+        elicitationId: "elicit-1"
+      }
+    });
+
+    expect(buildPendingServerRequestResponse(request, "accept")).toEqual({
+      action: "accept",
+      content: {},
+      _meta: null
+    });
+    expect(buildPendingServerRequestResponse(request, "decline")).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null
     });
   });
 });

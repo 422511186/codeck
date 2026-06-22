@@ -198,19 +198,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           threadId: startParams.threadId,
           turnId
         };
-        this.emitServerRequest({
-          id: ++this.requestCounter,
-          method: "item/commandExecution/requestApproval",
-          params: {
-            ...baseParams,
-            itemId: `mock-approval-${this.itemCounter}`,
-            startedAtMs: Date.now(),
-            command: "npm test",
-            cwd: this.thread.cwd,
-            reason: "mock 命令审批",
-            availableDecisions: ["accept", "decline"]
-          }
-        });
+        this.emitServerRequest(this.createMockServerRequest(text, baseParams, `mock-approval-${this.itemCounter}`));
         this.emitNotification({
           method: "item/reasoning/textDelta",
           params: { ...baseParams, itemId: `mock-reasoning-${this.itemCounter}`, delta: `思考：${text}` }
@@ -304,6 +292,97 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     for (const handler of this.serverRequestHandlers) {
       handler(message);
     }
+  }
+
+  private createMockServerRequest(
+    text: string,
+    baseParams: { threadId: string; turnId: string },
+    itemId: string
+  ): AppServerServerRequestMessage {
+    if (text.includes("文件审批")) {
+      return {
+        id: ++this.requestCounter,
+        method: "item/fileChange/requestApproval",
+        params: {
+          ...baseParams,
+          itemId,
+          startedAtMs: Date.now(),
+          reason: "需要写入 mock.txt",
+          grantRoot: this.thread.cwd
+        }
+      };
+    }
+
+    if (text.includes("权限审批")) {
+      return {
+        id: ++this.requestCounter,
+        method: "item/permissions/requestApproval",
+        params: {
+          ...baseParams,
+          itemId,
+          environmentId: null,
+          startedAtMs: Date.now(),
+          cwd: this.thread.cwd,
+          reason: "需要网络访问",
+          permissions: { network: { mode: "allowAll" }, fileSystem: null }
+        }
+      };
+    }
+
+    if (text.toLowerCase().includes("question")) {
+      return {
+        id: ++this.requestCounter,
+        method: "item/tool/requestUserInput",
+        params: {
+          ...baseParams,
+          itemId,
+          questions: [
+            {
+              id: "mode",
+              header: "模式",
+              question: "请选择执行模式",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "快速", description: "更快完成" },
+                { label: "稳妥", description: "更仔细检查" }
+              ]
+            }
+          ],
+          autoResolutionMs: null
+        }
+      };
+    }
+
+    if (text.toLowerCase().includes("mcp")) {
+      return {
+        id: ++this.requestCounter,
+        method: "mcpServer/elicitation/request",
+        params: {
+          ...baseParams,
+          serverName: "mock-mcp",
+          mode: "url",
+          _meta: null,
+          message: "请确认外部授权",
+          url: "https://example.com",
+          elicitationId: "mock-elicitation"
+        }
+      };
+    }
+
+    return {
+      id: ++this.requestCounter,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        ...baseParams,
+        itemId,
+        startedAtMs: Date.now(),
+        command: "npm test",
+        cwd: this.thread.cwd,
+        reason: "mock 命令审批",
+        availableDecisions: ["accept", "decline"]
+      }
+    };
   }
 }
 

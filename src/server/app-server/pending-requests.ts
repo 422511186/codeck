@@ -85,6 +85,12 @@ function questionOptions(params: Record<string, unknown>): PendingRequestOption[
   });
 }
 
+function questionId(params: Record<string, unknown>): string | null {
+  const questions = Array.isArray(params.questions) ? params.questions : [];
+  const firstQuestion = asRecord(questions[0]);
+  return stringField(firstQuestion, "id") || null;
+}
+
 function firstQuestionText(params: Record<string, unknown>): string {
   const questions = Array.isArray(params.questions) ? params.questions : [];
   const firstQuestion = asRecord(questions[0]);
@@ -138,7 +144,7 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
       kind: "mcp_elicitation",
       title: "MCP 请求",
       description: stringField(params, "message") || "MCP 服务器需要你确认",
-      options: []
+      options: approvalOptions(["accept", "decline", "cancel"])
     };
   }
 
@@ -169,4 +175,51 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
     description: message.method,
     options: []
   };
+}
+
+export function buildPendingServerRequestResponse(request: PendingServerRequestView, value: string): unknown {
+  const params = asRecord(request.params);
+
+  if (request.kind === "command_approval" || request.kind === "file_approval") {
+    return { decision: value };
+  }
+
+  if (request.kind === "permissions_approval") {
+    if (value === "accept") {
+      return {
+        permissions: asRecord(params.permissions),
+        scope: "session"
+      };
+    }
+
+    return {
+      permissions: {},
+      scope: "turn"
+    };
+  }
+
+  if (request.kind === "question") {
+    const id = questionId(params);
+    if (!id) {
+      return { answers: {} };
+    }
+
+    return {
+      answers: {
+        [id]: {
+          answers: [value]
+        }
+      }
+    };
+  }
+
+  if (request.kind === "mcp_elicitation") {
+    return {
+      action: value,
+      content: value === "accept" ? {} : null,
+      _meta: null
+    };
+  }
+
+  return { decision: value };
 }

@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import type { BrowserCodexEventEnvelope } from "../server/app-server/events";
-import type { BrowserServerRequestEnvelope, PendingServerRequestView } from "../server/app-server/pending-requests";
+import {
+  buildPendingServerRequestResponse,
+  type BrowserServerRequestEnvelope,
+  type PendingServerRequestView
+} from "../server/app-server/pending-requests";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
 import {
   listModels,
@@ -16,8 +20,10 @@ import {
 } from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
 import { createBrowserSocket } from "../lib/ws-client";
+import { ApprovalSheet } from "./ApprovalSheet";
 import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
+import { QuestionSheet } from "./QuestionSheet";
 
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
@@ -183,12 +189,14 @@ export function MobileWorkbench() {
   async function handleResolveRequest(request: PendingServerRequestView, value: string) {
     setLoadError("");
     try {
-      await resolveServerRequest(request.requestId, { decision: value });
+      await resolveServerRequest(request.requestId, buildPendingServerRequestResponse(request, value));
       setPendingRequests((current) => current.filter((item) => item.requestId !== request.requestId));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法处理请求");
     }
   }
+
+  const activeRequest = pendingRequests[0] || null;
 
   return (
     <main className="workbench">
@@ -253,25 +261,10 @@ export function MobileWorkbench() {
         ) : null}
       </section>
 
-      {pendingRequests[0] ? (
-        <section className="approval-sheet" aria-label="待确认请求">
-          <div>
-            <p className="eyebrow">{pendingRequests[0].kind}</p>
-            <h2>{pendingRequests[0].title}</h2>
-            <p>{pendingRequests[0].description}</p>
-          </div>
-          <div className="approval-actions">
-            {pendingRequests[0].options.map((option) => (
-              <button
-                type="button"
-                key={option.value}
-                onClick={() => handleResolveRequest(pendingRequests[0]!, option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </section>
+      {activeRequest?.kind === "question" || activeRequest?.kind === "mcp_elicitation" ? (
+        <QuestionSheet request={activeRequest} onResolve={handleResolveRequest} />
+      ) : activeRequest ? (
+        <ApprovalSheet request={activeRequest} onResolve={handleResolveRequest} />
       ) : null}
 
       <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} />

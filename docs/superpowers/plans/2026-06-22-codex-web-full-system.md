@@ -118,11 +118,12 @@
 
 - [x] JSON-RPC peer 能区分 server request、notification、response。
 - [x] 命令审批显示为底部 sheet。
-- [ ] 文件变更审批、权限审批显示为底部 sheet。
-- [ ] `ToolRequestUserInput` 和 MCP elicitation 显示问题、选项、输入框。
+- [x] 文件变更审批、权限审批显示为底部 sheet。
+- [x] `ToolRequestUserInput` 和 MCP elicitation 显示问题、选项。
 - [x] 命令审批的用户选择会回传 JSON-RPC response。
-- [ ] question、MCP elicitation、文件审批、权限审批的用户选择会回传 JSON-RPC response。
+- [x] question、MCP elicitation、文件审批、权限审批的用户选择会回传 JSON-RPC response。
 - [x] `serverRequest/resolved` 后自动关闭对应 sheet。
+- [ ] 动态工具调用 `item/tool/call` 能显示、执行并回传 `DynamicToolCallResponse`。
 
 ## Task 6: 图片发送和附件暂存
 
