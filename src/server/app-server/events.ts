@@ -57,6 +57,11 @@ export type BrowserCodexEvent =
       diff: string;
     }
   | {
+      kind: "context_compacted";
+      threadId: string;
+      turnId: string;
+    }
+  | {
       kind: "token_usage_updated";
       threadId: string;
       turnId: string;
@@ -205,6 +210,22 @@ export function normalizeAppServerNotification(
         reasoningOutputTokens: numberOrZero(params.tokenUsage.total.reasoningOutputTokens),
         modelContextWindow:
           typeof params.tokenUsage.modelContextWindow === "number" ? params.tokenUsage.modelContextWindow : null
+      }
+    };
+  }
+
+  if (message.method === "thread/compacted") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "context_compacted",
+        threadId: params.threadId,
+        turnId: params.turnId
       }
     };
   }

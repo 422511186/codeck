@@ -389,6 +389,10 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/compact/start") {
+      return {};
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -730,6 +734,18 @@ describe("CodexAppServerClient", () => {
       },
       { method: "thread/goal/clear", params: { threadId: "thread-1" } }
     ]);
+  });
+
+  it("能启动当前会话上下文压缩", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.compactThread("thread-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/compact/start",
+      params: { threadId: "thread-1" }
+    });
   });
 
   it("能用 cwd、模型、思考强度和权限启动新会话", async () => {

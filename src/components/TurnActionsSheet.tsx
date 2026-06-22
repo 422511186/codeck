@@ -8,6 +8,7 @@ type TurnActionsSheetProps = {
   onRename(name: string): Promise<void>;
   onArchive(): Promise<void>;
   onDelete(): Promise<void>;
+  onCompact(): Promise<void>;
   onSetGoal(objective: string, tokenBudget?: number | null): Promise<void>;
   onClearGoal(): Promise<void>;
   onEditResend(text: string): Promise<void>;
@@ -22,6 +23,7 @@ export function TurnActionsSheet({
   onRename,
   onArchive,
   onDelete,
+  onCompact,
   onSetGoal,
   onClearGoal,
   onEditResend,
@@ -91,9 +93,14 @@ export function TurnActionsSheet({
         </button>
       </div>
       <div className="turn-actions-row">
+        <button type="button" onClick={onCompact} disabled={busy || !thread.lastTurnId}>
+          压缩上下文
+        </button>
         <button type="button" onClick={onArchive} disabled={busy}>
           归档
         </button>
+      </div>
+      <div className="turn-actions-row">
         <button type="button" onClick={onDelete} disabled={busy}>
           删除
         </button>

@@ -317,6 +317,24 @@ describe("createAppServerGateway", () => {
     await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({ goal: null });
   });
 
+  it("mock 模式支持上下文压缩并广播事件", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+    await gateway.compactThread("mock-thread-1");
+
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "context_compacted",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-1"
+      }
+    });
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

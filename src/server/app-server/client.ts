@@ -21,6 +21,7 @@ import type { RemoteControlClientsListResponse } from "../../../docs/generated/a
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
+import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
 import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
 import type { ThreadGoal } from "../../../docs/generated/app-server-ts/v2/ThreadGoal";
 import type { ThreadGoalClearParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalClearParams";
@@ -496,6 +497,11 @@ export class CodexAppServerClient {
   async clearThreadGoal(threadId: string): Promise<void> {
     const params: ThreadGoalClearParams = { threadId };
     await this.peer.request("thread/goal/clear", params);
+  }
+
+  async compactThread(threadId: string): Promise<void> {
+    const params: ThreadCompactStartParams = { threadId };
+    await this.peer.request("thread/compact/start", params);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

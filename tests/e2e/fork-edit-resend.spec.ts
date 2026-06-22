@@ -51,3 +51,11 @@ test("手机端可以设置和清除会话目标", async ({ page }) => {
 
   await expect(page.getByText("目标：手机端完整开发")).not.toBeVisible();
 });
+
+test("手机端可以压缩当前会话上下文", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "压缩上下文" }).click();
+
+  await expect(page.getByText("上下文已压缩")).toBeVisible();
+});

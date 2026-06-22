@@ -37,6 +37,7 @@ import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
+import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
 import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
@@ -358,6 +359,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         params: { threadId: this.thread.id }
       });
       return { cleared: true };
+    }
+
+    if (method === "thread/compact/start") {
+      const compactParams = params as ThreadCompactStartParams;
+      this.selectThread(compactParams.threadId);
+      this.emitNotification({
+        method: "thread/compacted",
+        params: {
+          threadId: compactParams.threadId,
+          turnId: this.thread.turns.at(-1)?.id || "mock-turn-1"
+        }
+      });
+      return {};
     }
 
     if (method === "thread/archive" || method === "thread/delete") {
@@ -1059,6 +1073,11 @@ export class AppServerGateway {
   async clearThreadGoal(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.clearThreadGoal(threadId);
+  }
+
+  async compactThread(threadId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.compactThread(threadId);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

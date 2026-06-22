@@ -211,6 +211,18 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把上下文压缩完成映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/compacted",
+        params: { threadId: "thread-1", turnId: "turn-1" }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "context_compacted", threadId: "thread-1", turnId: "turn-1" }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

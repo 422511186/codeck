@@ -91,6 +91,17 @@ export function applyCodexTimelineEvent(
     };
   }
 
+  if (event.kind === "context_compacted") {
+    return {
+      ...thread,
+      timeline: upsertTimelineItem(
+        thread.timeline,
+        { id: `compact-${event.turnId}`, role: "tool", text: "上下文已压缩" },
+        "replace"
+      )
+    };
+  }
+
   const role = deltaRoleByKind[event.kind];
   if (!role) {
     return thread;

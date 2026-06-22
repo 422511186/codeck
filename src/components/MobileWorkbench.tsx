@@ -11,6 +11,7 @@ import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, Mobile
 import {
   archiveThread,
   clearThreadGoal,
+  compactThread,
   deleteThread,
   forkThread,
   interruptTurn,
@@ -462,6 +463,22 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleCompactThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await compactThread(selectedThread.id);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法压缩上下文");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleArchiveThread() {
     if (!selectedThread) {
       return;
@@ -690,6 +707,7 @@ export function MobileWorkbench() {
           onRename={handleRenameThread}
           onArchive={handleArchiveThread}
           onDelete={handleDeleteThread}
+          onCompact={handleCompactThread}
           onSetGoal={handleSetThreadGoal}
           onClearGoal={handleClearThreadGoal}
           onEditResend={handleEditResend}

@@ -91,6 +91,16 @@ describe("applyCodexTimelineEvent", () => {
     expect(next.tokenUsageTotal).toBe(100);
   });
 
+  it("把上下文压缩完成写入稳定的 timeline item", () => {
+    const next = applyCodexTimelineEvent(thread(), {
+      kind: "context_compacted",
+      threadId: "thread-1",
+      turnId: "turn-1"
+    });
+
+    expect(next.timeline).toEqual([{ id: "compact-turn-1", role: "tool", text: "上下文已压缩" }]);
+  });
+
   it("把线程 warning 写入稳定的警告 timeline item", () => {
     const next = applyCodexTimelineEvent(thread(), {
       kind: "warning",

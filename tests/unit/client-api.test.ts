@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveThread,
   clearThreadGoal,
+  compactThread,
   deleteThread,
   listThreads,
   renameThread,
@@ -121,5 +122,17 @@ describe("client-api", () => {
       body: JSON.stringify({ objective: "完整目标", tokenBudget: 9000 })
     });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/goal", { method: "DELETE" });
+  });
+
+  it("压缩会话上下文时调用 compact 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(compactThread("thread-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/compact", { method: "POST" });
   });
 });

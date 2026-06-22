@@ -250,6 +250,14 @@ export async function clearThreadGoal(threadId: string): Promise<void> {
   }
 }
 
+export async function compactThread(threadId: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/compact`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法压缩上下文");
+  }
+}
+
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   const response = await fetch(`/api/codex/turns/${encodeURIComponent(threadId)}/interrupt`, {
     method: "POST",
