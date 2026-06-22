@@ -149,6 +149,20 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把集成状态变化映射为设置刷新事件", () => {
+    for (const method of [
+      "account/updated",
+      "account/rateLimits/updated",
+      "mcpServer/startupStatus/updated",
+      "remoteControl/status/changed"
+    ]) {
+      expect(normalizeAppServerNotification({ method, params: {} })).toEqual({
+        type: "codex-event",
+        event: { kind: "settings_invalidated" }
+      });
+    }
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

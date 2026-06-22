@@ -59,6 +59,9 @@ export type BrowserCodexEvent =
       kind: "warning";
       threadId: string | null;
       message: string;
+    }
+  | {
+      kind: "settings_invalidated";
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -198,6 +201,20 @@ export function normalizeAppServerNotification(
         kind: "warning",
         threadId: null,
         message: `${params.summary}${details}`
+      }
+    };
+  }
+
+  if (
+    message.method === "account/updated" ||
+    message.method === "account/rateLimits/updated" ||
+    message.method === "mcpServer/startupStatus/updated" ||
+    message.method === "remoteControl/status/changed"
+  ) {
+    return {
+      type: "codex-event",
+      event: {
+        kind: "settings_invalidated"
       }
     };
   }

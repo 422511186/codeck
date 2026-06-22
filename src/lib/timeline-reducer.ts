@@ -36,6 +36,10 @@ export function applyCodexTimelineEvent(
   thread: MobileThreadDetail,
   event: BrowserCodexEvent
 ): MobileThreadDetail {
+  if (event.kind === "settings_invalidated") {
+    return thread;
+  }
+
   if (event.kind === "warning") {
     if (!event.threadId || thread.id !== event.threadId) {
       return thread;

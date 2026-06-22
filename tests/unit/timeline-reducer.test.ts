@@ -115,4 +115,10 @@ describe("applyCodexTimelineEvent", () => {
 
     expect(second.timeline).toEqual([{ id: "agent-1", role: "agent", text: "重复片段" }]);
   });
+
+  it("忽略全局设置刷新事件", () => {
+    const current = thread([{ id: "agent-1", role: "agent", text: "已有内容" }]);
+
+    expect(applyCodexTimelineEvent(current, { kind: "settings_invalidated" })).toBe(current);
+  });
 });

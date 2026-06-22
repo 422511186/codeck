@@ -57,6 +57,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private turnCounter = 1;
   private itemCounter = 2;
   private requestCounter = 0;
+  private rateLimitUsedPercent = 42;
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -428,6 +429,13 @@ class MockAppServerPeer implements ManagedAppServerPeer {
             params: { summary: "配置 warning 测试", details: "请检查 Codex 配置" }
           });
         }
+        if (text.toLowerCase().includes("settings refresh")) {
+          this.rateLimitUsedPercent = 64;
+          this.emitNotification({
+            method: "account/rateLimits/updated",
+            params: {}
+          });
+        }
       }, 25);
 
       return {
@@ -620,7 +628,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         rateLimits: {
           limitId: "codex",
           limitName: "Codex",
-          primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          primary: { usedPercent: this.rateLimitUsedPercent, windowDurationMins: 300, resetsAt: 1_800_000_000 },
           secondary: null,
           credits: null,
           individualLimit: null,

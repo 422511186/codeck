@@ -9,6 +9,7 @@ type SettingsPanelProps = {
   selectedModelId: string;
   selectedReasoningEffort: string;
   selectedPermissions: string;
+  refreshVersion: number;
   onModelChange(modelId: string): void;
   onReasoningEffortChange(reasoningEffort: string): void;
   onPermissionsChange(permissions: string): void;
@@ -81,6 +82,7 @@ export function SettingsPanel({
   selectedModelId,
   selectedReasoningEffort,
   selectedPermissions,
+  refreshVersion,
   onModelChange,
   onReasoningEffortChange,
   onPermissionsChange
@@ -114,7 +116,7 @@ export function SettingsPanel({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshVersion]);
 
   const rows = settings
     ? [

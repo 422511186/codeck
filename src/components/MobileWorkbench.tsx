@@ -59,6 +59,7 @@ export function MobileWorkbench() {
   const [selectedPermissions, setSelectedPermissions] = useState("default");
   const [threadSearchTerm, setThreadSearchTerm] = useState("");
   const [searchingThreads, setSearchingThreads] = useState(false);
+  const [settingsRefreshVersion, setSettingsRefreshVersion] = useState(0);
   const selectedThreadIdRef = useRef<string | null>(null);
   const threadSearchRequestIdRef = useRef(0);
 
@@ -108,16 +109,20 @@ export function MobileWorkbench() {
         }
         if ((event as { type: string }).type === "codex-event") {
           const codexEvent = event as BrowserCodexEventEnvelope;
-          if (codexEvent.event?.kind === "warning" && !codexEvent.event.threadId) {
-            setLoadError(codexEvent.event.message);
+          const browserEvent = codexEvent.event;
+          if (browserEvent?.kind === "settings_invalidated") {
+            setSettingsRefreshVersion((version) => version + 1);
           }
-          if (codexEvent.event?.kind && codexEvent.event.threadId) {
+          if (browserEvent?.kind === "warning" && !browserEvent.threadId) {
+            setLoadError(browserEvent.message);
+          }
+          if (browserEvent && "threadId" in browserEvent && browserEvent.threadId) {
             setSelectedThread((current) => {
-              if (!current || current.id !== codexEvent.event?.threadId) {
+              if (!current || current.id !== browserEvent.threadId) {
                 return current;
               }
 
-              return applyCodexTimelineEvent(current, codexEvent.event);
+              return applyCodexTimelineEvent(current, browserEvent);
             });
           }
         }
@@ -615,6 +620,7 @@ export function MobileWorkbench() {
             selectedModelId={selectedModel?.id || ""}
             selectedReasoningEffort={selectedReasoningEffort}
             selectedPermissions={selectedPermissions}
+            refreshVersion={settingsRefreshVersion}
             onModelChange={handleModelChange}
             onReasoningEffortChange={handleReasoningEffortChange}
             onPermissionsChange={handlePermissionsChange}

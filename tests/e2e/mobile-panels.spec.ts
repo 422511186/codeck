@@ -82,3 +82,29 @@ test("手机端可以切换模型、思考强度和权限并用于后续发送",
 
   await expect(page.getByText("已收到：设置切换测试（模型 gpt-5-mini，思考 high，权限 full-auto）")).toBeVisible();
 });
+
+test("设置面板会响应 app-server 集成状态更新", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByText("Codex 42%")).toBeVisible();
+
+  await page.evaluate(async () => {
+    const response = await fetch("/api/codex/turns/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId: "mock-thread-1",
+        text: "settings refresh",
+        model: "gpt-5-codex",
+        reasoningEffort: "medium",
+        permissions: "default"
+      })
+    });
+    if (!response.ok) {
+      throw new Error("无法触发设置刷新");
+    }
+  });
+
+  await expect(page.getByText("Codex 64%")).toBeVisible();
+});
