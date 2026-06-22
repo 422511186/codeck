@@ -33,4 +33,25 @@ describe("createAppServerGateway", () => {
     expect(gateway.getStatus()).toEqual({ state: "disabled" });
     await expect(gateway.listThreads()).rejects.toThrow("app-server 已关闭");
   });
+
+  it("mock 模式发送消息时会广播规范化 realtime 事件", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+    await gateway.startTurn({ threadId: "mock-thread-1", text: "实时流测试" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "mock-thread-1",
+        turnId: "mock-turn-2",
+        itemId: "mock-live-4",
+        delta: "实时事件：实时流测试"
+      }
+    });
+  });
 });

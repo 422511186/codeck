@@ -2,6 +2,8 @@ import type { AppServerConfig } from "../../config/env";
 import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary } from "../../shared/codex";
 import { getRuntimeConfig } from "../runtime";
 import { CodexAppServerClient, type AppServerPeer, type StartThreadInput, type StartTurnInput } from "./client";
+import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
+import { normalizeAppServerNotification } from "./events";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
@@ -15,6 +17,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private thread: Thread = this.createThread();
   private turnCounter = 1;
   private itemCounter = 2;
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
 
   private createThread(): Thread {
     return {
@@ -72,6 +75,11 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
   getStatus(): AppServerStatus {
     return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
   }
 
   close(): void {
@@ -138,6 +146,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const turnId = `mock-turn-${++this.turnCounter}`;
       const userItemId = `mock-user-${++this.itemCounter}`;
       const agentItemId = `mock-agent-${++this.itemCounter}`;
+      const liveItemId = `mock-live-${this.itemCounter}`;
       this.thread.turns.push({
         id: turnId,
         itemsView: "full",
@@ -167,6 +176,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         preview: this.thread.preview || text,
         updatedAt: Math.floor(Date.now() / 1000)
       };
+      setTimeout(() => {
+        this.emitNotification({
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: startParams.threadId,
+            turnId,
+            itemId: liveItemId,
+            delta: `实时事件：${text}`
+          }
+        });
+      }, 25);
 
       return {
         turn: this.thread.turns.at(-1)
@@ -201,6 +221,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
+
+  private emitNotification(message: AppServerNotificationMessage): void {
+    for (const handler of this.notificationHandlers) {
+      handler(message);
+    }
+  }
 }
 
 class DisabledAppServerPeer implements ManagedAppServerPeer {
@@ -210,6 +236,10 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
 
   getStatus(): AppServerStatus {
     return { state: "disabled" };
+  }
+
+  onNotification(): () => void {
+    return () => undefined;
   }
 
   close(): void {
@@ -224,13 +254,29 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
 export class AppServerGateway {
   private initialized: Promise<void> | null = null;
   private readonly client: CodexAppServerClient;
+  private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope) => void>();
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
+    this.peer.onNotification((message) => {
+      const event = normalizeAppServerNotification(message);
+      if (!event) {
+        return;
+      }
+
+      for (const handler of this.browserEventHandlers) {
+        handler(event);
+      }
+    });
   }
 
   getStatus(): AppServerStatus {
     return this.peer.getStatus();
+  }
+
+  onBrowserEvent(handler: (event: BrowserCodexEventEnvelope) => void): () => void {
+    this.browserEventHandlers.add(handler);
+    return () => this.browserEventHandlers.delete(handler);
   }
 
   ensureReady(): Promise<void> {

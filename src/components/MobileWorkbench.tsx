@@ -28,6 +28,33 @@ export function MobileWorkbench() {
           const health = event as unknown as { appServer: AppServerStatusView["state"]; detail?: string };
           setAppServerStatus({ state: health.appServer, message: health.detail });
         }
+        if ((event as { type: string }).type === "codex-event") {
+          const codexEvent = event as {
+            event?: {
+              kind?: string;
+              threadId?: string;
+              itemId?: string;
+              delta?: string;
+            };
+          };
+          if (codexEvent.event?.kind === "agent_message_delta" && codexEvent.event.threadId && codexEvent.event.itemId) {
+            const itemId = codexEvent.event.itemId;
+            const delta = codexEvent.event.delta || "";
+            setSelectedThread((current) => {
+              if (!current || current.id !== codexEvent.event?.threadId) {
+                return current;
+              }
+
+              const existing = current.timeline.find((item) => item.id === itemId);
+              return {
+                ...current,
+                timeline: existing
+                  ? current.timeline.map((item) => (item.id === itemId ? { ...item, text: `${item.text}${delta}` } : item))
+                  : [...current.timeline, { id: itemId, role: "agent", text: delta }]
+              };
+            });
+          }
+        }
       }
     });
 

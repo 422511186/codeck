@@ -23,7 +23,8 @@ const server = createServer((req, res) => {
 
 attachBrowserWebSocket(server, handleUpgrade, {
   isAuthenticated: isCookieHeaderAuthenticated,
-  getAppServerStatus: () => getAppServerGateway().getStatus()
+  getAppServerStatus: () => getAppServerGateway().getStatus(),
+  subscribeToAppServerEvents: (handler) => getAppServerGateway().onBrowserEvent(handler)
 });
 
 server.listen(config.bindPort, config.bindHost, () => {

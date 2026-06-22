@@ -1,16 +1,19 @@
 import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
+import type { BrowserCodexEventEnvelope } from "./app-server/events";
 import type { AppServerStatus } from "./app-server/transport";
 
 export type BrowserEvent =
   | { type: "hello"; status: "connected" }
-  | { type: "health"; appServer: AppServerStatus["state"]; detail?: string };
+  | { type: "health"; appServer: AppServerStatus["state"]; detail?: string }
+  | BrowserCodexEventEnvelope;
 
 type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>;
 type BrowserWebSocketOptions = {
   isAuthenticated(cookie: string | undefined): boolean;
   getAppServerStatus(): AppServerStatus;
+  subscribeToAppServerEvents(handler: (event: BrowserCodexEventEnvelope) => void): () => void;
 };
 
 export function attachBrowserWebSocket(
@@ -19,6 +22,16 @@ export function attachBrowserWebSocket(
   options: BrowserWebSocketOptions
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
+  const unsubscribe = options.subscribeToAppServerEvents((event) => {
+    const payload = JSON.stringify(event);
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) {
+        client.send(payload);
+      }
+    }
+  });
+
+  wss.on("close", unsubscribe);
 
   wss.on("connection", (socket) => {
     const appServerStatus = options.getAppServerStatus();

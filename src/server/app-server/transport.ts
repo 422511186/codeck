@@ -4,6 +4,7 @@ import { WebSocket } from "ws";
 import type { AppServerConfig } from "../../config/env";
 import { JsonRpcPeer } from "./json-rpc";
 import type { AppServerPeer } from "./client";
+import type { AppServerNotificationMessage } from "./events";
 
 export type AppServerStatus =
   | { state: "disabled" }
@@ -17,6 +18,7 @@ export type ManagedAppServerPeer = AppServerPeer & {
   connect(): Promise<void>;
   close(): void;
   getStatus(): AppServerStatus;
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void;
 };
 
 async function findAvailablePort(host: string): Promise<number> {
@@ -41,11 +43,17 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
   private rpc: JsonRpcPeer | null = null;
   private status: AppServerStatus = { state: "idle" };
   private connecting: Promise<void> | null = null;
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
 
   constructor(protected url: string) {}
 
   getStatus(): AppServerStatus {
     return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
   }
 
   connect(): Promise<void> {
@@ -93,6 +101,11 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
         clearTimeout(timeout);
         this.socket = socket;
         this.rpc = new JsonRpcPeer((message) => socket.send(message));
+        this.rpc.onNotification((message) => {
+          for (const handler of this.notificationHandlers) {
+            handler(message);
+          }
+        });
         this.status = { state: "ready" };
         resolve();
       });
