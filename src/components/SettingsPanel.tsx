@@ -14,6 +14,31 @@ type SettingsPanelProps = {
   onPermissionsChange(permissions: string): void;
 };
 
+function accountLabel(settings: MobileSettingsView): string {
+  if (settings.account.type === "none") {
+    return "未登录";
+  }
+
+  if (settings.account.type === "chatgpt") {
+    return settings.account.email ? `ChatGPT ${settings.account.email}` : "ChatGPT";
+  }
+
+  if (settings.account.type === "apiKey") {
+    return "API Key";
+  }
+
+  return "Amazon Bedrock";
+}
+
+function rateLimitLabel(settings: MobileSettingsView): string {
+  if (!settings.rateLimit || settings.rateLimit.usedPercent === null) {
+    return "-";
+  }
+
+  const name = settings.rateLimit.limitName || settings.rateLimit.limitId || "主额度";
+  return `${name} ${Math.round(settings.rateLimit.usedPercent)}%`;
+}
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -61,7 +86,11 @@ export function SettingsPanel({
         ["思考强度", settings.reasoningEffort],
         ["审批策略", settings.approvalPolicy],
         ["沙箱", settings.sandboxMode],
-        ["远程控制", settings.remoteControlStatus]
+        ["远程控制", settings.remoteControlStatus],
+        ["账号", accountLabel(settings)],
+        ["计划", settings.account.planType],
+        ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
+        ["额度", rateLimitLabel(settings)]
       ]
     : [];
 

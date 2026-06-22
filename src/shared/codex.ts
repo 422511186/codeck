@@ -32,6 +32,21 @@ export type MobilePermissionProfileOption = {
   description: string | null;
 };
 
+export type MobileAccountView = {
+  type: "apiKey" | "chatgpt" | "amazonBedrock" | "none";
+  email: string | null;
+  planType: string | null;
+  requiresOpenaiAuth: boolean;
+};
+
+export type MobileRateLimitView = {
+  limitId: string | null;
+  limitName: string | null;
+  usedPercent: number | null;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";
@@ -74,5 +89,7 @@ export type MobileSettingsView = {
   approvalPolicy: string | null;
   sandboxMode: string | null;
   remoteControlStatus: string;
+  account: MobileAccountView;
+  rateLimit: MobileRateLimitView | null;
   permissionProfiles: MobilePermissionProfileOption[];
 };

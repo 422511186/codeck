@@ -590,6 +590,30 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "account/read") {
+      return {
+        account: { type: "chatgpt", email: "dev@example.com", planType: "pro" },
+        requiresOpenaiAuth: false
+      };
+    }
+
+    if (method === "account/rateLimits/read") {
+      return {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: null,
+          credits: null,
+          individualLimit: null,
+          planType: "pro",
+          rateLimitReachedType: null
+        },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      };
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
 

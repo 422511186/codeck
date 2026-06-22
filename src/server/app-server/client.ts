@@ -9,6 +9,8 @@ import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-t
 import type { FsReadDirectoryResponse } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryResponse";
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
+import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
+import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
@@ -44,9 +46,11 @@ import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/T
 import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2/TurnSteerResponse";
 import type {
   MobileCommandResult,
+  MobileAccountView,
   MobileFileContent,
   MobileFileEntry,
   MobileModelOption,
+  MobileRateLimitView,
   MobileSettingsView,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -199,6 +203,50 @@ function settingsValue(value: unknown): string | null {
   }
 
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function accountView(response: GetAccountResponse): MobileAccountView {
+  if (!response.account) {
+    return {
+      type: "none",
+      email: null,
+      planType: null,
+      requiresOpenaiAuth: response.requiresOpenaiAuth
+    };
+  }
+
+  if (response.account.type === "chatgpt") {
+    return {
+      type: "chatgpt",
+      email: response.account.email,
+      planType: response.account.planType,
+      requiresOpenaiAuth: response.requiresOpenaiAuth
+    };
+  }
+
+  return {
+    type: response.account.type,
+    email: null,
+    planType: null,
+    requiresOpenaiAuth: response.requiresOpenaiAuth
+  };
+}
+
+function rateLimitView(response: GetAccountRateLimitsResponse): MobileRateLimitView | null {
+  const snapshot = response.rateLimitsByLimitId?.codex || response.rateLimits;
+  const primary = snapshot.primary;
+
+  if (!primary) {
+    return null;
+  }
+
+  return {
+    limitId: snapshot.limitId,
+    limitName: snapshot.limitName,
+    usedPercent: primary.usedPercent,
+    windowDurationMins: primary.windowDurationMins,
+    resetsAt: primary.resetsAt
+  };
 }
 
 export class CodexAppServerClient {
@@ -414,10 +462,12 @@ export class CodexAppServerClient {
   }
 
   async readSettings(): Promise<MobileSettingsView> {
-    const [configResponse, remoteControlResponse, permissionProfileResponse] = await Promise.all([
+    const [configResponse, remoteControlResponse, permissionProfileResponse, accountResponse, rateLimitsResponse] = await Promise.all([
       this.peer.request("config/read", {}),
       this.peer.request("remoteControl/status/read", {}),
-      this.peer.request("permissionProfile/list", {})
+      this.peer.request("permissionProfile/list", {}),
+      this.peer.request("account/read", { refreshToken: false }),
+      this.peer.request("account/rateLimits/read", undefined)
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
@@ -430,6 +480,8 @@ export class CodexAppServerClient {
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
       remoteControlStatus: remoteControl.status,
+      account: accountView(accountResponse as GetAccountResponse),
+      rateLimit: rateLimitView(rateLimitsResponse as GetAccountRateLimitsResponse),
       permissionProfiles: permissionProfiles.map((profile) => ({
         id: profile.id,
         label: profile.id,

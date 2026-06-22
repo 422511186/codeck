@@ -28,6 +28,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("gpt-5-codex")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "medium" })).toBeVisible();
   await expect(page.getByText("connected")).toBeVisible();
+  await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "pro" })).toBeVisible();
+  await expect(page.getByText("不需要")).toBeVisible();
+  await expect(page.getByText("Codex 42%")).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
   await page.getByPlaceholder("给 Codex 发送消息").fill("生成 diff");

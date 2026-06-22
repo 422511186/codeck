@@ -468,6 +468,30 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "account/read") {
+      return {
+        account: { type: "chatgpt", email: "dev@example.com", planType: "pro" },
+        requiresOpenaiAuth: false
+      };
+    }
+
+    if (method === "account/rateLimits/read") {
+      return {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: null,
+          credits: null,
+          individualLimit: null,
+          planType: "pro",
+          rateLimitReachedType: null
+        },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      };
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
 }
@@ -807,6 +831,19 @@ describe("CodexAppServerClient", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       remoteControlStatus: "connected",
+      account: {
+        type: "chatgpt",
+        email: "dev@example.com",
+        planType: "pro",
+        requiresOpenaiAuth: false
+      },
+      rateLimit: {
+        limitId: "codex",
+        limitName: "Codex",
+        usedPercent: 42,
+        windowDurationMins: 300,
+        resetsAt: 1_800_000_000
+      },
       permissionProfiles: [
         { id: "default", label: "default", description: "默认权限" },
         { id: "read-only", label: "read-only", description: "只读" },
@@ -814,6 +851,12 @@ describe("CodexAppServerClient", () => {
       ]
     });
     expect(peer.calls.map((call) => call.method)).toContain("permissionProfile/list");
+    expect(peer.calls).toEqual(
+      expect.arrayContaining([
+        { method: "account/read", params: { refreshToken: false } },
+        { method: "account/rateLimits/read", params: undefined }
+      ])
+    );
   });
 
   it("能分页读取 turns 和 turn items", async () => {

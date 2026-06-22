@@ -196,6 +196,19 @@ describe("createAppServerGateway", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       remoteControlStatus: "connected",
+      account: {
+        type: "chatgpt",
+        email: "dev@example.com",
+        planType: "pro",
+        requiresOpenaiAuth: false
+      },
+      rateLimit: {
+        limitId: "codex",
+        limitName: "Codex",
+        usedPercent: 42,
+        windowDurationMins: 300,
+        resetsAt: 1_800_000_000
+      },
       permissionProfiles: [
         { id: "default", label: "default", description: "默认权限配置" },
         { id: "read-only", label: "read-only", description: "只读工作区" },
