@@ -11,9 +11,13 @@ import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/
 import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
 import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
+import type { CollaborationModeListResponse } from "../../../docs/generated/app-server-ts/v2/CollaborationModeListResponse";
+import type { ListMcpServerStatusResponse } from "../../../docs/generated/app-server-ts/v2/ListMcpServerStatusResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
+import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
+import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
@@ -47,10 +51,14 @@ import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2
 import type {
   MobileCommandResult,
   MobileAccountView,
+  MobileCollaborationModeView,
   MobileFileContent,
   MobileFileEntry,
+  MobileMcpServerView,
   MobileModelOption,
+  MobileModelProviderCapabilitiesView,
   MobileRateLimitView,
+  MobileRemoteControlClientView,
   MobileSettingsView,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -247,6 +255,45 @@ function rateLimitView(response: GetAccountRateLimitsResponse): MobileRateLimitV
     windowDurationMins: primary.windowDurationMins,
     resetsAt: primary.resetsAt
   };
+}
+
+function providerCapabilitiesView(
+  response: ModelProviderCapabilitiesReadResponse
+): MobileModelProviderCapabilitiesView {
+  return {
+    namespaceTools: response.namespaceTools,
+    imageGeneration: response.imageGeneration,
+    webSearch: response.webSearch
+  };
+}
+
+function remoteControlClientViews(response: RemoteControlClientsListResponse): MobileRemoteControlClientView[] {
+  return response.data.map((client) => ({
+    clientId: client.clientId,
+    displayName: client.displayName,
+    deviceType: client.deviceType,
+    platform: client.platform,
+    lastSeenAt: client.lastSeenAt === null ? null : Number(client.lastSeenAt)
+  }));
+}
+
+function mcpServerViews(response: ListMcpServerStatusResponse): MobileMcpServerView[] {
+  return response.data.map((server) => ({
+    name: server.name,
+    authStatus: server.authStatus,
+    toolCount: Object.keys(server.tools).length,
+    resourceCount: server.resources.length,
+    resourceTemplateCount: server.resourceTemplates.length
+  }));
+}
+
+function collaborationModeViews(response: CollaborationModeListResponse): MobileCollaborationModeView[] {
+  return response.data.map((mode) => ({
+    name: mode.name,
+    mode: mode.mode,
+    model: mode.model,
+    reasoningEffort: mode.reasoning_effort
+  }));
 }
 
 export class CodexAppServerClient {
@@ -462,16 +509,35 @@ export class CodexAppServerClient {
   }
 
   async readSettings(): Promise<MobileSettingsView> {
-    const [configResponse, remoteControlResponse, permissionProfileResponse, accountResponse, rateLimitsResponse] = await Promise.all([
+    const [
+      configResponse,
+      remoteControlResponse,
+      permissionProfileResponse,
+      accountResponse,
+      rateLimitsResponse,
+      mcpServerStatusResponse,
+      providerCapabilitiesResponse,
+      collaborationModeResponse
+    ] = await Promise.all([
       this.peer.request("config/read", {}),
       this.peer.request("remoteControl/status/read", {}),
       this.peer.request("permissionProfile/list", {}),
       this.peer.request("account/read", { refreshToken: false }),
-      this.peer.request("account/rateLimits/read", undefined)
+      this.peer.request("account/rateLimits/read", undefined),
+      this.peer.request("mcpServerStatus/list", { detail: "full", limit: 50 }),
+      this.peer.request("modelProvider/capabilities/read", {}),
+      this.peer.request("collaborationMode/list", {})
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
     const permissionProfiles = (permissionProfileResponse as PermissionProfileListResponse).data;
+    const remoteControlClientsResponse = remoteControl.environmentId
+      ? await this.peer.request("remoteControl/client/list", {
+          environmentId: remoteControl.environmentId,
+          limit: 20,
+          order: "desc"
+        })
+      : { data: [], nextCursor: null };
 
     return {
       model: settingsValue(config.model),
@@ -482,6 +548,10 @@ export class CodexAppServerClient {
       remoteControlStatus: remoteControl.status,
       account: accountView(accountResponse as GetAccountResponse),
       rateLimit: rateLimitView(rateLimitsResponse as GetAccountRateLimitsResponse),
+      providerCapabilities: providerCapabilitiesView(providerCapabilitiesResponse as ModelProviderCapabilitiesReadResponse),
+      remoteControlClients: remoteControlClientViews(remoteControlClientsResponse as RemoteControlClientsListResponse),
+      mcpServers: mcpServerViews(mcpServerStatusResponse as ListMcpServerStatusResponse),
+      collaborationModes: collaborationModeViews(collaborationModeResponse as CollaborationModeListResponse),
       permissionProfiles: permissionProfiles.map((profile) => ({
         id: profile.id,
         label: profile.id,

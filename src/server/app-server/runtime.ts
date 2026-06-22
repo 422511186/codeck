@@ -586,7 +586,25 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         status: "connected",
         serverName: "mock",
         installationId: "mock-installation",
-        environmentId: null
+        environmentId: "mock-env"
+      };
+    }
+
+    if (method === "remoteControl/client/list") {
+      return {
+        data: [
+          {
+            clientId: "mock-phone",
+            displayName: "手机浏览器",
+            deviceType: "phone",
+            platform: "web",
+            osVersion: null,
+            deviceModel: null,
+            appVersion: "0.1.0",
+            lastSeenAt: 1_800_000_001
+          }
+        ],
+        nextCursor: null
       };
     }
 
@@ -611,6 +629,47 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         },
         rateLimitsByLimitId: null,
         rateLimitResetCredits: null
+      };
+    }
+
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: [
+          {
+            name: "filesystem",
+            serverInfo: null,
+            tools: { read_file: {}, write_file: {} },
+            resources: [{ uri: "file:///README.md", name: "README", mimeType: "text/markdown" }],
+            resourceTemplates: [],
+            authStatus: "bearerToken"
+          },
+          {
+            name: "github",
+            serverInfo: null,
+            tools: { search: {} },
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "notLoggedIn"
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
+    if (method === "modelProvider/capabilities/read") {
+      return {
+        namespaceTools: true,
+        imageGeneration: true,
+        webSearch: false
+      };
+    }
+
+    if (method === "collaborationMode/list") {
+      return {
+        data: [
+          { name: "Code", mode: "default", model: "gpt-5-codex", reasoning_effort: "medium" },
+          { name: "Ask", mode: "ask", model: null, reasoning_effort: null }
+        ]
       };
     }
 

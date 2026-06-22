@@ -464,7 +464,25 @@ class FakePeer implements AppServerPeer {
         status: "connected",
         serverName: "mock",
         installationId: "install-1",
-        environmentId: null
+        environmentId: "env-1"
+      };
+    }
+
+    if (method === "remoteControl/client/list") {
+      return {
+        data: [
+          {
+            clientId: "phone-1",
+            displayName: "手机 Safari",
+            deviceType: "phone",
+            platform: "ios",
+            osVersion: "18",
+            deviceModel: "iPhone",
+            appVersion: "0.1.0",
+            lastSeenAt: 1_800_000_001n
+          }
+        ],
+        nextCursor: null
       };
     }
 
@@ -489,6 +507,47 @@ class FakePeer implements AppServerPeer {
         },
         rateLimitsByLimitId: null,
         rateLimitResetCredits: null
+      };
+    }
+
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: [
+          {
+            name: "filesystem",
+            serverInfo: null,
+            tools: { read_file: {}, write_file: {} },
+            resources: [{ uri: "file:///README.md", name: "README", mimeType: "text/markdown" }],
+            resourceTemplates: [],
+            authStatus: "bearerToken"
+          },
+          {
+            name: "github",
+            serverInfo: null,
+            tools: { search: {} },
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "notLoggedIn"
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
+    if (method === "modelProvider/capabilities/read") {
+      return {
+        namespaceTools: true,
+        imageGeneration: true,
+        webSearch: false
+      };
+    }
+
+    if (method === "collaborationMode/list") {
+      return {
+        data: [
+          { name: "Code", mode: "default", model: "gpt-5-codex", reasoning_effort: "medium" },
+          { name: "Ask", mode: "ask", model: null, reasoning_effort: null }
+        ]
       };
     }
 
@@ -844,6 +903,40 @@ describe("CodexAppServerClient", () => {
         windowDurationMins: 300,
         resetsAt: 1_800_000_000
       },
+      providerCapabilities: {
+        namespaceTools: true,
+        imageGeneration: true,
+        webSearch: false
+      },
+      remoteControlClients: [
+        {
+          clientId: "phone-1",
+          displayName: "手机 Safari",
+          deviceType: "phone",
+          platform: "ios",
+          lastSeenAt: 1_800_000_001
+        }
+      ],
+      mcpServers: [
+        {
+          name: "filesystem",
+          authStatus: "bearerToken",
+          toolCount: 2,
+          resourceCount: 1,
+          resourceTemplateCount: 0
+        },
+        {
+          name: "github",
+          authStatus: "notLoggedIn",
+          toolCount: 1,
+          resourceCount: 0,
+          resourceTemplateCount: 0
+        }
+      ],
+      collaborationModes: [
+        { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
+        { name: "Ask", mode: "ask", model: null, reasoningEffort: null }
+      ],
       permissionProfiles: [
         { id: "default", label: "default", description: "默认权限" },
         { id: "read-only", label: "read-only", description: "只读" },
@@ -854,7 +947,11 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls).toEqual(
       expect.arrayContaining([
         { method: "account/read", params: { refreshToken: false } },
-        { method: "account/rateLimits/read", params: undefined }
+        { method: "account/rateLimits/read", params: undefined },
+        { method: "mcpServerStatus/list", params: { detail: "full", limit: 50 } },
+        { method: "modelProvider/capabilities/read", params: {} },
+        { method: "collaborationMode/list", params: {} },
+        { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );
   });

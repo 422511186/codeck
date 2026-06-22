@@ -32,6 +32,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByRole("definition").filter({ hasText: "pro" })).toBeVisible();
   await expect(page.getByText("不需要")).toBeVisible();
   await expect(page.getByText("Codex 42%")).toBeVisible();
+  await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
+  await expect(page.getByText("手机浏览器")).toBeVisible();
+  await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
+  await expect(page.getByText("Code / Ask")).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
   await page.getByPlaceholder("给 Codex 发送消息").fill("生成 diff");

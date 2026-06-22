@@ -39,6 +39,43 @@ function rateLimitLabel(settings: MobileSettingsView): string {
   return `${name} ${Math.round(settings.rateLimit.usedPercent)}%`;
 }
 
+function providerCapabilitiesLabel(settings: MobileSettingsView): string {
+  const enabled = [
+    settings.providerCapabilities.namespaceTools ? "命名空间工具" : null,
+    settings.providerCapabilities.imageGeneration ? "图像生成" : null,
+    settings.providerCapabilities.webSearch ? "Web 搜索" : null
+  ].filter(Boolean);
+
+  return enabled.length ? enabled.join(" / ") : "-";
+}
+
+function remoteClientsLabel(settings: MobileSettingsView): string {
+  if (!settings.remoteControlClients.length) {
+    return "无客户端";
+  }
+
+  return settings.remoteControlClients
+    .map((client) => client.displayName || client.platform || client.deviceType || client.clientId)
+    .join(" / ");
+}
+
+function mcpServersLabel(settings: MobileSettingsView): string {
+  if (!settings.mcpServers.length) {
+    return "无 MCP 服务";
+  }
+
+  const toolCount = settings.mcpServers.reduce((total, server) => total + server.toolCount, 0);
+  return `${settings.mcpServers.length} 个服务 / ${toolCount} 个工具`;
+}
+
+function collaborationModesLabel(settings: MobileSettingsView): string {
+  if (!settings.collaborationModes.length) {
+    return "-";
+  }
+
+  return settings.collaborationModes.map((mode) => mode.name).join(" / ");
+}
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -90,7 +127,11 @@ export function SettingsPanel({
         ["账号", accountLabel(settings)],
         ["计划", settings.account.planType],
         ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
-        ["额度", rateLimitLabel(settings)]
+        ["额度", rateLimitLabel(settings)],
+        ["Provider 能力", providerCapabilitiesLabel(settings)],
+        ["远程客户端", remoteClientsLabel(settings)],
+        ["MCP", mcpServersLabel(settings)],
+        ["协作模式", collaborationModesLabel(settings)]
       ]
     : [];
 

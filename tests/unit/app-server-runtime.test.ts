@@ -209,6 +209,40 @@ describe("createAppServerGateway", () => {
         windowDurationMins: 300,
         resetsAt: 1_800_000_000
       },
+      providerCapabilities: {
+        namespaceTools: true,
+        imageGeneration: true,
+        webSearch: false
+      },
+      remoteControlClients: [
+        {
+          clientId: "mock-phone",
+          displayName: "手机浏览器",
+          deviceType: "phone",
+          platform: "web",
+          lastSeenAt: 1_800_000_001
+        }
+      ],
+      mcpServers: [
+        {
+          name: "filesystem",
+          authStatus: "bearerToken",
+          toolCount: 2,
+          resourceCount: 1,
+          resourceTemplateCount: 0
+        },
+        {
+          name: "github",
+          authStatus: "notLoggedIn",
+          toolCount: 1,
+          resourceCount: 0,
+          resourceTemplateCount: 0
+        }
+      ],
+      collaborationModes: [
+        { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
+        { name: "Ask", mode: "ask", model: null, reasoningEffort: null }
+      ],
       permissionProfiles: [
         { id: "default", label: "default", description: "默认权限配置" },
         { id: "read-only", label: "read-only", description: "只读工作区" },

@@ -47,6 +47,35 @@ export type MobileRateLimitView = {
   resetsAt: number | null;
 };
 
+export type MobileModelProviderCapabilitiesView = {
+  namespaceTools: boolean;
+  imageGeneration: boolean;
+  webSearch: boolean;
+};
+
+export type MobileRemoteControlClientView = {
+  clientId: string;
+  displayName: string | null;
+  deviceType: string | null;
+  platform: string | null;
+  lastSeenAt: number | null;
+};
+
+export type MobileMcpServerView = {
+  name: string;
+  authStatus: string;
+  toolCount: number;
+  resourceCount: number;
+  resourceTemplateCount: number;
+};
+
+export type MobileCollaborationModeView = {
+  name: string;
+  mode: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";
@@ -91,5 +120,9 @@ export type MobileSettingsView = {
   remoteControlStatus: string;
   account: MobileAccountView;
   rateLimit: MobileRateLimitView | null;
+  providerCapabilities: MobileModelProviderCapabilitiesView;
+  remoteControlClients: MobileRemoteControlClientView[];
+  mcpServers: MobileMcpServerView[];
+  collaborationModes: MobileCollaborationModeView[];
   permissionProfiles: MobilePermissionProfileOption[];
 };
