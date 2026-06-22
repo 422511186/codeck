@@ -1,17 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { AppServerStatusView, MobileModelOption, MobileThreadSummary } from "../shared/codex";
+import { listModels, listThreads, readCodexStatus } from "../lib/client-api";
 import { createBrowserSocket } from "../lib/ws-client";
 import { ConnectionBadge } from "./ConnectionBadge";
 
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
+  const [appServerStatus, setAppServerStatus] = useState<AppServerStatusView>({ state: "idle" });
+  const [threads, setThreads] = useState<MobileThreadSummary[]>([]);
+  const [models, setModels] = useState<MobileModelOption[]>([]);
+  const [loadError, setLoadError] = useState("");
+
+  const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
 
   useEffect(() => {
     const socket = createBrowserSocket((event) => {
       if (typeof event === "object" && event && "type" in event) {
         if ((event as { type: string }).type === "hello") {
           setConnected(true);
+        }
+        if ((event as { type: string }).type === "health") {
+          const health = event as unknown as { appServer: AppServerStatusView["state"]; detail?: string };
+          setAppServerStatus({ state: health.appServer, message: health.detail });
         }
       }
     });
@@ -20,21 +32,76 @@ export function MobileWorkbench() {
     return () => socket.close();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkbenchData() {
+      setLoadError("");
+      try {
+        const [threadPage, modelOptions] = await Promise.all([listThreads(), listModels()]);
+        const status = await readCodexStatus();
+
+        if (!cancelled) {
+          setAppServerStatus(status);
+          setThreads(threadPage.threads);
+          setModels(modelOptions);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "无法读取 Codex 数据");
+        }
+      }
+    }
+
+    loadWorkbenchData();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <main className="workbench">
       <header className="top-bar">
         <div>
           <p className="eyebrow">当前会话</p>
-          <h1>新会话</h1>
+          <h1>{threads[0]?.title || "新会话"}</h1>
         </div>
-        <ConnectionBadge connected={connected} />
+        <div className="status-stack">
+          <ConnectionBadge connected={connected} />
+          <span className="app-server-state">{appServerStatus.state}</span>
+        </div>
       </header>
 
       <section className="timeline">
-        <article className="empty-state">
-          <h2>Codex 已准备好</h2>
-          <p>第一阶段先验证移动端壳子、登录和后端连接。下一阶段接入真实会话。</p>
-        </article>
+        <div className="model-strip">
+          <span>{defaultModel?.label || "模型加载中"}</span>
+          <span>{defaultModel?.supportedReasoningEfforts.join(" / ") || "reasoning"}</span>
+        </div>
+
+        {loadError ? <p className="form-error">{loadError}</p> : null}
+
+        <section className="thread-list" aria-label="会话历史">
+          <div className="section-title">
+            <h2>历史会话</h2>
+            <span>{threads.length}</span>
+          </div>
+          {threads.length > 0 ? (
+            threads.map((thread) => (
+              <button className="thread-row" type="button" key={thread.id}>
+                <span className="thread-title">{thread.title}</span>
+                <span className="thread-preview">{thread.preview || thread.cwd}</span>
+                <span className="thread-meta">
+                  {thread.modelProvider} · {thread.status}
+                </span>
+              </button>
+            ))
+          ) : (
+            <article className="empty-state">
+              <h2>新会话</h2>
+              <p>Codex</p>
+            </article>
+          )}
+        </section>
       </section>
 
       <form className="composer">

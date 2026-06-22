@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import next from "next";
+import { getAppServerGateway } from "./app-server/runtime";
+import { isCookieHeaderAuthenticated } from "./auth";
 import { getRuntimeConfig } from "./runtime";
 import { attachBrowserWebSocket } from "./ws";
 
@@ -19,7 +21,10 @@ const server = createServer((req, res) => {
   handle(req, res);
 });
 
-attachBrowserWebSocket(server, handleUpgrade);
+attachBrowserWebSocket(server, handleUpgrade, {
+  isAuthenticated: isCookieHeaderAuthenticated,
+  getAppServerStatus: () => getAppServerGateway().getStatus()
+});
 
 server.listen(config.bindPort, config.bindHost, () => {
   console.log(`Codex Web 已启动: http://${config.bindHost}:${config.bindPort}`);

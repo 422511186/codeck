@@ -98,8 +98,26 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
   border-bottom: 1px solid #242830;
+}
+
+.top-bar > div:first-child {
+  min-width: 0;
+}
+
+.top-bar h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-stack {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .badge {
@@ -115,9 +133,94 @@ input {
   color: #8dffa8;
 }
 
+.app-server-state {
+  color: #7f8896;
+  font-size: 11px;
+}
+
 .timeline {
   overflow: auto;
   padding: 16px;
+}
+
+.model-strip {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  margin-bottom: 14px;
+  border: 1px solid #303640;
+  border-radius: 8px;
+  background: #15191f;
+  color: #dce6f6;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.model-strip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-list {
+  display: grid;
+  gap: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #b7bfcc;
+}
+
+.section-title h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-title span {
+  font-size: 12px;
+}
+
+.thread-row {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 86px;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #171a1f;
+  color: #f2f2f2;
+  padding: 12px;
+  text-align: left;
+}
+
+.thread-title,
+.thread-preview,
+.thread-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-title {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.thread-preview {
+  color: #b7bfcc;
+  font-size: 13px;
+}
+
+.thread-meta {
+  color: #7f8896;
+  font-size: 12px;
 }
 
 .empty-state {

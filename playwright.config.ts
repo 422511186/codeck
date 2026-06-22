@@ -9,9 +9,10 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: "powershell -NoProfile -Command \"$env:CODEX_WEB_ACCESS_TOKEN='sk-e2e-token'; npm run dev\"",
+    command:
+      "powershell -NoProfile -Command \"$env:CODEX_WEB_ACCESS_TOKEN='sk-e2e-token'; $env:CODEX_WEB_APP_SERVER_MODE='mock'; npm run dev\"",
     url: "http://127.0.0.1:3000",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120_000
   }
 });

@@ -25,4 +25,30 @@ describe("createRuntimeConfig", () => {
     expect(config.accessToken.length).toBeGreaterThanOrEqual(32);
     expect(config.generatedAccessToken).toBe(true);
   });
+
+  it("配置外部 app-server endpoint 时自动使用 external 模式", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_APP_SERVER_URL: "ws://127.0.0.1:31317"
+    });
+
+    expect(config.appServer).toMatchObject({ mode: "external" });
+    if (config.appServer.mode !== "external") {
+      throw new Error("expected external app-server mode");
+    }
+    expect(config.appServer.url).toBe("ws://127.0.0.1:31317");
+  });
+
+  it("未配置 app-server endpoint 时默认由 Web 后端托管 Codex app-server", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured"
+    });
+
+    expect(config.appServer).toMatchObject({ mode: "spawn" });
+    if (config.appServer.mode !== "spawn") {
+      throw new Error("expected spawn app-server mode");
+    }
+    expect(config.appServer.codexBin).toBe("codex");
+    expect(config.appServer.host).toBe("127.0.0.1");
+  });
 });

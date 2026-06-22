@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-项目目前完成第一阶段可运行地基：个人 token 登录、签名 session cookie、移动端工作台壳子、浏览器 WebSocket 健康消息，以及 app-server JSON-RPC adapter 骨架。
+项目目前完成第一阶段可运行地基，并开始接入真实 Codex app-server：个人 token 登录、签名 session cookie、移动端工作台、浏览器 WebSocket、app-server JSON-RPC adapter、app-server 连接管理、会话列表 API 和模型列表 API。
 
 已经完成：
 
@@ -39,6 +39,8 @@
 - 搭建 Next.js/React/TypeScript 移动端页面和 Node.js 自定义 server。
 - 实现个人模式登录，不需要数据库。
 - 加入单元测试和手机视口 Playwright 冒烟测试。
+- 支持 `spawn`、`external`、`mock`、`off` 四种 app-server 运行模式。
+- 移动端登录后可以读取 app-server 会话历史和模型列表。
 
 关键文件：
 
@@ -88,6 +90,7 @@ CODEX_WEB_ACCESS_TOKEN=sk-替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=C:\Users\huang\workspace
 CODEX_WEB_BIND_HOST=0.0.0.0
 CODEX_WEB_BIND_PORT=3000
+CODEX_WEB_APP_SERVER_MODE=spawn
 ```
 
 说明：
@@ -98,6 +101,40 @@ CODEX_WEB_BIND_PORT=3000
 - 这个 token 是 Web 登录用的独立 token，不需要等同于模型/API key。真正模型/API key 仍然放在后端或 Codex 配置里。
 - `CODEX_WEB_WORKSPACE_ROOTS` 用来限制手机端能操作的工作区范围。
 - 审批、question、WebSocket 连接状态等运行中状态默认放内存；服务重启后从 Codex app-server 重新读取会话即可。
+
+## app-server 模式
+
+默认使用 `spawn` 模式：Web 后端启动后，在需要读取 Codex 数据时自动启动本机 `codex app-server --listen ws://127.0.0.1:<port>`，浏览器不会看到这个 endpoint。
+
+可选配置：
+
+```env
+CODEX_WEB_APP_SERVER_MODE=spawn
+CODEX_WEB_CODEX_BIN=codex
+CODEX_WEB_APP_SERVER_HOST=127.0.0.1
+CODEX_WEB_APP_SERVER_PORT=31317
+```
+
+如果你已经自己启动了 Codex app-server，可以使用 external 模式：
+
+```env
+CODEX_WEB_APP_SERVER_MODE=external
+CODEX_WEB_APP_SERVER_URL=ws://127.0.0.1:31317
+```
+
+测试或前端联调用 mock 模式：
+
+```env
+CODEX_WEB_APP_SERVER_MODE=mock
+```
+
+完全关闭 app-server 接入用 off 模式：
+
+```env
+CODEX_WEB_APP_SERVER_MODE=off
+```
+
+安全约束：app-server 默认只绑定 loopback，原始 app-server URL 不返回给浏览器。手机浏览器只访问本项目 Web 后端。
 
 ## 文档语言约定
 
