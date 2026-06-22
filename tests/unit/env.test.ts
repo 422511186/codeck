@@ -15,6 +15,7 @@ describe("createRuntimeConfig", () => {
     expect(config.workspaceRoots).toEqual(["C:\\Users\\huang\\workspace"]);
     expect(config.bindHost).toBe("0.0.0.0");
     expect(config.bindPort).toBe(3100);
+    expect(config.uploadDir).toContain("uploads");
   });
 
   it("未配置登录 token 时生成临时 token", () => {
@@ -24,6 +25,15 @@ describe("createRuntimeConfig", () => {
 
     expect(config.accessToken.length).toBeGreaterThanOrEqual(32);
     expect(config.generatedAccessToken).toBe(true);
+  });
+
+  it("可以配置图片上传暂存目录", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_UPLOAD_DIR: "C:\\Users\\huang\\workspace\\codex-web\\.uploads"
+    });
+
+    expect(config.uploadDir).toBe("C:\\Users\\huang\\workspace\\codex-web\\.uploads");
   });
 
   it("配置外部 app-server endpoint 时自动使用 external 模式", () => {

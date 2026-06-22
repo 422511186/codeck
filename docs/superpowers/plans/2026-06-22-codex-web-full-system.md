@@ -136,11 +136,11 @@
 - Test: `tests/unit/uploads.test.ts`
 - Test: `tests/e2e/send-image.spec.ts`
 
-- [ ] 手机端可选择图片并上传到后端暂存目录。
-- [ ] 暂存路径必须位于项目 uploads 目录。
-- [ ] `turn/start` 使用 `localImage` 或 `image` 输入。
-- [ ] 上传失败阻止发送并保留草稿。
-- [ ] 暂存文件按时间清理。
+- [x] 手机端可选择图片并上传到后端暂存目录。
+- [x] 暂存路径必须位于项目 uploads 目录。
+- [x] `turn/start` 使用 `localImage` 或 `image` 输入。
+- [x] 上传失败阻止发送并保留草稿。
+- [x] 暂存文件按时间清理。
 
 ## Task 7: fork、编辑重发、interrupt、steer
 

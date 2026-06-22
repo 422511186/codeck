@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-项目目前完成第一阶段可运行地基，并开始接入真实 Codex app-server：个人 token 登录、签名 session cookie、移动端工作台、浏览器 WebSocket、app-server JSON-RPC adapter、app-server 连接管理、会话列表 API 和模型列表 API。
+项目目前已经完成移动端工作台地基，并持续接入真实 Codex app-server：个人 token 登录、签名 session cookie、移动端工作台、浏览器 WebSocket、app-server JSON-RPC adapter、app-server 连接管理、会话列表/读取/新建/发送 API、模型列表 API、实时事件流、审批/question/MCP 请求确认，以及图片上传后通过 `localImage` 发送。
 
 已经完成：
 
@@ -40,7 +40,9 @@
 - 实现个人模式登录，不需要数据库。
 - 加入单元测试和手机视口 Playwright 冒烟测试。
 - 支持 `spawn`、`external`、`mock`、`off` 四种 app-server 运行模式。
-- 移动端登录后可以读取 app-server 会话历史和模型列表。
+- 移动端登录后可以读取 app-server 会话历史、模型列表、实时 timeline。
+- 支持发送文本和图片；图片先进入后端暂存目录，再作为 `localImage` 交给 Codex app-server。
+- 支持命令审批、文件审批、权限审批、question 和 MCP elicitation 的移动端确认。
 
 关键文件：
 
@@ -88,6 +90,7 @@ npm run test:e2e
 ```env
 CODEX_WEB_ACCESS_TOKEN=sk-替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=C:\Users\huang\workspace
+CODEX_WEB_UPLOAD_DIR=C:\Users\huang\workspace\codex-web\uploads
 CODEX_WEB_BIND_HOST=0.0.0.0
 CODEX_WEB_BIND_PORT=3000
 CODEX_WEB_APP_SERVER_MODE=spawn
@@ -100,6 +103,7 @@ CODEX_WEB_APP_SERVER_MODE=spawn
 - 如果没有配置，后端启动时生成一个随机长 token，只在当前进程有效，并打印到控制台供你手机登录。
 - 这个 token 是 Web 登录用的独立 token，不需要等同于模型/API key。真正模型/API key 仍然放在后端或 Codex 配置里。
 - `CODEX_WEB_WORKSPACE_ROOTS` 用来限制手机端能操作的工作区范围。
+- `CODEX_WEB_UPLOAD_DIR` 是图片暂存目录；未配置时默认使用项目当前工作目录下的 `uploads`。
 - 审批、question、WebSocket 连接状态等运行中状态默认放内存；服务重启后从 Codex app-server 重新读取会话即可。
 
 ## app-server 模式

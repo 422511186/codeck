@@ -11,6 +11,7 @@ export async function POST(request: Request): Promise<Response> {
     const body = (await request.json()) as {
       threadId?: string;
       text?: string;
+      imagePaths?: string[];
       model?: string;
       reasoningEffort?: string;
     };
@@ -26,6 +27,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await getAppServerGateway().startTurn({
       threadId: body.threadId,
       text: body.text,
+      imagePaths: body.imagePaths,
       model: body.model,
       reasoningEffort: body.reasoningEffort
     });

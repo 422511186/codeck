@@ -295,10 +295,30 @@ input {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid #242830;
+}
+
+.image-picker {
+  display: grid;
+  place-items: center;
+  min-width: 54px;
+  min-height: 44px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #dce6f6;
+  font-size: 12px;
+}
+
+.image-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .approval-sheet {

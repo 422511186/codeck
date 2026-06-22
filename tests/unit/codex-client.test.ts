@@ -313,4 +313,26 @@ describe("CodexAppServerClient", () => {
       }
     });
   });
+
+  it("能把图片路径作为 localImage 发送为 turn/start", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      text: "看图",
+      imagePaths: ["C:\\Users\\huang\\workspace\\codex-web\\uploads\\shot.png"]
+    });
+
+    expect(peer.calls.at(-1)).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "看图", text_elements: [] },
+          { type: "localImage", path: "C:\\Users\\huang\\workspace\\codex-web\\uploads\\shot.png" }
+        ]
+      }
+    });
+  });
 });

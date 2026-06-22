@@ -122,7 +122,7 @@ export function MobileWorkbench() {
     }
   }
 
-  async function handleSend(text: string) {
+  async function handleSend(text: string, imagePaths: string[] = []) {
     if (!selectedThread) {
       setLoadError("请先选择一个会话");
       return;
@@ -134,6 +134,7 @@ export function MobileWorkbench() {
       const thread = await startTurn({
         threadId: selectedThread.id,
         text,
+        imagePaths,
         model: defaultModel?.id,
         reasoningEffort: defaultModel?.supportedReasoningEfforts.includes("medium") ? "medium" : undefined
       });

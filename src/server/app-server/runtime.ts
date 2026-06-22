@@ -177,7 +177,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
             type: "userMessage",
             id: userItemId,
             clientId: userItemId,
-            content: [createTextUserInput(text)]
+            content: startParams.input
           },
           {
             type: "agentMessage",

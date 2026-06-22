@@ -13,7 +13,7 @@ import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/Thre
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
 import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary, MobileTimelineItem } from "../../shared/codex";
-import { createTextUserInput } from "./user-input";
+import { createTurnUserInput } from "./user-input";
 
 export type AppServerPeer = {
   request(method: string, params: unknown): Promise<unknown>;
@@ -29,6 +29,7 @@ export type StartThreadInput = {
 export type StartTurnInput = {
   threadId: string;
   text: string;
+  imagePaths?: string[];
   model?: string;
   reasoningEffort?: string;
 };
@@ -160,7 +161,7 @@ export class CodexAppServerClient {
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
     const params: TurnStartParams = {
       threadId: input.threadId,
-      input: [createTextUserInput(input.text)],
+      input: createTurnUserInput(input.text, input.imagePaths),
       model: input.model,
       effort: input.reasoningEffort
     };

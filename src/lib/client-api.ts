@@ -78,6 +78,7 @@ export async function startThread(input: { model?: string; permissions?: string 
 export async function startTurn(input: {
   threadId: string;
   text: string;
+  imagePaths?: string[];
   model?: string;
   reasoningEffort?: string;
 }): Promise<MobileThreadDetail> {
@@ -94,6 +95,23 @@ export async function startTurn(input: {
 
   const payload = (await response.json()) as { thread: MobileThreadDetail };
   return payload.thread;
+}
+
+export async function uploadImage(file: File): Promise<{ path: string }> {
+  const formData = new FormData();
+  formData.set("image", file);
+  const response = await fetch("/api/codex/uploads/images", {
+    method: "POST",
+    body: formData
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法上传图片");
+  }
+
+  const payload = (await response.json()) as { image: { path: string } };
+  return { path: payload.image.path };
 }
 
 export async function listPendingServerRequests(): Promise<PendingServerRequestView[]> {

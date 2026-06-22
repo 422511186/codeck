@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
 
 export type RuntimeConfig = {
   accessToken: string;
@@ -6,6 +7,7 @@ export type RuntimeConfig = {
   workspaceRoots: string[];
   bindHost: string;
   bindPort: number;
+  uploadDir: string;
   appServer: AppServerConfig;
 };
 
@@ -103,6 +105,7 @@ export function createRuntimeConfig(env: RuntimeEnv = process.env): RuntimeConfi
     workspaceRoots: parseWorkspaceRoots(env.CODEX_WEB_WORKSPACE_ROOTS),
     bindHost: env.CODEX_WEB_BIND_HOST || "127.0.0.1",
     bindPort: parsePort(env.CODEX_WEB_BIND_PORT),
+    uploadDir: env.CODEX_WEB_UPLOAD_DIR?.trim() || resolve("uploads"),
     appServer: parseAppServerConfig(env)
   };
 }
