@@ -99,6 +99,40 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/goal/get") {
+      return {
+        goal: {
+          threadId: "thread-1",
+          objective: "完成移动端 Codex Web",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 1024,
+          timeUsedSeconds: 120,
+          createdAt: 1_800_000_000,
+          updatedAt: 1_800_000_100
+        }
+      };
+    }
+
+    if (method === "thread/goal/set") {
+      return {
+        goal: {
+          threadId: "thread-1",
+          objective: "新的目标",
+          status: "active",
+          tokenBudget: 5000,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1_800_000_200,
+          updatedAt: 1_800_000_200
+        }
+      };
+    }
+
+    if (method === "thread/goal/clear") {
+      return { cleared: true };
+    }
+
     if (method === "thread/search") {
       return {
         data: [
@@ -633,6 +667,16 @@ describe("CodexAppServerClient", () => {
         text: "我会先阅读认证相关代码。"
       }
     ]);
+    expect(detail.goal).toEqual({
+      threadId: "thread-1",
+      objective: "完成移动端 Codex Web",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 1024,
+      timeUsedSeconds: 120,
+      createdAt: 1_800_000_000,
+      updatedAt: 1_800_000_100
+    });
   });
 
   it("能通过 thread/resume 恢复会话并使用初始 turns 页", async () => {
@@ -643,12 +687,13 @@ describe("CodexAppServerClient", () => {
       id: "thread-1",
       title: "登录修复",
       lastTurnId: "turn-resume-1",
+      goal: expect.objectContaining({ objective: "完成移动端 Codex Web" }),
       timeline: [
         { id: "item-resume-user-1", role: "user", text: "恢复这个会话" },
         { id: "item-resume-agent-1", role: "agent", text: "已恢复会话。" }
       ]
     });
-    expect(peer.calls.at(-1)).toEqual({
+    expect(peer.calls).toContainEqual({
       method: "thread/resume",
       params: {
         threadId: "thread-1",
@@ -660,6 +705,31 @@ describe("CodexAppServerClient", () => {
         }
       }
     });
+  });
+
+  it("能设置和清除当前会话目标", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.setThreadGoal({ threadId: "thread-1", objective: "新的目标", tokenBudget: 5000 })).resolves.toEqual({
+      threadId: "thread-1",
+      objective: "新的目标",
+      status: "active",
+      tokenBudget: 5000,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1_800_000_200,
+      updatedAt: 1_800_000_200
+    });
+    await expect(client.clearThreadGoal("thread-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-2)).toEqual([
+      {
+        method: "thread/goal/set",
+        params: { threadId: "thread-1", objective: "新的目标", status: "active", tokenBudget: 5000 }
+      },
+      { method: "thread/goal/clear", params: { threadId: "thread-1" } }
+    ]);
   });
 
   it("能用 cwd、模型、思考强度和权限启动新会话", async () => {

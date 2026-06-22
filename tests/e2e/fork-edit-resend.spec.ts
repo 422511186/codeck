@@ -36,3 +36,18 @@ test("手机端可以 interrupt 和 steer 当前 turn", async ({ page }) => {
   await expect(page.getByText("请继续补充", { exact: true })).toBeVisible();
   await expect(page.getByText("已追加：请继续补充")).toBeVisible();
 });
+
+test("手机端可以设置和清除会话目标", async ({ page }) => {
+  await login(page);
+
+  await page.getByPlaceholder("设置会话目标").fill("手机端完整开发");
+  await page.getByPlaceholder("Token 预算").fill("9000");
+  await page.getByRole("button", { name: "设为目标" }).click();
+
+  await expect(page.getByText("目标：手机端完整开发")).toBeVisible();
+  await expect(page.getByText("预算 9000")).toBeVisible();
+
+  await page.getByRole("button", { name: "清除目标" }).click();
+
+  await expect(page.getByText("目标：手机端完整开发")).not.toBeVisible();
+});

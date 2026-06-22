@@ -163,6 +163,54 @@ describe("normalizeAppServerNotification", () => {
     }
   });
 
+  it("把会话目标更新和清除映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/goal/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: null,
+          goal: {
+            threadId: "thread-1",
+            objective: "完整目标",
+            status: "active",
+            tokenBudget: 9000,
+            tokensUsed: 1,
+            timeUsedSeconds: 2,
+            createdAt: 3,
+            updatedAt: 4
+          }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "thread_goal_updated",
+        threadId: "thread-1",
+        goal: {
+          threadId: "thread-1",
+          objective: "完整目标",
+          status: "active",
+          tokenBudget: 9000,
+          tokensUsed: 1,
+          timeUsedSeconds: 2,
+          createdAt: 3,
+          updatedAt: 4
+        }
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/goal/cleared",
+        params: { threadId: "thread-1" }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "thread_goal_cleared", threadId: "thread-1" }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

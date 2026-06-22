@@ -5,6 +5,7 @@ import type {
   MobileFileEntry,
   MobileModelOption,
   MobileSettingsView,
+  MobileThreadGoalView,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -18,6 +19,7 @@ import {
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
   type SearchThreadsInput,
+  type SetThreadGoalInput,
   type StartThreadInput,
   type StartTurnInput,
   type UpdateThreadSettingsInput
@@ -39,6 +41,7 @@ import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { ThreadSettingsUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadSettingsUpdateParams";
+import type { ThreadGoalSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
@@ -58,6 +61,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private itemCounter = 2;
   private requestCounter = 0;
   private rateLimitUsedPercent = 42;
+  private goals = new Map<string, MobileThreadGoalView>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -314,6 +318,46 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const settingsParams = params as ThreadSettingsUpdateParams;
       this.selectThread(settingsParams.threadId);
       return {};
+    }
+
+    if (method === "thread/goal/get") {
+      const goalParams = params as { threadId?: string };
+      this.selectThread(goalParams.threadId);
+      return { goal: this.goals.get(this.thread.id) || null };
+    }
+
+    if (method === "thread/goal/set") {
+      const goalParams = params as ThreadGoalSetParams;
+      this.selectThread(goalParams.threadId);
+      const now = Math.floor(Date.now() / 1000);
+      const previous = this.goals.get(goalParams.threadId);
+      const goal: MobileThreadGoalView = {
+        threadId: goalParams.threadId,
+        objective: goalParams.objective ?? previous?.objective ?? "",
+        status: goalParams.status ?? previous?.status ?? "active",
+        tokenBudget: goalParams.tokenBudget ?? previous?.tokenBudget ?? null,
+        tokensUsed: previous?.tokensUsed ?? 0,
+        timeUsedSeconds: previous?.timeUsedSeconds ?? 0,
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now
+      };
+      this.goals.set(goalParams.threadId, goal);
+      this.emitNotification({
+        method: "thread/goal/updated",
+        params: { threadId: goalParams.threadId, turnId: null, goal }
+      });
+      return { goal };
+    }
+
+    if (method === "thread/goal/clear") {
+      const goalParams = params as { threadId?: string };
+      this.selectThread(goalParams.threadId);
+      this.goals.delete(this.thread.id);
+      this.emitNotification({
+        method: "thread/goal/cleared",
+        params: { threadId: this.thread.id }
+      });
+      return { cleared: true };
     }
 
     if (method === "thread/archive" || method === "thread/delete") {
@@ -1005,6 +1049,16 @@ export class AppServerGateway {
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
     await this.ensureReady();
     await this.client.updateThreadSettings(input);
+  }
+
+  async setThreadGoal(input: SetThreadGoalInput): Promise<MobileThreadGoalView> {
+    await this.ensureReady();
+    return this.client.setThreadGoal(input);
+  }
+
+  async clearThreadGoal(threadId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.clearThreadGoal(threadId);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

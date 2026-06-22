@@ -6,6 +6,7 @@ import type {
   MobileModelOption,
   MobileSettingsView,
   MobileThreadDetail,
+  MobileThreadGoalView,
   MobileThreadPage,
   MobileTimelinePage
 } from "../shared/codex";
@@ -216,6 +217,36 @@ export async function updateThreadSettings(input: {
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法更新会话设置");
+  }
+}
+
+export async function setThreadGoal(input: {
+  threadId: string;
+  objective: string;
+  tokenBudget?: number | null;
+}): Promise<MobileThreadGoalView> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(input.threadId)}/goal`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      objective: input.objective,
+      tokenBudget: input.tokenBudget
+    })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法设置会话目标");
+  }
+
+  const payload = (await response.json()) as { goal: MobileThreadGoalView };
+  return payload.goal;
+}
+
+export async function clearThreadGoal(threadId: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/goal`, { method: "DELETE" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法清除会话目标");
   }
 }
 

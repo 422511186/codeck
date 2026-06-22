@@ -10,6 +10,7 @@ import {
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
 import {
   archiveThread,
+  clearThreadGoal,
   deleteThread,
   forkThread,
   interruptTurn,
@@ -22,6 +23,7 @@ import {
   renameThread,
   resolveServerRequest,
   rollbackThread,
+  setThreadGoal,
   steerTurn,
   startThread,
   startTurn,
@@ -112,6 +114,16 @@ export function MobileWorkbench() {
           const browserEvent = codexEvent.event;
           if (browserEvent?.kind === "settings_invalidated") {
             setSettingsRefreshVersion((version) => version + 1);
+          }
+          if (browserEvent?.kind === "thread_goal_updated") {
+            setSelectedThread((current) =>
+              current && current.id === browserEvent.threadId ? { ...current, goal: browserEvent.goal } : current
+            );
+          }
+          if (browserEvent?.kind === "thread_goal_cleared") {
+            setSelectedThread((current) =>
+              current && current.id === browserEvent.threadId ? { ...current, goal: null } : current
+            );
           }
           if (browserEvent?.kind === "warning" && !browserEvent.threadId) {
             setLoadError(browserEvent.message);
@@ -416,6 +428,40 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleSetThreadGoal(objective: string, tokenBudget?: number | null) {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const goal = await setThreadGoal({ threadId: selectedThread.id, objective, tokenBudget });
+      setSelectedThread((current) => (current && current.id === selectedThread.id ? { ...current, goal } : current));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法设置会话目标");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleClearThreadGoal() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await clearThreadGoal(selectedThread.id);
+      setSelectedThread((current) => (current && current.id === selectedThread.id ? { ...current, goal: null } : current));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法清除会话目标");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleArchiveThread() {
     if (!selectedThread) {
       return;
@@ -644,6 +690,8 @@ export function MobileWorkbench() {
           onRename={handleRenameThread}
           onArchive={handleArchiveThread}
           onDelete={handleDeleteThread}
+          onSetGoal={handleSetThreadGoal}
+          onClearGoal={handleClearThreadGoal}
           onEditResend={handleEditResend}
           onInterrupt={handleInterruptTurn}
           onSteer={handleSteerTurn}

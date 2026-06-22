@@ -22,6 +22,12 @@ import type { RemoteControlStatusReadResponse } from "../../../docs/generated/ap
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
 import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
+import type { ThreadGoal } from "../../../docs/generated/app-server-ts/v2/ThreadGoal";
+import type { ThreadGoalClearParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalClearParams";
+import type { ThreadGoalGetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalGetParams";
+import type { ThreadGoalGetResponse } from "../../../docs/generated/app-server-ts/v2/ThreadGoalGetResponse";
+import type { ThreadGoalSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetParams";
+import type { ThreadGoalSetResponse } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
 import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
@@ -60,6 +66,7 @@ import type {
   MobileRateLimitView,
   MobileRemoteControlClientView,
   MobileSettingsView,
+  MobileThreadGoalView,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -118,6 +125,13 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string;
+};
+
+export type SetThreadGoalInput = {
+  threadId: string;
+  objective: string;
+  status?: "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete";
+  tokenBudget?: number | null;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -196,6 +210,23 @@ function threadDetail(thread: Thread): MobileThreadDetail {
     ...threadSummary(thread),
     lastTurnId: thread.turns.at(-1)?.id || null,
     timeline
+  };
+}
+
+function goalView(goal: ThreadGoal | null): MobileThreadGoalView | null {
+  if (!goal) {
+    return null;
+  }
+
+  return {
+    threadId: goal.threadId,
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt
   };
 }
 
@@ -345,12 +376,15 @@ export class CodexAppServerClient {
   }
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
-    const response = (await this.peer.request("thread/read", {
-      threadId,
-      includeTurns: true
-    })) as ThreadReadResponse;
+    const [response, goal] = await Promise.all([
+      this.peer.request("thread/read", {
+        threadId,
+        includeTurns: true
+      }) as Promise<ThreadReadResponse>,
+      this.readThreadGoal(threadId)
+    ]);
 
-    return threadDetail(response.thread);
+    return { ...threadDetail(response.thread), goal };
   }
 
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
@@ -363,12 +397,15 @@ export class CodexAppServerClient {
         itemsView: "full"
       }
     };
-    const response = (await this.peer.request("thread/resume", params)) as ThreadResumeResponse;
+    const [response, goal] = await Promise.all([
+      this.peer.request("thread/resume", params) as Promise<ThreadResumeResponse>,
+      this.readThreadGoal(threadId)
+    ]);
     const thread = response.initialTurnsPage
       ? { ...response.thread, turns: response.initialTurnsPage.data }
       : response.thread;
 
-    return threadDetail(thread);
+    return { ...threadDetail(thread), goal };
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -437,6 +474,28 @@ export class CodexAppServerClient {
       permissions: input.permissions
     };
     await this.peer.request("thread/settings/update", params);
+  }
+
+  async readThreadGoal(threadId: string): Promise<MobileThreadGoalView | null> {
+    const params: ThreadGoalGetParams = { threadId };
+    const response = (await this.peer.request("thread/goal/get", params)) as ThreadGoalGetResponse;
+    return goalView(response.goal);
+  }
+
+  async setThreadGoal(input: SetThreadGoalInput): Promise<MobileThreadGoalView> {
+    const params: ThreadGoalSetParams = {
+      threadId: input.threadId,
+      objective: input.objective,
+      status: input.status ?? "active",
+      tokenBudget: input.tokenBudget
+    };
+    const response = (await this.peer.request("thread/goal/set", params)) as ThreadGoalSetResponse;
+    return goalView(response.goal) as MobileThreadGoalView;
+  }
+
+  async clearThreadGoal(threadId: string): Promise<void> {
+    const params: ThreadGoalClearParams = { threadId };
+    await this.peer.request("thread/goal/clear", params);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

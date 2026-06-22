@@ -8,6 +8,8 @@ type TurnActionsSheetProps = {
   onRename(name: string): Promise<void>;
   onArchive(): Promise<void>;
   onDelete(): Promise<void>;
+  onSetGoal(objective: string, tokenBudget?: number | null): Promise<void>;
+  onClearGoal(): Promise<void>;
   onEditResend(text: string): Promise<void>;
   onInterrupt(): Promise<void>;
   onSteer(text: string): Promise<void>;
@@ -20,11 +22,15 @@ export function TurnActionsSheet({
   onRename,
   onArchive,
   onDelete,
+  onSetGoal,
+  onClearGoal,
   onEditResend,
   onInterrupt,
   onSteer
 }: TurnActionsSheetProps) {
   const [nameText, setNameText] = useState("");
+  const [goalText, setGoalText] = useState("");
+  const [goalBudgetText, setGoalBudgetText] = useState("");
   const [editText, setEditText] = useState("");
   const [steerText, setSteerText] = useState("");
 
@@ -37,6 +43,19 @@ export function TurnActionsSheet({
 
     await onRename(name);
     setNameText("");
+  }
+
+  async function submitGoal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const objective = goalText.trim();
+    if (!objective || busy) {
+      return;
+    }
+
+    const budget = goalBudgetText.trim() ? Number(goalBudgetText.trim()) : undefined;
+    await onSetGoal(objective, Number.isFinite(budget) ? budget : undefined);
+    setGoalText("");
+    setGoalBudgetText("");
   }
 
   async function submitEdit(event: FormEvent<HTMLFormElement>) {
@@ -88,6 +107,36 @@ export function TurnActionsSheet({
         />
         <button type="submit" disabled={busy || !nameText.trim()}>
           改名
+        </button>
+      </form>
+      {thread.goal ? (
+        <div className="turn-goal" aria-label="会话目标">
+          <p>目标：{thread.goal.objective}</p>
+          <span>
+            {thread.goal.status}
+            {thread.goal.tokenBudget ? ` · 预算 ${thread.goal.tokenBudget}` : ""}
+          </span>
+          <button type="button" onClick={onClearGoal} disabled={busy}>
+            清除目标
+          </button>
+        </div>
+      ) : null}
+      <form className="turn-action-form" onSubmit={submitGoal}>
+        <input
+          value={goalText}
+          onChange={(event) => setGoalText(event.target.value)}
+          placeholder="设置会话目标"
+          disabled={busy}
+        />
+        <input
+          value={goalBudgetText}
+          onChange={(event) => setGoalBudgetText(event.target.value)}
+          placeholder="Token 预算"
+          inputMode="numeric"
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !goalText.trim()}>
+          设为目标
         </button>
       </form>
       <form className="turn-action-form" onSubmit={submitEdit}>

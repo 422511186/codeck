@@ -121,4 +121,26 @@ describe("applyCodexTimelineEvent", () => {
 
     expect(applyCodexTimelineEvent(current, { kind: "settings_invalidated" })).toBe(current);
   });
+
+  it("忽略会话目标事件", () => {
+    const current = thread([{ id: "agent-1", role: "agent", text: "已有内容" }]);
+
+    expect(
+      applyCodexTimelineEvent(current, {
+        kind: "thread_goal_updated",
+        threadId: "thread-1",
+        goal: {
+          threadId: "thread-1",
+          objective: "完整目标",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      })
+    ).toBe(current);
+    expect(applyCodexTimelineEvent(current, { kind: "thread_goal_cleared", threadId: "thread-1" })).toBe(current);
+  });
 });

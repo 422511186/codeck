@@ -82,10 +82,22 @@ export type MobileTimelineItem = {
   text: string;
 };
 
+export type MobileThreadGoalView = {
+  threadId: string;
+  objective: string;
+  status: string;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
   timeline: MobileTimelineItem[];
   tokenUsageTotal?: number;
+  goal?: MobileThreadGoalView | null;
 };
 
 export type MobileTimelinePage = {

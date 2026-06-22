@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveThread,
+  clearThreadGoal,
   deleteThread,
   listThreads,
   renameThread,
   resumeThread,
+  setThreadGoal,
   updateThreadSettings
 } from "../../src/lib/client-api";
 
@@ -92,5 +94,32 @@ describe("client-api", () => {
         permissions: "full-auto"
       })
     });
+  });
+
+  it("设置和清除会话目标时调用 goal 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ goal: { threadId: "thread-1", objective: "完整目标", status: "active" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setThreadGoal({ threadId: "thread-1", objective: "完整目标", tokenBudget: 9000 })).resolves.toEqual({
+      threadId: "thread-1",
+      objective: "完整目标",
+      status: "active"
+    });
+    await expect(clearThreadGoal("thread-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/goal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ objective: "完整目标", tokenBudget: 9000 })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/goal", { method: "DELETE" });
   });
 });

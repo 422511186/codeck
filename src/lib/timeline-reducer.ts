@@ -36,7 +36,11 @@ export function applyCodexTimelineEvent(
   thread: MobileThreadDetail,
   event: BrowserCodexEvent
 ): MobileThreadDetail {
-  if (event.kind === "settings_invalidated") {
+  if (
+    event.kind === "settings_invalidated" ||
+    event.kind === "thread_goal_updated" ||
+    event.kind === "thread_goal_cleared"
+  ) {
     return thread;
   }
 

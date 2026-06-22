@@ -3,6 +3,17 @@ export type AppServerNotificationMessage = {
   params?: unknown;
 };
 
+export type BrowserThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: string;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type BrowserCodexEvent =
   | {
       kind: "agent_message_delta";
@@ -62,6 +73,15 @@ export type BrowserCodexEvent =
     }
   | {
       kind: "settings_invalidated";
+    }
+  | {
+      kind: "thread_goal_updated";
+      threadId: string;
+      goal: BrowserThreadGoal;
+    }
+  | {
+      kind: "thread_goal_cleared";
+      threadId: string;
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -105,6 +125,23 @@ function deltaEvent(kind: DeltaEventKind, params: unknown): BrowserCodexEventEnv
 
 function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeGoal(value: unknown): BrowserThreadGoal | null {
+  if (!isRecord(value) || typeof value.threadId !== "string" || typeof value.objective !== "string") {
+    return null;
+  }
+
+  return {
+    threadId: value.threadId,
+    objective: value.objective,
+    status: typeof value.status === "string" ? value.status : "active",
+    tokenBudget: typeof value.tokenBudget === "number" ? value.tokenBudget : null,
+    tokensUsed: numberOrZero(value.tokensUsed),
+    timeUsedSeconds: numberOrZero(value.timeUsedSeconds),
+    createdAt: numberOrZero(value.createdAt),
+    updatedAt: numberOrZero(value.updatedAt)
+  };
 }
 
 export function normalizeAppServerNotification(
@@ -215,6 +252,38 @@ export function normalizeAppServerNotification(
       type: "codex-event",
       event: {
         kind: "settings_invalidated"
+      }
+    };
+  }
+
+  if (message.method === "thread/goal/updated") {
+    const params = message.params as { threadId?: unknown; goal?: unknown } | null | undefined;
+    const goal = normalizeGoal(params?.goal);
+    if (!params || typeof params.threadId !== "string" || !goal) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "thread_goal_updated",
+        threadId: params.threadId,
+        goal
+      }
+    };
+  }
+
+  if (message.method === "thread/goal/cleared") {
+    const params = message.params as { threadId?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "thread_goal_cleared",
+        threadId: params.threadId
       }
     };
   }

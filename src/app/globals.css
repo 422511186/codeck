@@ -637,6 +637,31 @@ pre {
   padding: 10px;
 }
 
+.turn-action-form input[placeholder="设置会话目标"] {
+  grid-column: 1 / -1;
+}
+
+.turn-goal {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  padding: 10px;
+  background: #181b20;
+}
+
+.turn-goal p {
+  margin: 0;
+  color: #f2f2f2;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.turn-goal span {
+  color: #8d98aa;
+  font-size: 12px;
+}
+
 .bottom-nav {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

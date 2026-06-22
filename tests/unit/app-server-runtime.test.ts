@@ -298,6 +298,25 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持设置和清除会话目标", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.setThreadGoal({ threadId: "mock-thread-1", objective: "手机端完整目标", tokenBudget: 9000 })
+    ).resolves.toMatchObject({
+      objective: "手机端完整目标",
+      status: "active",
+      tokenBudget: 9000
+    });
+    await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({
+      goal: expect.objectContaining({ objective: "手机端完整目标", tokenBudget: 9000 })
+    });
+
+    await expect(gateway.clearThreadGoal("mock-thread-1")).resolves.toBeUndefined();
+    await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({ goal: null });
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
