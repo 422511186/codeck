@@ -196,4 +196,18 @@ describe("createAppServerGateway", () => {
       remoteControlStatus: "connected"
     });
   });
+
+  it("mock 模式支持 turns 和 items 分页读取", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.listThreadTurns({ threadId: "mock-thread-1", limit: 1 })).resolves.toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ role: "agent", text: expect.stringContaining("Codex app-server") })]),
+      nextCursor: null
+    });
+    await expect(gateway.listThreadTurnItems({ threadId: "mock-thread-1", turnId: "mock-turn-1", limit: 2 })).resolves.toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ role: "agent", text: expect.stringContaining("Codex app-server") })]),
+      nextCursor: null
+    });
+  });
 });

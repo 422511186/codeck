@@ -61,8 +61,8 @@
 - Test: `tests/unit/thread-view-model.test.ts`
 - Test: `tests/e2e/thread-history.spec.ts`
 
-- [ ] `thread/read` 支持 `includeTurns=true`。
-- [ ] `thread/turns/list` 和 `thread/turns/items/list` 支持分页。
+- [x] `thread/read` 支持 `includeTurns=true`。
+- [x] `thread/turns/list` 和 `thread/turns/items/list` 支持分页。
 - [ ] 移动端可以从历史列表切换会话。
 - [ ] timeline 渲染 user message、agent message、reasoning、plan、command、file change、tool call。
 - [ ] 会话切换后顶部标题、状态、模型和 token 用量同步。

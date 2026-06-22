@@ -24,6 +24,10 @@ import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
+import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
+import type { ThreadTurnsItemsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListResponse";
+import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
+import type { ThreadTurnsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListResponse";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -35,6 +39,7 @@ import type {
   MobileFileEntry,
   MobileModelOption,
   MobileSettingsView,
+  MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
   MobileThreadSummary,
@@ -65,6 +70,19 @@ export type ExecCommandInput = {
   command: string[];
   cwd?: string;
   timeoutMs?: number;
+};
+
+export type ListThreadTurnsInput = {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+};
+
+export type ListThreadTurnItemsInput = {
+  threadId: string;
+  turnId: string;
+  cursor?: string | null;
+  limit?: number | null;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -324,6 +342,42 @@ export class CodexAppServerClient {
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
       remoteControlStatus: remoteControl.status
+    };
+  }
+
+  async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
+    const params: ThreadTurnsListParams = {
+      threadId: input.threadId,
+      cursor: input.cursor,
+      limit: input.limit,
+      itemsView: "full"
+    };
+    const response = (await this.peer.request("thread/turns/list", params)) as ThreadTurnsListResponse;
+
+    return {
+      items: response.data.flatMap((turn) => turn.items.flatMap((item) => {
+        const mapped = timelineItem(item);
+        return mapped ? [mapped] : [];
+      })),
+      nextCursor: response.nextCursor
+    };
+  }
+
+  async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
+    const params: ThreadTurnsItemsListParams = {
+      threadId: input.threadId,
+      turnId: input.turnId,
+      cursor: input.cursor,
+      limit: input.limit
+    };
+    const response = (await this.peer.request("thread/turns/items/list", params)) as ThreadTurnsItemsListResponse;
+
+    return {
+      items: response.data.flatMap((item) => {
+        const mapped = timelineItem(item);
+        return mapped ? [mapped] : [];
+      }),
+      nextCursor: response.nextCursor
     };
   }
 }

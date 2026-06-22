@@ -5,6 +5,7 @@ import type {
   MobileFileEntry,
   MobileModelOption,
   MobileSettingsView,
+  MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
   MobileThreadSummary
@@ -14,6 +15,8 @@ import {
   CodexAppServerClient,
   type AppServerPeer,
   type ExecCommandInput,
+  type ListThreadTurnItemsInput,
+  type ListThreadTurnsInput,
   type StartThreadInput,
   type StartTurnInput
 } from "./client";
@@ -36,6 +39,8 @@ import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
+import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
+import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 
 type TextUserInput = { type: "text"; text: string };
 
@@ -145,6 +150,25 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "thread/read") {
       return {
         thread: this.thread
+      };
+    }
+
+    if (method === "thread/turns/list") {
+      const listParams = params as ThreadTurnsListParams;
+      return {
+        data: this.thread.turns.slice(0, listParams.limit || undefined),
+        nextCursor: null,
+        backwardsCursor: null
+      };
+    }
+
+    if (method === "thread/turns/items/list") {
+      const listParams = params as ThreadTurnsItemsListParams;
+      const turn = this.thread.turns.find((threadTurn) => threadTurn.id === listParams.turnId);
+      return {
+        data: (turn?.items || []).slice(0, listParams.limit || undefined),
+        nextCursor: null,
+        backwardsCursor: null
       };
     }
 
@@ -712,6 +736,16 @@ export class AppServerGateway {
   async readSettings(): Promise<MobileSettingsView> {
     await this.ensureReady();
     return this.client.readSettings();
+  }
+
+  async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
+    await this.ensureReady();
+    return this.client.listThreadTurns(input);
+  }
+
+  async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
+    await this.ensureReady();
+    return this.client.listThreadTurnItems(input);
   }
 
   close(): void {

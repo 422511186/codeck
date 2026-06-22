@@ -37,6 +37,11 @@ export type MobileThreadDetail = MobileThreadSummary & {
   timeline: MobileTimelineItem[];
 };
 
+export type MobileTimelinePage = {
+  items: MobileTimelineItem[];
+  nextCursor: string | null;
+};
+
 export type MobileFileEntry = {
   name: string;
   path: string;

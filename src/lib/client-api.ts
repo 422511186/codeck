@@ -6,7 +6,8 @@ import type {
   MobileModelOption,
   MobileSettingsView,
   MobileThreadDetail,
-  MobileThreadPage
+  MobileThreadPage,
+  MobileTimelinePage
 } from "../shared/codex";
 import type { PendingServerRequestView } from "../server/app-server/pending-requests";
 
@@ -253,4 +254,56 @@ export async function readSettings(): Promise<MobileSettingsView> {
 
   const payload = (await response.json()) as { settings: MobileSettingsView };
   return payload.settings;
+}
+
+export async function listThreadTurns(input: {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<MobileTimelinePage> {
+  const params = new URLSearchParams();
+  if (input.cursor) {
+    params.set("cursor", input.cursor);
+  }
+  if (input.limit) {
+    params.set("limit", String(input.limit));
+  }
+
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(input.threadId)}/turns?${params.toString()}`, {
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取 turn 分页");
+  }
+
+  const payload = (await response.json()) as { page: MobileTimelinePage };
+  return payload.page;
+}
+
+export async function listThreadTurnItems(input: {
+  threadId: string;
+  turnId: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<MobileTimelinePage> {
+  const params = new URLSearchParams();
+  if (input.cursor) {
+    params.set("cursor", input.cursor);
+  }
+  if (input.limit) {
+    params.set("limit", String(input.limit));
+  }
+
+  const response = await fetch(
+    `/api/codex/threads/${encodeURIComponent(input.threadId)}/turns/${encodeURIComponent(input.turnId)}/items?${params.toString()}`,
+    { cache: "no-store" }
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取 item 分页");
+  }
+
+  const payload = (await response.json()) as { page: MobileTimelinePage };
+  return payload.page;
 }

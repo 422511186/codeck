@@ -99,6 +99,49 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/turns/list") {
+      return {
+        data: [
+          {
+            id: "turn-page-1",
+            itemsView: { type: "complete" },
+            status: { type: "completed" },
+            error: null,
+            startedAt: 201,
+            completedAt: 299,
+            durationMs: 98000,
+            items: [
+              {
+                type: "agentMessage",
+                id: "item-page-agent-1",
+                text: "分页 turn",
+                phase: "final",
+                memoryCitation: null
+              }
+            ]
+          }
+        ],
+        nextCursor: "turn-next",
+        backwardsCursor: "turn-prev"
+      };
+    }
+
+    if (method === "thread/turns/items/list") {
+      return {
+        data: [
+          {
+            type: "agentMessage",
+            id: "item-page-agent-2",
+            text: "分页 item",
+            phase: "final",
+            memoryCitation: null
+          }
+        ],
+        nextCursor: "item-next",
+        backwardsCursor: "item-prev"
+      };
+    }
+
     if (method === "thread/start") {
       return {
         thread: {
@@ -564,6 +607,41 @@ describe("CodexAppServerClient", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       remoteControlStatus: "connected"
+    });
+  });
+
+  it("能分页读取 turns 和 turn items", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
+      items: [{ id: "item-page-agent-1", role: "agent", text: "分页 turn" }],
+      nextCursor: "turn-next"
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        cursor: "cursor-1",
+        limit: 10,
+        itemsView: "full"
+      }
+    });
+
+    await expect(
+      client.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-page-1", cursor: "cursor-2", limit: 20 })
+    ).resolves.toEqual({
+      items: [{ id: "item-page-agent-2", role: "agent", text: "分页 item" }],
+      nextCursor: "item-next"
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/turns/items/list",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-page-1",
+        cursor: "cursor-2",
+        limit: 20
+      }
     });
   });
 });
