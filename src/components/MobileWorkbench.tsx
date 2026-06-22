@@ -18,6 +18,7 @@ import {
   listThreads,
   readCodexStatus,
   readThread,
+  resumeThread,
   renameThread,
   resolveServerRequest,
   rollbackThread,
@@ -95,7 +96,7 @@ export function MobileWorkbench() {
             setConnected(true);
             const threadId = selectedThreadIdRef.current;
             if (threadId) {
-              readThread(threadId)
+              resumeThread(threadId)
                 .then((thread) => setSelectedThread(thread))
                 .catch(() => undefined);
             }
@@ -177,7 +178,7 @@ export function MobileWorkbench() {
         }
 
         if (!cancelled && threadPage.threads[0]) {
-          const thread = await readThread(threadPage.threads[0].id);
+          const thread = await resumeThread(threadPage.threads[0].id);
           if (!cancelled) {
             setSelectedThread(thread);
           }
@@ -198,7 +199,7 @@ export function MobileWorkbench() {
   async function handleSelectThread(threadId: string) {
     setLoadError("");
     try {
-      setSelectedThread(await readThread(threadId));
+      setSelectedThread(await resumeThread(threadId));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法读取会话内容");
     }
@@ -327,7 +328,7 @@ export function MobileWorkbench() {
     const page = await listThreads(threadSearchTerm);
     setThreads(page.threads);
     if (page.threads[0]) {
-      setSelectedThread(await readThread(page.threads[0].id));
+      setSelectedThread(await resumeThread(page.threads[0].id));
       return;
     }
 

@@ -16,6 +16,13 @@ test("手机端登录后进入工作台", async ({ page }) => {
 });
 
 test("手机端可以从历史列表切换会话", async ({ page }) => {
+  const resumeRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/codex/threads/") && request.url().endsWith("/resume")) {
+      resumeRequests.push(request.url());
+    }
+  });
+
   await page.goto("/");
   await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
   await page.getByRole("button", { name: "登录" }).click();
@@ -26,6 +33,7 @@ test("手机端可以从历史列表切换会话", async ({ page }) => {
 
   await page.getByRole("button", { name: /^示例会话 这是用于移动端联调的示例会话/ }).click();
   await expect(page.getByRole("heading", { name: "示例会话" })).toBeVisible();
+  expect(resumeRequests.length).toBeGreaterThan(0);
 });
 
 test("手机端可以搜索历史会话", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { archiveThread, deleteThread, listThreads, renameThread } from "../../src/lib/client-api";
+import { archiveThread, deleteThread, listThreads, renameThread, resumeThread } from "../../src/lib/client-api";
 
 describe("client-api", () => {
   afterEach(() => {
@@ -32,6 +32,18 @@ describe("client-api", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "新标题" })
     });
+  });
+
+  it("恢复会话时调用 resume 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ thread: { id: "thread-1", title: "登录修复", timeline: [] } })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(resumeThread("thread-1")).resolves.toEqual({ id: "thread-1", title: "登录修复", timeline: [] });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/resume", { method: "POST" });
   });
 
   it("归档和删除会话时调用对应端点", async () => {

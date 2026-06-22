@@ -231,6 +231,21 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持 resume 会话并返回初始 timeline", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.resumeThread("mock-thread-1")).resolves.toMatchObject({
+      id: "mock-thread-1",
+      title: "示例会话",
+      lastTurnId: "mock-turn-1",
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "帮我看看当前项目" }),
+        expect.objectContaining({ role: "agent", text: "我已经连上 Codex app-server，可以读取历史和模型。" })
+      ])
+    });
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

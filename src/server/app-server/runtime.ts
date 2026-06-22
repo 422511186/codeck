@@ -34,6 +34,7 @@ import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
+import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
@@ -174,6 +175,32 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const thread = this.selectThread(readParams.threadId);
       return {
         thread
+      };
+    }
+
+    if (method === "thread/resume") {
+      const resumeParams = params as ThreadResumeParams;
+      const thread = this.selectThread(resumeParams.threadId);
+      return {
+        thread: resumeParams.excludeTurns ? { ...thread, turns: [] } : thread,
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: thread.cwd,
+        runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+        instructionSources: [],
+        approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: "medium",
+        initialTurnsPage: resumeParams.initialTurnsPage
+          ? {
+              data: thread.turns.slice(0, resumeParams.initialTurnsPage.limit || undefined),
+              nextCursor: null,
+              backwardsCursor: null
+            }
+          : null
       };
     }
 
@@ -812,6 +839,11 @@ export class AppServerGateway {
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
     return this.client.readThread(threadId);
+  }
+
+  async resumeThread(threadId: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.resumeThread(threadId);
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {

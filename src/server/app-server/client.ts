@@ -17,6 +17,8 @@ import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/
 import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
+import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
+import type { ThreadResumeResponse } from "../../../docs/generated/app-server-ts/v2/ThreadResumeResponse";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
 import type { ThreadForkResponse } from "../../../docs/generated/app-server-ts/v2/ThreadForkResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
@@ -244,6 +246,24 @@ export class CodexAppServerClient {
     })) as ThreadReadResponse;
 
     return threadDetail(response.thread);
+  }
+
+  async resumeThread(threadId: string): Promise<MobileThreadDetail> {
+    const params: ThreadResumeParams = {
+      threadId,
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 30,
+        sortDirection: "desc",
+        itemsView: "full"
+      }
+    };
+    const response = (await this.peer.request("thread/resume", params)) as ThreadResumeResponse;
+    const thread = response.initialTurnsPage
+      ? { ...response.thread, turns: response.initialTurnsPage.data }
+      : response.thread;
+
+    return threadDetail(thread);
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {

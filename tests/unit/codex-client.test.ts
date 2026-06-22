@@ -133,6 +133,74 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/resume") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "帮我修复登录",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 100,
+          updatedAt: 250,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "登录修复",
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "C:\\Users\\huang\\workspace\\demo",
+        runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+        instructionSources: [],
+        approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: "medium",
+        initialTurnsPage: {
+          data: [
+            {
+              id: "turn-resume-1",
+              itemsView: { type: "complete" },
+              status: { type: "completed" },
+              error: null,
+              startedAt: 201,
+              completedAt: 249,
+              durationMs: 48000,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "item-resume-user-1",
+                  clientId: "client-resume-user-1",
+                  content: [{ type: "text", text: "恢复这个会话", text_elements: [] }]
+                },
+                {
+                  type: "agentMessage",
+                  id: "item-resume-agent-1",
+                  text: "已恢复会话。",
+                  phase: "final",
+                  memoryCitation: null
+                }
+              ]
+            }
+          ],
+          nextCursor: "resume-next",
+          backwardsCursor: null
+        }
+      };
+    }
+
     if (method === "thread/turns/list") {
       return {
         data: [
@@ -467,6 +535,33 @@ describe("CodexAppServerClient", () => {
         text: "我会先阅读认证相关代码。"
       }
     ]);
+  });
+
+  it("能通过 thread/resume 恢复会话并使用初始 turns 页", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.resumeThread("thread-1")).resolves.toMatchObject({
+      id: "thread-1",
+      title: "登录修复",
+      lastTurnId: "turn-resume-1",
+      timeline: [
+        { id: "item-resume-user-1", role: "user", text: "恢复这个会话" },
+        { id: "item-resume-agent-1", role: "agent", text: "已恢复会话。" }
+      ]
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-1",
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 30,
+          sortDirection: "desc",
+          itemsView: "full"
+        }
+      }
+    });
   });
 
   it("能用 cwd、模型、思考强度和权限启动新会话", async () => {

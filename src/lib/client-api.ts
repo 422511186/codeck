@@ -74,6 +74,17 @@ export async function readThread(threadId: string): Promise<MobileThreadDetail> 
   return payload.thread;
 }
 
+export async function resumeThread(threadId: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/resume`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法恢复会话");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
 export async function startThread(input: { model?: string; permissions?: string } = {}): Promise<MobileThreadDetail> {
   const response = await fetch("/api/codex/threads/start", {
     method: "POST",
