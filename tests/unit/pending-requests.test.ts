@@ -184,4 +184,38 @@ describe("normalizePendingServerRequest", () => {
       _meta: null
     });
   });
+
+  it("把动态工具调用 request 转成可回传的 DynamicToolCallResponse", () => {
+    const request = normalizePendingServerRequest({
+      id: 14,
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "browser",
+        tool: "search",
+        arguments: { query: "Codex" }
+      }
+    });
+
+    expect(request).toMatchObject({
+      requestId: 14,
+      kind: "dynamic_tool",
+      title: "动态工具调用",
+      description: "browser/search\n{\"query\":\"Codex\"}",
+      options: [
+        { value: "submit", label: "回传结果" },
+        { value: "fail", label: "标记失败" }
+      ]
+    });
+    expect(buildPendingServerRequestResponse(request, "搜索结果")).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "搜索结果" }]
+    });
+    expect(buildPendingServerRequestResponse(request, "__failure__")).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "用户在移动端标记动态工具调用失败" }]
+    });
+  });
 });

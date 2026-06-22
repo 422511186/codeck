@@ -81,3 +81,19 @@ test("手机端可以确认 MCP elicitation", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "MCP 请求" })).toBeHidden();
 });
+
+test("手机端可以回传动态工具调用结果", async ({ page }) => {
+  await page.goto("/");
+  await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await page.getByPlaceholder("给 Codex 发送消息").fill("dynamic tool 测试");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  await expect(page.getByRole("heading", { name: "动态工具调用" })).toBeVisible();
+  await expect(page.getByText("browser/search")).toBeVisible();
+  await page.getByPlaceholder("输入工具执行结果").fill("移动端工具结果");
+  await page.getByRole("button", { name: "回传结果" }).click();
+
+  await expect(page.getByRole("heading", { name: "动态工具调用" })).toBeHidden();
+});

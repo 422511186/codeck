@@ -89,4 +89,19 @@ describe("applyCodexTimelineEvent", () => {
       }
     ]);
   });
+
+  it("同一 item 的重复 delta 不会重复追加", () => {
+    const event: BrowserCodexEvent = {
+      kind: "agent_message_delta",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "agent-1",
+      delta: "重复片段"
+    };
+
+    const first = applyCodexTimelineEvent(thread(), event);
+    const second = applyCodexTimelineEvent(first, event);
+
+    expect(second.timeline).toEqual([{ id: "agent-1", role: "agent", text: "重复片段" }]);
+  });
 });

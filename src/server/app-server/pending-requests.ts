@@ -97,6 +97,13 @@ function firstQuestionText(params: Record<string, unknown>): string {
   return stringField(firstQuestion, "question") || "Codex 需要你提供更多信息";
 }
 
+function dynamicToolDescription(params: Record<string, unknown>): string {
+  const namespace = stringField(params, "namespace");
+  const tool = stringField(params, "tool") || "unknown";
+  const qualifiedName = namespace ? `${namespace}/${tool}` : tool;
+  return `${qualifiedName}\n${JSON.stringify(params.arguments ?? {})}`;
+}
+
 export function normalizePendingServerRequest(message: AppServerServerRequestMessage): PendingServerRequestView {
   const params = asRecord(message.params);
   const base = {
@@ -162,9 +169,12 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
     return {
       ...base,
       kind: "dynamic_tool",
-      title: "工具调用",
-      description: "Codex 请求调用动态工具",
-      options: approvalOptions(["accept", "decline"])
+      title: "动态工具调用",
+      description: dynamicToolDescription(params),
+      options: [
+        { value: "submit", label: "回传结果" },
+        { value: "fail", label: "标记失败" }
+      ]
     };
   }
 
@@ -218,6 +228,20 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
       action: value,
       content: value === "accept" ? {} : null,
       _meta: null
+    };
+  }
+
+  if (request.kind === "dynamic_tool") {
+    if (value === "__failure__") {
+      return {
+        success: false,
+        contentItems: [{ type: "inputText", text: "用户在移动端标记动态工具调用失败" }]
+      };
+    }
+
+    return {
+      success: true,
+      contentItems: [{ type: "inputText", text: value }]
     };
   }
 

@@ -27,7 +27,7 @@ function upsertTimelineItem(
     return {
       ...timelineItem,
       role: item.role,
-      text: mode === "append" ? `${timelineItem.text}${item.text}` : item.text
+      text: mode === "append" && !timelineItem.text.endsWith(item.text) ? `${timelineItem.text}${item.text}` : item.text
     };
   });
 }

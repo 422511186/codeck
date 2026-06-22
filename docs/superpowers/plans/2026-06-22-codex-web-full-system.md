@@ -82,7 +82,7 @@
 - [x] `thread/start` 支持 cwd、workspace roots、model、permissions；思考强度按 app-server 协议在 `turn/start` 传递。
 - [x] `turn/start` 支持文本输入。
 - [x] 输入框适配手机键盘和安全区。
-- [ ] 发送后立即出现本地 pending 用户消息，并在 app-server 响应后替换为真实 turn。
+- [x] 发送后立即出现本地 pending 用户消息，并在 app-server 响应后替换为真实 turn。
 - [x] 发送失败时保留输入草稿并展示错误。
 
 ## Task 4: 实时事件流和 timeline 更新
@@ -101,8 +101,8 @@
 - [x] `agentMessage/delta` 能增量更新当前 timeline。
 - [x] reasoning、plan、command output、diff 能增量更新当前 timeline。
 - [x] file output、token usage 能增量更新当前 timeline。
-- [ ] WebSocket 断线后显示断连状态，重连后重新读取当前 thread。
-- [ ] 同一 item 的 delta 不重复、不乱序追加。
+- [x] WebSocket 断线后显示断连状态，重连后重新读取当前 thread。
+- [x] 同一 item 的 delta 不重复、不乱序追加。
 
 ## Task 5: 审批、question 和 ServerRequest 响应
 
@@ -123,7 +123,7 @@
 - [x] 命令审批的用户选择会回传 JSON-RPC response。
 - [x] question、MCP elicitation、文件审批、权限审批的用户选择会回传 JSON-RPC response。
 - [x] `serverRequest/resolved` 后自动关闭对应 sheet。
-- [ ] 动态工具调用 `item/tool/call` 能显示、执行并回传 `DynamicToolCallResponse`。
+- [x] 动态工具调用 `item/tool/call` 能显示、执行并回传 `DynamicToolCallResponse`。
 
 ## Task 6: 图片发送和附件暂存
 
@@ -155,7 +155,7 @@
 
 - [x] Fork 后切换到新 thread。
 - [x] 编辑重发先 rollback，再以新输入 `turn/start`。
-- [ ] rollback 涉及文件变更时提示用户查看 diff。
+- [x] rollback 涉及文件变更时提示用户查看 diff。
 - [x] 运行中可以 interrupt。
 - [x] 可 steer 时显示追加指令入口。
 

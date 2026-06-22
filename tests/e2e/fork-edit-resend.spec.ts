@@ -23,6 +23,7 @@ test("手机端可以 rollback 后编辑重发", async ({ page }) => {
 
   await expect(page.getByText("编辑后的消息", { exact: true })).toBeVisible();
   await expect(page.getByText("已收到：编辑后的消息")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看 Diff" })).toBeVisible();
 });
 
 test("手机端可以 interrupt 和 steer 当前 turn", async ({ page }) => {

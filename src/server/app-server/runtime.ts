@@ -525,6 +525,20 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (text.toLowerCase().includes("dynamic")) {
+      return {
+        id: ++this.requestCounter,
+        method: "item/tool/call",
+        params: {
+          ...baseParams,
+          callId: "mock-dynamic-call",
+          namespace: "browser",
+          tool: "search",
+          arguments: { query: text }
+        }
+      };
+    }
+
     return {
       id: ++this.requestCounter,
       method: "item/commandExecution/requestApproval",

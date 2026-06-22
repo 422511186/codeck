@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BrowserCodexEventEnvelope } from "../server/app-server/events";
 import {
   buildPendingServerRequestResponse,
@@ -23,11 +23,13 @@ import {
   startTurn
 } from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
-import { createBrowserSocket } from "../lib/ws-client";
+import { appendPendingUserMessage } from "../lib/thread-state";
+import { createReconnectingBrowserSocket } from "../lib/ws-client";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { Composer } from "./Composer";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { DiffPanel } from "./DiffPanel";
+import { DynamicToolSheet } from "./DynamicToolSheet";
 import { FilesPanel } from "./FilesPanel";
 import { QuestionSheet } from "./QuestionSheet";
 import { SettingsPanel } from "./SettingsPanel";
@@ -46,15 +48,28 @@ export function MobileWorkbench() {
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>("chats");
+  const [rollbackNoticeVisible, setRollbackNoticeVisible] = useState(false);
+  const selectedThreadIdRef = useRef<string | null>(null);
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
 
   useEffect(() => {
-    const socket = createBrowserSocket((event) => {
-      if (typeof event === "object" && event && "type" in event) {
-        if ((event as { type: string }).type === "hello") {
-          setConnected(true);
-        }
+    selectedThreadIdRef.current = selectedThread?.id || null;
+  }, [selectedThread?.id]);
+
+  useEffect(() => {
+    const socket = createReconnectingBrowserSocket({
+      onMessage: (event) => {
+        if (typeof event === "object" && event && "type" in event) {
+          if ((event as { type: string }).type === "hello") {
+            setConnected(true);
+            const threadId = selectedThreadIdRef.current;
+            if (threadId) {
+              readThread(threadId)
+                .then((thread) => setSelectedThread(thread))
+                .catch(() => undefined);
+            }
+          }
         if ((event as { type: string }).type === "health") {
           const health = event as unknown as { appServer: AppServerStatusView["state"]; detail?: string };
           setAppServerStatus({ state: health.appServer, message: health.detail });
@@ -83,9 +98,10 @@ export function MobileWorkbench() {
           setPendingRequests((current) => current.filter((request) => request.requestId !== resolvedEvent.requestId));
         }
       }
+      },
+      onClose: () => setConnected(false)
     });
 
-    socket.addEventListener("close", () => setConnected(false));
     return () => socket.close();
   }, []);
 
@@ -142,6 +158,12 @@ export function MobileWorkbench() {
 
     setSending(true);
     setLoadError("");
+    const pendingClientId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
+    setSelectedThread((current) =>
+      current && current.id === selectedThread.id
+        ? appendPendingUserMessage(current, text, imagePaths.length, pendingClientId)
+        : current
+    );
     try {
       const thread = await startTurn({
         threadId: selectedThread.id,
@@ -167,6 +189,7 @@ export function MobileWorkbench() {
         )
       );
     } catch (error) {
+      setSelectedThread(selectedThread);
       setLoadError(error instanceof Error ? error.message : "无法发送消息");
       throw error;
     } finally {
@@ -254,6 +277,7 @@ export function MobileWorkbench() {
       const thread = await startTurn({ threadId: selectedThread.id, text, model: defaultModel?.id });
       setSelectedThread(thread);
       upsertThreadSummary(thread);
+      setRollbackNoticeVisible(true);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法编辑重发");
     } finally {
@@ -326,6 +350,20 @@ export function MobileWorkbench() {
             </div>
 
             {loadError ? <p className="form-error">{loadError}</p> : null}
+            {rollbackNoticeVisible ? (
+              <div className="inline-notice">
+                <span>已回滚上一轮变更</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRollbackNoticeVisible(false);
+                    setActivePanel("run");
+                  }}
+                >
+                  查看 Diff
+                </button>
+              </div>
+            ) : null}
 
             <section className="thread-list" aria-label="会话历史">
               <div className="section-title">
@@ -373,7 +411,9 @@ export function MobileWorkbench() {
         {activePanel === "settings" ? <SettingsPanel /> : null}
       </section>
 
-      {activeRequest?.kind === "question" || activeRequest?.kind === "mcp_elicitation" ? (
+      {activeRequest?.kind === "dynamic_tool" ? (
+        <DynamicToolSheet request={activeRequest} onResolve={handleResolveRequest} />
+      ) : activeRequest?.kind === "question" || activeRequest?.kind === "mcp_elicitation" ? (
         <QuestionSheet request={activeRequest} onResolve={handleResolveRequest} />
       ) : activeRequest ? (
         <ApprovalSheet request={activeRequest} onResolve={handleResolveRequest} />

@@ -185,6 +185,37 @@ pre {
   white-space: nowrap;
 }
 
+.inline-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #3b4c68;
+  border-radius: 8px;
+  background: #151d29;
+  color: #dce6f6;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.inline-notice span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-notice button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: #2f7df6;
+  color: #fff;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 .thread-list {
   display: grid;
   gap: 10px;
@@ -500,6 +531,23 @@ pre {
   color: #aab6c8;
   font-size: 11px;
   line-height: 1.25;
+}
+
+.dynamic-tool-form {
+  display: grid;
+  gap: 10px;
+}
+
+.dynamic-tool-form textarea {
+  min-height: 86px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #343942;
+  border-radius: 8px;
+  background: #181b20;
+  color: #f2f2f2;
+  padding: 10px;
+  font: inherit;
 }
 
 .turn-actions {
