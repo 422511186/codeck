@@ -1,5 +1,5 @@
 import type { AppServerConfig } from "../../config/env";
-import type { MobileModelOption, MobileThreadPage } from "../../shared/codex";
+import type { MobileModelOption, MobileThreadDetail, MobileThreadPage } from "../../shared/codex";
 import { getRuntimeConfig } from "../runtime";
 import { CodexAppServerClient, type AppServerPeer } from "./client";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
@@ -57,6 +57,58 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         ],
         nextCursor: null,
         backwardsCursor: null
+      };
+    }
+
+    if (method === "thread/read") {
+      return {
+        thread: {
+          id: "mock-thread-1",
+          sessionId: "mock-session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "这是用于移动端联调的示例会话",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1_767_000_000,
+          updatedAt: 1_767_000_600,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "示例会话",
+          turns: [
+            {
+              id: "mock-turn-1",
+              itemsView: "full",
+              status: "completed",
+              error: null,
+              startedAt: 1_767_000_010,
+              completedAt: 1_767_000_100,
+              durationMs: 90000,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "mock-user-1",
+                  clientId: "mock-client-user-1",
+                  content: [{ type: "text", text: "帮我看看当前项目", text_elements: [] }]
+                },
+                {
+                  type: "agentMessage",
+                  id: "mock-agent-1",
+                  text: "我已经连上 Codex app-server，可以读取历史和模型。",
+                  phase: "final_answer",
+                  memoryCitation: null
+                }
+              ]
+            }
+          ]
+        }
       };
     }
 
@@ -138,6 +190,11 @@ export class AppServerGateway {
   async listModels(): Promise<MobileModelOption[]> {
     await this.ensureReady();
     return this.client.listModels();
+  }
+
+  async readThread(threadId: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.readThread(threadId);
   }
 
   close(): void {

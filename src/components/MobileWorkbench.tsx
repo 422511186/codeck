@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AppServerStatusView, MobileModelOption, MobileThreadSummary } from "../shared/codex";
-import { listModels, listThreads, readCodexStatus } from "../lib/client-api";
+import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
+import { listModels, listThreads, readCodexStatus, readThread } from "../lib/client-api";
 import { createBrowserSocket } from "../lib/ws-client";
 import { ConnectionBadge } from "./ConnectionBadge";
 
@@ -10,6 +10,7 @@ export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
   const [appServerStatus, setAppServerStatus] = useState<AppServerStatusView>({ state: "idle" });
   const [threads, setThreads] = useState<MobileThreadSummary[]>([]);
+  const [selectedThread, setSelectedThread] = useState<MobileThreadDetail | null>(null);
   const [models, setModels] = useState<MobileModelOption[]>([]);
   const [loadError, setLoadError] = useState("");
 
@@ -46,6 +47,13 @@ export function MobileWorkbench() {
           setThreads(threadPage.threads);
           setModels(modelOptions);
         }
+
+        if (!cancelled && threadPage.threads[0]) {
+          const thread = await readThread(threadPage.threads[0].id);
+          if (!cancelled) {
+            setSelectedThread(thread);
+          }
+        }
       } catch (error) {
         if (!cancelled) {
           setLoadError(error instanceof Error ? error.message : "无法读取 Codex 数据");
@@ -59,12 +67,21 @@ export function MobileWorkbench() {
     };
   }, []);
 
+  async function handleSelectThread(threadId: string) {
+    setLoadError("");
+    try {
+      setSelectedThread(await readThread(threadId));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法读取会话内容");
+    }
+  }
+
   return (
     <main className="workbench">
       <header className="top-bar">
         <div>
           <p className="eyebrow">当前会话</p>
-          <h1>{threads[0]?.title || "新会话"}</h1>
+          <h1>{selectedThread?.title || threads[0]?.title || "新会话"}</h1>
         </div>
         <div className="status-stack">
           <ConnectionBadge connected={connected} />
@@ -87,7 +104,7 @@ export function MobileWorkbench() {
           </div>
           {threads.length > 0 ? (
             threads.map((thread) => (
-              <button className="thread-row" type="button" key={thread.id}>
+              <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
                 <span className="thread-title">{thread.title}</span>
                 <span className="thread-preview">{thread.preview || thread.cwd}</span>
                 <span className="thread-meta">
@@ -102,6 +119,21 @@ export function MobileWorkbench() {
             </article>
           )}
         </section>
+
+        {selectedThread ? (
+          <section className="message-list" aria-label="会话内容">
+            <div className="section-title">
+              <h2>会话内容</h2>
+              <span>{selectedThread.timeline.length}</span>
+            </div>
+            {selectedThread.timeline.map((item) => (
+              <article className={`message-bubble message-${item.role}`} key={item.id}>
+                <span>{item.role}</span>
+                <p>{item.text}</p>
+              </article>
+            ))}
+          </section>
+        ) : null}
       </section>
 
       <form className="composer">

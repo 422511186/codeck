@@ -223,6 +223,44 @@ input {
   font-size: 12px;
 }
 
+.message-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.message-bubble {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #272c35;
+  border-radius: 8px;
+  background: #171a1f;
+  padding: 12px;
+}
+
+.message-bubble span {
+  color: #8fb7ff;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.message-bubble p {
+  margin: 0;
+  color: #eef3fb;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message-user {
+  background: #182033;
+}
+
+.message-agent {
+  background: #171f1b;
+}
+
 .empty-state {
   border: 1px solid #272c35;
   border-radius: 8px;

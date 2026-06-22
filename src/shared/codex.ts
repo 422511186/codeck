@@ -25,3 +25,13 @@ export type MobileModelOption = {
   supportedReasoningEfforts: string[];
   inputModalities: string[];
 };
+
+export type MobileTimelineItem = {
+  id: string;
+  role: "user" | "agent" | "reasoning" | "plan" | "tool";
+  text: string;
+};
+
+export type MobileThreadDetail = MobileThreadSummary & {
+  timeline: MobileTimelineItem[];
+};

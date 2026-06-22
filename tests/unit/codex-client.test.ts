@@ -47,6 +47,58 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/read") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "帮我修复登录",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 100,
+          updatedAt: 200,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "登录修复",
+          turns: [
+            {
+              id: "turn-1",
+              itemsView: { type: "complete" },
+              status: { type: "completed" },
+              error: null,
+              startedAt: 101,
+              completedAt: 199,
+              durationMs: 98000,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "item-user-1",
+                  clientId: "client-user-1",
+                  content: [{ type: "text", text: "请检查登录逻辑", text_elements: [] }]
+                },
+                {
+                  type: "agentMessage",
+                  id: "item-agent-1",
+                  text: "我会先阅读认证相关代码。",
+                  phase: "final",
+                  memoryCitation: null
+                }
+              ]
+            }
+          ]
+        }
+      };
+    }
+
     if (method === "model/list") {
       return {
         data: [
@@ -132,6 +184,26 @@ describe("CodexAppServerClient", () => {
         isDefault: true,
         supportedReasoningEfforts: ["low", "medium", "high"],
         inputModalities: ["text", "image"]
+      }
+    ]);
+  });
+
+  it("能把 thread/read 结果整理成移动端 timeline", async () => {
+    const client = new CodexAppServerClient(new FakePeer());
+
+    const detail = await client.readThread("thread-1");
+
+    expect(detail.id).toBe("thread-1");
+    expect(detail.timeline).toEqual([
+      {
+        id: "item-user-1",
+        role: "user",
+        text: "请检查登录逻辑"
+      },
+      {
+        id: "item-agent-1",
+        role: "agent",
+        text: "我会先阅读认证相关代码。"
       }
     ]);
   });

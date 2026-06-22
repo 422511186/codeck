@@ -2,10 +2,13 @@ import type { InitializeParams } from "../../../docs/generated/app-server-ts/Ini
 import type { InitializeResponse } from "../../../docs/generated/app-server-ts/InitializeResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
+import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
+import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
+import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
-import type { MobileModelOption, MobileThreadPage } from "../../shared/codex";
+import type { MobileModelOption, MobileThreadDetail, MobileThreadPage, MobileThreadSummary, MobileTimelineItem } from "../../shared/codex";
 
 export type AppServerPeer = {
   request(method: string, params: unknown): Promise<unknown>;
@@ -17,6 +20,62 @@ function statusLabel(status: ThreadStatus): string {
   }
 
   return status.type;
+}
+
+function threadSummary(thread: Thread): MobileThreadSummary {
+  return {
+    id: thread.id,
+    title: thread.name || thread.preview || "未命名会话",
+    preview: thread.preview,
+    cwd: thread.cwd,
+    modelProvider: thread.modelProvider,
+    status: statusLabel(thread.status),
+    updatedAt: thread.updatedAt
+  };
+}
+
+function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
+  return item.content
+    .map((content) => {
+      if (content.type === "text") {
+        return content.text;
+      }
+
+      if (content.type === "image" || content.type === "localImage") {
+        return "[图片]";
+      }
+
+      return `[${content.type}]`;
+    })
+    .join("\n");
+}
+
+function timelineItem(item: ThreadItem): MobileTimelineItem | null {
+  if (item.type === "userMessage") {
+    return { id: item.id, role: "user", text: userMessageText(item) };
+  }
+
+  if (item.type === "agentMessage") {
+    return { id: item.id, role: "agent", text: item.text };
+  }
+
+  if (item.type === "reasoning") {
+    return { id: item.id, role: "reasoning", text: [...item.summary, ...item.content].join("\n") };
+  }
+
+  if (item.type === "plan") {
+    return { id: item.id, role: "plan", text: item.text };
+  }
+
+  if (item.type === "commandExecution") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: item.aggregatedOutput ? `${item.command}\n${item.aggregatedOutput}` : item.command
+    };
+  }
+
+  return null;
 }
 
 export class CodexAppServerClient {
@@ -43,16 +102,27 @@ export class CodexAppServerClient {
     const response = (await this.peer.request("thread/list", params)) as ThreadListResponse;
 
     return {
-      threads: response.data.map((thread) => ({
-        id: thread.id,
-        title: thread.name || thread.preview || "未命名会话",
-        preview: thread.preview,
-        cwd: thread.cwd,
-        modelProvider: thread.modelProvider,
-        status: statusLabel(thread.status),
-        updatedAt: thread.updatedAt
-      })),
+      threads: response.data.map(threadSummary),
       nextCursor: response.nextCursor
+    };
+  }
+
+  async readThread(threadId: string): Promise<MobileThreadDetail> {
+    const response = (await this.peer.request("thread/read", {
+      threadId,
+      includeTurns: true
+    })) as ThreadReadResponse;
+
+    const timeline = response.thread.turns.flatMap((turn) =>
+      turn.items.flatMap((item) => {
+        const mapped = timelineItem(item);
+        return mapped ? [mapped] : [];
+      })
+    );
+
+    return {
+      ...threadSummary(response.thread),
+      timeline
     };
   }
 

@@ -1,4 +1,4 @@
-import type { AppServerStatusView, MobileModelOption, MobileThreadPage } from "../shared/codex";
+import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadPage } from "../shared/codex";
 
 export async function loginWithToken(token: string): Promise<boolean> {
   const response = await fetch("/api/auth/login", {
@@ -46,4 +46,14 @@ export async function listModels(): Promise<MobileModelOption[]> {
 
   const payload = (await response.json()) as { models: MobileModelOption[] };
   return payload.models;
+}
+
+export async function readThread(threadId: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("无法读取会话内容");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
 }
