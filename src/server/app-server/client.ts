@@ -13,6 +13,8 @@ import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/M
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
+import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
+import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
@@ -23,6 +25,7 @@ import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts
 import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadSearchResponse } from "../../../docs/generated/app-server-ts/v2/ThreadSearchResponse";
+import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
@@ -283,6 +286,21 @@ export class CodexAppServerClient {
     };
     const response = (await this.peer.request("thread/rollback", params)) as ThreadRollbackResponse;
     return threadDetail(response.thread);
+  }
+
+  async setThreadName(threadId: string, name: string): Promise<void> {
+    const params: ThreadSetNameParams = { threadId, name };
+    await this.peer.request("thread/name/set", params);
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    const params: ThreadArchiveParams = { threadId };
+    await this.peer.request("thread/archive", params);
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    const params: ThreadDeleteParams = { threadId };
+    await this.peer.request("thread/delete", params);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

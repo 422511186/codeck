@@ -230,4 +230,33 @@ describe("createAppServerGateway", () => {
       nextCursor: null
     });
   });
+
+  it("mock 模式支持重命名当前会话", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    const thread = await gateway.setThreadName("mock-thread-1", "手机端新标题");
+
+    expect(thread.title).toBe("手机端新标题");
+    await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({
+      id: "mock-thread-1",
+      title: "手机端新标题"
+    });
+  });
+
+  it("mock 模式支持归档和删除会话后从历史移除", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+    const newThread = await gateway.startThread({ model: "gpt-5-codex", permissions: "default" });
+
+    await gateway.archiveThread(newThread.id);
+    await expect(gateway.listThreads()).resolves.toMatchObject({
+      threads: expect.not.arrayContaining([expect.objectContaining({ id: newThread.id })])
+    });
+
+    await gateway.deleteThread("mock-thread-1");
+    await expect(gateway.listThreads()).resolves.toMatchObject({
+      threads: expect.not.arrayContaining([expect.objectContaining({ id: "mock-thread-1" })])
+    });
+  });
 });

@@ -9,6 +9,8 @@ import {
 } from "../server/app-server/pending-requests";
 import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
 import {
+  archiveThread,
+  deleteThread,
   forkThread,
   interruptTurn,
   listModels,
@@ -16,6 +18,7 @@ import {
   listThreads,
   readCodexStatus,
   readThread,
+  renameThread,
   resolveServerRequest,
   rollbackThread,
   steerTurn,
@@ -320,6 +323,17 @@ export function MobileWorkbench() {
     ]);
   }
 
+  async function refreshThreadsAfterRemoval() {
+    const page = await listThreads(threadSearchTerm);
+    setThreads(page.threads);
+    if (page.threads[0]) {
+      setSelectedThread(await readThread(page.threads[0].id));
+      return;
+    }
+
+    setSelectedThread(null);
+  }
+
   async function handleForkThread() {
     if (!selectedThread) {
       return;
@@ -333,6 +347,58 @@ export function MobileWorkbench() {
       upsertThreadSummary(thread);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法 fork 会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleRenameThread(name: string) {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const thread = await renameThread(selectedThread.id, name);
+      setSelectedThread(thread);
+      upsertThreadSummary(thread);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法重命名会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleArchiveThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await archiveThread(selectedThread.id);
+      await refreshThreadsAfterRemoval();
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法归档会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleDeleteThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await deleteThread(selectedThread.id);
+      await refreshThreadsAfterRemoval();
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法删除会话");
     } finally {
       setSending(false);
     }
@@ -527,6 +593,9 @@ export function MobileWorkbench() {
           thread={selectedThread}
           busy={sending}
           onFork={handleForkThread}
+          onRename={handleRenameThread}
+          onArchive={handleArchiveThread}
+          onDelete={handleDeleteThread}
           onEditResend={handleEditResend}
           onInterrupt={handleInterruptTurn}
           onSteer={handleSteerTurn}

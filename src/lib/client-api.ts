@@ -155,6 +155,37 @@ export async function rollbackThread(threadId: string, numTurns = 1): Promise<Mo
   return payload.thread;
 }
 
+export async function renameThread(threadId: string, name: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/name`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法重命名会话");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
+export async function archiveThread(threadId: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/archive`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法归档会话");
+  }
+}
+
+export async function deleteThread(threadId: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/delete`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法删除会话");
+  }
+}
+
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   const response = await fetch(`/api/codex/turns/${encodeURIComponent(threadId)}/interrupt`, {
     method: "POST",

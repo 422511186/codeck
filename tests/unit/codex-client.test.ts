@@ -279,6 +279,10 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/name/set" || method === "thread/archive" || method === "thread/delete") {
+      return {};
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -557,6 +561,31 @@ describe("CodexAppServerClient", () => {
       method: "thread/rollback",
       params: { threadId: "thread-1", numTurns: 1 }
     });
+  });
+
+  it("能重命名当前会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.setThreadName("thread-1", "新的会话名")).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/name/set",
+      params: { threadId: "thread-1", name: "新的会话名" }
+    });
+  });
+
+  it("能归档和删除当前会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.archiveThread("thread-1")).resolves.toBeUndefined();
+    await expect(client.deleteThread("thread-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-2)).toEqual([
+      { method: "thread/archive", params: { threadId: "thread-1" } },
+      { method: "thread/delete", params: { threadId: "thread-1" } }
+    ]);
   });
 
   it("能中断运行中的 turn", async () => {

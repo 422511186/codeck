@@ -35,6 +35,7 @@ import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
+import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
@@ -265,6 +266,25 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.upsertThread(this.thread);
 
       return { thread: this.thread };
+    }
+
+    if (method === "thread/name/set") {
+      const nameParams = params as ThreadSetNameParams;
+      const thread = this.selectThread(nameParams.threadId);
+      this.thread = {
+        ...thread,
+        name: nameParams.name,
+        updatedAt: Math.floor(Date.now() / 1000)
+      };
+      this.upsertThread(this.thread);
+      return {};
+    }
+
+    if (method === "thread/archive" || method === "thread/delete") {
+      const actionParams = params as { threadId?: string };
+      this.threads = this.threads.filter((item) => item.id !== actionParams.threadId);
+      this.thread = this.threads[0] || this.createThread();
+      return {};
     }
 
     if (method === "turn/start") {
@@ -812,6 +832,22 @@ export class AppServerGateway {
   async rollbackThread(threadId: string, numTurns: number): Promise<MobileThreadDetail> {
     await this.ensureReady();
     return this.client.rollbackThread(threadId, numTurns);
+  }
+
+  async setThreadName(threadId: string, name: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    await this.client.setThreadName(threadId, name);
+    return this.client.readThread(threadId);
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.archiveThread(threadId);
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.deleteThread(threadId);
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

@@ -5,6 +5,9 @@ type TurnActionsSheetProps = {
   thread: MobileThreadDetail;
   busy: boolean;
   onFork(): Promise<void>;
+  onRename(name: string): Promise<void>;
+  onArchive(): Promise<void>;
+  onDelete(): Promise<void>;
   onEditResend(text: string): Promise<void>;
   onInterrupt(): Promise<void>;
   onSteer(text: string): Promise<void>;
@@ -14,12 +17,27 @@ export function TurnActionsSheet({
   thread,
   busy,
   onFork,
+  onRename,
+  onArchive,
+  onDelete,
   onEditResend,
   onInterrupt,
   onSteer
 }: TurnActionsSheetProps) {
+  const [nameText, setNameText] = useState("");
   const [editText, setEditText] = useState("");
   const [steerText, setSteerText] = useState("");
+
+  async function submitRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = nameText.trim();
+    if (!name || busy) {
+      return;
+    }
+
+    await onRename(name);
+    setNameText("");
+  }
 
   async function submitEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -53,6 +71,25 @@ export function TurnActionsSheet({
           Interrupt
         </button>
       </div>
+      <div className="turn-actions-row">
+        <button type="button" onClick={onArchive} disabled={busy}>
+          归档
+        </button>
+        <button type="button" onClick={onDelete} disabled={busy}>
+          删除
+        </button>
+      </div>
+      <form className="turn-action-form" onSubmit={submitRename}>
+        <input
+          value={nameText}
+          onChange={(event) => setNameText(event.target.value)}
+          placeholder="重命名会话"
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !nameText.trim()}>
+          改名
+        </button>
+      </form>
       <form className="turn-action-form" onSubmit={submitEdit}>
         <input
           value={editText}
