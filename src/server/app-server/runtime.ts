@@ -751,6 +751,103 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "skills/list") {
+      return {
+        data: [
+          {
+            cwd: this.thread.cwd,
+            skills: [
+              {
+                name: "openai-docs",
+                description: "查询 OpenAI 官方文档",
+                shortDescription: "OpenAI 文档",
+                interface: null,
+                dependencies: null,
+                path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
+                scope: "user",
+                enabled: true
+              },
+              {
+                name: "repo-helper",
+                description: "项目内辅助技能",
+                shortDescription: null,
+                interface: null,
+                dependencies: null,
+                path: `${this.thread.cwd}\\.codex\\skills\\repo-helper\\SKILL.md`,
+                scope: "repo",
+                enabled: false
+              }
+            ],
+            errors: []
+          }
+        ]
+      };
+    }
+
+    if (method === "plugin/list") {
+      return {
+        marketplaces: [
+          {
+            name: "个人插件市场",
+            path: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            interface: { displayName: "个人插件" },
+            plugins: [
+              {
+                id: "browser-tools",
+                remotePluginId: null,
+                localVersion: "1.0.0",
+                name: "browser-tools",
+                shareContext: null,
+                source: { type: "local", path: "C:\\Users\\huang\\.codex\\plugins\\browser-tools" },
+                installed: true,
+                enabled: true,
+                installPolicy: "install",
+                authPolicy: "none",
+                availability: "AVAILABLE",
+                interface: {
+                  displayName: "浏览器工具",
+                  shortDescription: "控制浏览器",
+                  longDescription: null,
+                  developerName: null,
+                  category: null,
+                  capabilities: [],
+                  websiteUrl: null,
+                  privacyPolicyUrl: null,
+                  termsOfServiceUrl: null,
+                  defaultPrompt: null,
+                  brandColor: null,
+                  composerIcon: null,
+                  composerIconUrl: null,
+                  logo: null,
+                  logoUrl: null,
+                  screenshots: [],
+                  screenshotUrls: []
+                },
+                keywords: ["browser"]
+              },
+              {
+                id: "review-pack",
+                remotePluginId: "remote-review-pack",
+                localVersion: null,
+                name: "review-pack",
+                shareContext: null,
+                source: { type: "remote" },
+                installed: false,
+                enabled: false,
+                installPolicy: "ask",
+                authPolicy: "none",
+                availability: "DISABLED_BY_ADMIN",
+                interface: null,
+                keywords: []
+              }
+            ]
+          }
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: ["browser-tools"]
+      };
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
 

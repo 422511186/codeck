@@ -597,6 +597,103 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "skills/list") {
+      return {
+        data: [
+          {
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            skills: [
+              {
+                name: "openai-docs",
+                description: "查询 OpenAI 官方文档",
+                shortDescription: "OpenAI 文档",
+                interface: null,
+                dependencies: null,
+                path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
+                scope: "user",
+                enabled: true
+              },
+              {
+                name: "repo-helper",
+                description: "项目内辅助技能",
+                shortDescription: null,
+                interface: null,
+                dependencies: null,
+                path: "C:\\Users\\huang\\workspace\\demo\\.codex\\skills\\repo-helper\\SKILL.md",
+                scope: "repo",
+                enabled: false
+              }
+            ],
+            errors: [{ path: "C:\\broken\\SKILL.md", message: "缺少 description" }]
+          }
+        ]
+      };
+    }
+
+    if (method === "plugin/list") {
+      return {
+        marketplaces: [
+          {
+            name: "个人插件市场",
+            path: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            interface: { displayName: "个人插件" },
+            plugins: [
+              {
+                id: "browser-tools",
+                remotePluginId: null,
+                localVersion: "1.0.0",
+                name: "browser-tools",
+                shareContext: null,
+                source: { type: "local", path: "C:\\Users\\huang\\.codex\\plugins\\browser-tools" },
+                installed: true,
+                enabled: true,
+                installPolicy: "install",
+                authPolicy: "none",
+                availability: "AVAILABLE",
+                interface: {
+                  displayName: "浏览器工具",
+                  shortDescription: "控制浏览器",
+                  longDescription: null,
+                  developerName: null,
+                  category: null,
+                  capabilities: [],
+                  websiteUrl: null,
+                  privacyPolicyUrl: null,
+                  termsOfServiceUrl: null,
+                  defaultPrompt: null,
+                  brandColor: null,
+                  composerIcon: null,
+                  composerIconUrl: null,
+                  logo: null,
+                  logoUrl: null,
+                  screenshots: [],
+                  screenshotUrls: []
+                },
+                keywords: ["browser"]
+              },
+              {
+                id: "review-pack",
+                remotePluginId: "remote-review-pack",
+                localVersion: null,
+                name: "review-pack",
+                shareContext: null,
+                source: { type: "remote" },
+                installed: false,
+                enabled: false,
+                installPolicy: "ask",
+                authPolicy: "none",
+                availability: "DISABLED_BY_ADMIN",
+                interface: null,
+                keywords: []
+              }
+            ]
+          }
+        ],
+        marketplaceLoadErrors: [{ marketplacePath: "C:\\bad-marketplace.json", message: "JSON 无效" }],
+        featuredPluginIds: ["browser-tools"]
+      };
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
 }
@@ -1048,6 +1145,54 @@ describe("CodexAppServerClient", () => {
         { id: "default", label: "default", description: "默认权限" },
         { id: "read-only", label: "read-only", description: "只读" },
         { id: "full-auto", label: "full-auto", description: "自动执行" }
+      ],
+      skills: [
+        {
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          name: "openai-docs",
+          description: "查询 OpenAI 官方文档",
+          shortDescription: "OpenAI 文档",
+          scope: "user",
+          enabled: true
+        },
+        {
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          name: "repo-helper",
+          description: "项目内辅助技能",
+          shortDescription: null,
+          scope: "repo",
+          enabled: false
+        }
+      ],
+      skillErrors: [{ cwd: "C:\\Users\\huang\\workspace\\demo", path: "C:\\broken\\SKILL.md", message: "缺少 description" }],
+      plugins: [
+        {
+          marketplaceName: "个人插件市场",
+          marketplaceDisplayName: "个人插件",
+          id: "browser-tools",
+          name: "browser-tools",
+          displayName: "浏览器工具",
+          shortDescription: "控制浏览器",
+          installed: true,
+          enabled: true,
+          availability: "AVAILABLE",
+          sourceType: "local"
+        },
+        {
+          marketplaceName: "个人插件市场",
+          marketplaceDisplayName: "个人插件",
+          id: "review-pack",
+          name: "review-pack",
+          displayName: null,
+          shortDescription: null,
+          installed: false,
+          enabled: false,
+          availability: "DISABLED_BY_ADMIN",
+          sourceType: "remote"
+        }
+      ],
+      pluginMarketplaceErrors: [
+        { marketplacePath: "C:\\bad-marketplace.json", message: "JSON 无效" }
       ]
     });
     expect(peer.calls.map((call) => call.method)).toContain("permissionProfile/list");
@@ -1058,6 +1203,8 @@ describe("CodexAppServerClient", () => {
         { method: "mcpServerStatus/list", params: { detail: "full", limit: 50 } },
         { method: "modelProvider/capabilities/read", params: {} },
         { method: "collaborationMode/list", params: {} },
+        { method: "skills/list", params: { forceReload: false } },
+        { method: "plugin/list", params: { cwds: null, marketplaceKinds: null } },
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );

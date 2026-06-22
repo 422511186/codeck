@@ -36,6 +36,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("手机浏览器")).toBeVisible();
   await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
   await expect(page.getByText("Code / Ask")).toBeVisible();
+  await expect(page.getByText("1 个启用 / 2 个 Skills")).toBeVisible();
+  await expect(page.getByText("openai-docs / repo-helper")).toBeVisible();
+  await expect(page.getByText("1 个已安装 / 2 个插件")).toBeVisible();
+  await expect(page.getByText("浏览器工具 / review-pack")).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
   await page.getByPlaceholder("给 Codex 发送消息").fill("生成 diff");

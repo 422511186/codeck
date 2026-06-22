@@ -18,8 +18,12 @@ import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/M
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
+import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/PluginListParams";
+import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
 import type { RemoteControlStatusReadResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlStatusReadResponse";
+import type { SkillsListParams } from "../../../docs/generated/app-server-ts/v2/SkillsListParams";
+import type { SkillsListResponse } from "../../../docs/generated/app-server-ts/v2/SkillsListResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
 import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
@@ -66,9 +70,13 @@ import type {
   MobileMcpServerView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
+  MobilePluginMarketplaceErrorView,
+  MobilePluginView,
   MobileRateLimitView,
   MobileRemoteControlClientView,
   MobileSettingsView,
+  MobileSkillErrorView,
+  MobileSkillView,
   MobileThreadGoalView,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -327,6 +335,53 @@ function collaborationModeViews(response: CollaborationModeListResponse): Mobile
     mode: mode.mode,
     model: mode.model,
     reasoningEffort: mode.reasoning_effort
+  }));
+}
+
+function skillViews(response: SkillsListResponse): MobileSkillView[] {
+  return response.data.flatMap((entry) =>
+    entry.skills.map((skill) => ({
+      cwd: entry.cwd,
+      name: skill.name,
+      description: skill.description,
+      shortDescription: skill.shortDescription ?? null,
+      scope: skill.scope,
+      enabled: skill.enabled
+    }))
+  );
+}
+
+function skillErrorViews(response: SkillsListResponse): MobileSkillErrorView[] {
+  return response.data.flatMap((entry) =>
+    entry.errors.map((error) => ({
+      cwd: entry.cwd,
+      path: error.path,
+      message: error.message
+    }))
+  );
+}
+
+function pluginViews(response: PluginListResponse): MobilePluginView[] {
+  return response.marketplaces.flatMap((marketplace) =>
+    marketplace.plugins.map((plugin) => ({
+      marketplaceName: marketplace.name,
+      marketplaceDisplayName: marketplace.interface?.displayName ?? null,
+      id: plugin.id,
+      name: plugin.name,
+      displayName: plugin.interface?.displayName ?? null,
+      shortDescription: plugin.interface?.shortDescription ?? null,
+      installed: plugin.installed,
+      enabled: plugin.enabled,
+      availability: plugin.availability,
+      sourceType: plugin.source.type
+    }))
+  );
+}
+
+function pluginMarketplaceErrorViews(response: PluginListResponse): MobilePluginMarketplaceErrorView[] {
+  return response.marketplaceLoadErrors.map((error) => ({
+    marketplacePath: error.marketplacePath,
+    message: error.message
   }));
 }
 
@@ -593,7 +648,9 @@ export class CodexAppServerClient {
       rateLimitsResponse,
       mcpServerStatusResponse,
       providerCapabilitiesResponse,
-      collaborationModeResponse
+      collaborationModeResponse,
+      skillsResponse,
+      pluginResponse
     ] = await Promise.all([
       this.peer.request("config/read", {}),
       this.peer.request("remoteControl/status/read", {}),
@@ -602,7 +659,9 @@ export class CodexAppServerClient {
       this.peer.request("account/rateLimits/read", undefined),
       this.peer.request("mcpServerStatus/list", { detail: "full", limit: 50 }),
       this.peer.request("modelProvider/capabilities/read", {}),
-      this.peer.request("collaborationMode/list", {})
+      this.peer.request("collaborationMode/list", {}),
+      this.peer.request("skills/list", { forceReload: false } satisfies SkillsListParams),
+      this.peer.request("plugin/list", { cwds: null, marketplaceKinds: null } satisfies PluginListParams)
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
@@ -632,7 +691,11 @@ export class CodexAppServerClient {
         id: profile.id,
         label: profile.id,
         description: profile.description
-      }))
+      })),
+      skills: skillViews(skillsResponse as SkillsListResponse),
+      skillErrors: skillErrorViews(skillsResponse as SkillsListResponse),
+      plugins: pluginViews(pluginResponse as PluginListResponse),
+      pluginMarketplaceErrors: pluginMarketplaceErrorViews(pluginResponse as PluginListResponse)
     };
   }
 

@@ -77,6 +77,44 @@ function collaborationModesLabel(settings: MobileSettingsView): string {
   return settings.collaborationModes.map((mode) => mode.name).join(" / ");
 }
 
+function skillsLabel(settings: MobileSettingsView): string {
+  const skills = settings.skills ?? [];
+  if (!skills.length) {
+    return "无 Skills";
+  }
+
+  const enabledCount = skills.filter((skill) => skill.enabled).length;
+  return `${enabledCount} 个启用 / ${skills.length} 个 Skills`;
+}
+
+function skillNamesLabel(settings: MobileSettingsView): string {
+  const skills = settings.skills ?? [];
+  if (!skills.length) {
+    return "-";
+  }
+
+  return skills.map((skill) => skill.name).join(" / ");
+}
+
+function pluginsLabel(settings: MobileSettingsView): string {
+  const plugins = settings.plugins ?? [];
+  if (!plugins.length) {
+    return "无插件";
+  }
+
+  const installedCount = plugins.filter((plugin) => plugin.installed).length;
+  return `${installedCount} 个已安装 / ${plugins.length} 个插件`;
+}
+
+function pluginNamesLabel(settings: MobileSettingsView): string {
+  const plugins = settings.plugins ?? [];
+  if (!plugins.length) {
+    return "-";
+  }
+
+  return plugins.map((plugin) => plugin.displayName || plugin.name).join(" / ");
+}
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -133,7 +171,11 @@ export function SettingsPanel({
         ["Provider 能力", providerCapabilitiesLabel(settings)],
         ["远程客户端", remoteClientsLabel(settings)],
         ["MCP", mcpServersLabel(settings)],
-        ["协作模式", collaborationModesLabel(settings)]
+        ["协作模式", collaborationModesLabel(settings)],
+        ["Skills", skillsLabel(settings)],
+        ["Skill 列表", skillNamesLabel(settings)],
+        ["插件", pluginsLabel(settings)],
+        ["插件列表", pluginNamesLabel(settings)]
       ]
     : [];
 

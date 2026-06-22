@@ -76,6 +76,39 @@ export type MobileCollaborationModeView = {
   reasoningEffort: string | null;
 };
 
+export type MobileSkillView = {
+  cwd: string;
+  name: string;
+  description: string;
+  shortDescription: string | null;
+  scope: string;
+  enabled: boolean;
+};
+
+export type MobileSkillErrorView = {
+  cwd: string;
+  path: string;
+  message: string;
+};
+
+export type MobilePluginView = {
+  marketplaceName: string;
+  marketplaceDisplayName: string | null;
+  id: string;
+  name: string;
+  displayName: string | null;
+  shortDescription: string | null;
+  installed: boolean;
+  enabled: boolean;
+  availability: string;
+  sourceType: string;
+};
+
+export type MobilePluginMarketplaceErrorView = {
+  marketplacePath: string;
+  message: string;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";
@@ -137,4 +170,8 @@ export type MobileSettingsView = {
   mcpServers: MobileMcpServerView[];
   collaborationModes: MobileCollaborationModeView[];
   permissionProfiles: MobilePermissionProfileOption[];
+  skills: MobileSkillView[];
+  skillErrors: MobileSkillErrorView[];
+  plugins: MobilePluginView[];
+  pluginMarketplaceErrors: MobilePluginMarketplaceErrorView[];
 };

@@ -247,7 +247,53 @@ describe("createAppServerGateway", () => {
         { id: "default", label: "default", description: "默认权限配置" },
         { id: "read-only", label: "read-only", description: "只读工作区" },
         { id: "full-auto", label: "full-auto", description: "允许自动执行" }
-      ]
+      ],
+      skills: [
+        {
+          cwd: "C:\\Users\\huang\\workspace",
+          name: "openai-docs",
+          description: "查询 OpenAI 官方文档",
+          shortDescription: "OpenAI 文档",
+          scope: "user",
+          enabled: true
+        },
+        {
+          cwd: "C:\\Users\\huang\\workspace",
+          name: "repo-helper",
+          description: "项目内辅助技能",
+          shortDescription: null,
+          scope: "repo",
+          enabled: false
+        }
+      ],
+      skillErrors: [],
+      plugins: [
+        {
+          marketplaceName: "个人插件市场",
+          marketplaceDisplayName: "个人插件",
+          id: "browser-tools",
+          name: "browser-tools",
+          displayName: "浏览器工具",
+          shortDescription: "控制浏览器",
+          installed: true,
+          enabled: true,
+          availability: "AVAILABLE",
+          sourceType: "local"
+        },
+        {
+          marketplaceName: "个人插件市场",
+          marketplaceDisplayName: "个人插件",
+          id: "review-pack",
+          name: "review-pack",
+          displayName: null,
+          shortDescription: null,
+          installed: false,
+          enabled: false,
+          availability: "DISABLED_BY_ADMIN",
+          sourceType: "remote"
+        }
+      ],
+      pluginMarketplaceErrors: []
     });
   });
 
