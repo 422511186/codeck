@@ -766,6 +766,7 @@ pre {
 
 .account-control-panel button,
 .remote-control-panel button,
+.app-control-panel button,
 .mcp-control-panel button,
 .plugin-control-panel button,
 .skill-control-panel button {
@@ -794,6 +795,7 @@ pre {
 }
 
 .plugin-control-panel,
+.app-control-panel,
 .hook-control-panel,
 .mcp-control-panel,
 .skill-control-panel {

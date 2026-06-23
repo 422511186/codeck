@@ -247,6 +247,23 @@ export type MobilePluginInstallResultView = {
   }>;
 };
 
+export type MobileAppView = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  developer: string | null;
+  installUrl: string | null;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  pluginDisplayNames: string[];
+};
+
+export type MobileAppPage = {
+  apps: MobileAppView[];
+  nextCursor: string | null;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";

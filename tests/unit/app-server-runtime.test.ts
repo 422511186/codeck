@@ -576,6 +576,28 @@ describe("createAppServerGateway", () => {
     await expect(gateway.uninstallPlugin("browser-tools")).resolves.toBeUndefined();
   });
 
+  it("mock 模式支持读取 Apps 列表", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.listApps()).resolves.toEqual({
+      apps: [
+        {
+          id: "browser-app",
+          name: "Browser",
+          description: "浏览器应用",
+          category: "tool",
+          developer: "OpenAI",
+          installUrl: null,
+          isAccessible: true,
+          isEnabled: true,
+          pluginDisplayNames: ["浏览器工具"]
+        }
+      ],
+      nextCursor: null
+    });
+  });
+
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

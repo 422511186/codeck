@@ -3,6 +3,9 @@ import path from "node:path";
 import type { InitializeParams } from "../../../docs/generated/app-server-ts/InitializeParams";
 import type { InitializeResponse } from "../../../docs/generated/app-server-ts/InitializeResponse";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
+import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
+import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
+import type { AppsListResponse } from "../../../docs/generated/app-server-ts/v2/AppsListResponse";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
@@ -117,6 +120,8 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileAppPage,
+  MobileAppView,
   MobileBackgroundTerminalPage,
   MobileCollaborationModeView,
   MobileFileContent,
@@ -246,6 +251,13 @@ export type ListThreadBackgroundTerminalsInput = {
   threadId: string;
   cursor?: string | null;
   limit?: number | null;
+};
+
+export type ListAppsInput = {
+  cursor?: string | null;
+  limit?: number | null;
+  threadId?: string | null;
+  forceRefetch?: boolean;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -399,6 +411,20 @@ function backgroundTerminalPage(response: ThreadBackgroundTerminalsListResponse)
       rssKb: nullableNumber(terminal.rssKb)
     })),
     nextCursor: response.nextCursor
+  };
+}
+
+function appView(app: AppInfo): MobileAppView {
+  return {
+    id: app.id,
+    name: app.name,
+    description: app.description,
+    category: app.branding?.category ?? app.appMetadata?.categories?.[0] ?? null,
+    developer: app.branding?.developer ?? app.appMetadata?.developer ?? null,
+    installUrl: app.installUrl,
+    isAccessible: app.isAccessible,
+    isEnabled: app.isEnabled,
+    pluginDisplayNames: app.pluginDisplayNames
   };
 }
 
@@ -876,6 +902,20 @@ export class CodexAppServerClient {
   async uninstallPlugin(pluginId: string): Promise<void> {
     const params: PluginUninstallParams = { pluginId };
     await this.peer.request("plugin/uninstall", params);
+  }
+
+  async listApps(input: ListAppsInput = {}): Promise<MobileAppPage> {
+    const params: AppsListParams = {
+      cursor: input.cursor,
+      limit: input.limit,
+      threadId: input.threadId,
+      forceRefetch: input.forceRefetch
+    };
+    const response = (await this.peer.request("app/list", params)) as AppsListResponse;
+    return {
+      apps: response.data.map(appView),
+      nextCursor: response.nextCursor
+    };
   }
 
   async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {

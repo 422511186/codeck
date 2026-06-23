@@ -98,6 +98,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("Hook 警告：hook 即将迁移")).toBeVisible();
   await expect(page.getByText("1 个已安装 / 2 个插件")).toBeVisible();
   await expect(page.getByText("浏览器工具 / review-pack")).toBeVisible();
+  await page.getByRole("button", { name: "刷新 Apps" }).click();
+  await expect(page.getByText("Browser")).toBeVisible();
+  await expect(page.getByText("可用 / 已启用")).toBeVisible();
+  await expect(page.getByText("浏览器工具").last()).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
   await page.getByPlaceholder("给 Codex 发送消息").fill("生成 diff");

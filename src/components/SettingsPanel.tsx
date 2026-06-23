@@ -7,6 +7,7 @@ import {
   enableRemoteControl,
   getAccountTokenUsage,
   installPlugin,
+  listApps,
   loginWithApiKey,
   loginWithChatGpt,
   loginMcpServer,
@@ -26,6 +27,7 @@ import {
 } from "../lib/client-api";
 import type {
   MobileAccountTokenUsageView,
+  MobileAppView,
   MobileModelOption,
   MobileMcpResourceReadView,
   MobilePluginDetailView,
@@ -182,6 +184,8 @@ export function SettingsPanel({
   const [pairingClaimed, setPairingClaimed] = useState<boolean | null>(null);
   const [pluginDetail, setPluginDetail] = useState<MobilePluginDetailView | null>(null);
   const [pluginNotice, setPluginNotice] = useState("");
+  const [apps, setApps] = useState<MobileAppView[]>([]);
+  const [appsNotice, setAppsNotice] = useState("");
   const [skillRootText, setSkillRootText] = useState("");
   const [skillNotice, setSkillNotice] = useState("");
   const [pluginSkillContent, setPluginSkillContent] = useState("");
@@ -508,6 +512,21 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法卸载插件");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleListApps() {
+    setRemoteBusy(true);
+    setError("");
+    setAppsNotice("");
+    try {
+      const page = await listApps();
+      setApps(page.apps);
+      setAppsNotice(page.apps.length ? `${page.apps.length} 个 Apps` : "没有 Apps");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取 Apps 列表");
     } finally {
       setRemoteBusy(false);
     }
@@ -894,6 +913,46 @@ export function SettingsPanel({
           ) : null}
           {pluginSkillContent ? <pre className="settings-code">{pluginSkillContent}</pre> : null}
           {pluginNotice ? <p className="settings-note">{pluginNotice}</p> : null}
+        </div>
+      ) : null}
+      {settings ? (
+        <div className="app-control-panel">
+          <button type="button" className="remote-client-button" onClick={handleListApps} disabled={remoteBusy}>
+            刷新 Apps
+          </button>
+          {apps.length ? (
+            <div className="skill-control-panel">
+              {apps.map((app) => (
+                <dl className="settings-list" key={app.id}>
+                  <div className="settings-row">
+                    <dt>App</dt>
+                    <dd>{app.name}</dd>
+                  </div>
+                  <div className="settings-row">
+                    <dt>描述</dt>
+                    <dd>{app.description || "-"}</dd>
+                  </div>
+                  <div className="settings-row">
+                    <dt>状态</dt>
+                    <dd>{`${app.isAccessible ? "可用" : "不可用"} / ${app.isEnabled ? "已启用" : "已禁用"}`}</dd>
+                  </div>
+                  <div className="settings-row">
+                    <dt>分类</dt>
+                    <dd>{app.category || "-"}</dd>
+                  </div>
+                  <div className="settings-row">
+                    <dt>开发者</dt>
+                    <dd>{app.developer || "-"}</dd>
+                  </div>
+                  <div className="settings-row">
+                    <dt>插件</dt>
+                    <dd>{app.pluginDisplayNames.length ? app.pluginDisplayNames.join(" / ") : "-"}</dd>
+                  </div>
+                </dl>
+              ))}
+            </div>
+          ) : null}
+          {appsNotice ? <p className="settings-note">{appsNotice}</p> : null}
         </div>
       ) : null}
       {settings ? (

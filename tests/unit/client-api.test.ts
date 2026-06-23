@@ -13,6 +13,7 @@ import {
   getAccountTokenUsage,
   installPlugin,
   cleanThreadBackgroundTerminals,
+  listApps,
   listThreadBackgroundTerminals,
   listThreads,
   loginMcpServer,
@@ -556,6 +557,48 @@ describe("client-api", () => {
       })
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/plugins/browser-tools/uninstall", { method: "POST" });
+  });
+
+  it("读取 Apps 列表时调用 apps 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        apps: [
+          {
+            id: "browser-app",
+            name: "Browser",
+            description: "控制浏览器",
+            category: "tool",
+            developer: "OpenAI",
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: ["浏览器工具"]
+          }
+        ],
+        nextCursor: null
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listApps()).resolves.toEqual({
+      apps: [
+        {
+          id: "browser-app",
+          name: "Browser",
+          description: "控制浏览器",
+          category: "tool",
+          developer: "OpenAI",
+          installUrl: null,
+          isAccessible: true,
+          isEnabled: true,
+          pluginDisplayNames: ["浏览器工具"]
+        }
+      ],
+      nextCursor: null
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/apps", { cache: "no-store" });
   });
 
   it("读取插件 Skill、设置额外根目录和写入 Skill 配置时调用 Skills 端点", async () => {

@@ -926,6 +926,36 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "app/list") {
+      return {
+        data: [
+          {
+            id: "browser-app",
+            name: "Browser",
+            description: "控制浏览器。",
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: "plugin",
+            branding: {
+              category: "tool",
+              developer: "OpenAI",
+              website: null,
+              privacyPolicy: null,
+              termsOfService: null,
+              isDiscoverableApp: true
+            },
+            appMetadata: null,
+            labels: { beta: "true" },
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: ["浏览器工具"]
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
     if (method === "plugin/skill/read") {
       return { contents: "# browser:control\n\n控制浏览器。" };
     }
@@ -1772,6 +1802,30 @@ describe("CodexAppServerClient", () => {
         { method: "plugin/uninstall", params: { pluginId: "browser-tools" } }
       ])
     );
+  });
+
+  it("能读取 Apps 列表", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listApps()).resolves.toEqual({
+      apps: [
+        {
+          id: "browser-app",
+          name: "Browser",
+          description: "控制浏览器。",
+          category: "tool",
+          developer: "OpenAI",
+          installUrl: null,
+          isAccessible: true,
+          isEnabled: true,
+          pluginDisplayNames: ["浏览器工具"]
+        }
+      ],
+      nextCursor: null
+    });
+
+    expect(peer.calls.at(-1)).toEqual({ method: "app/list", params: { cursor: undefined, limit: undefined, threadId: undefined, forceRefetch: undefined } });
   });
 
   it("能读取插件 Skill、设置额外根目录并写入 Skill 配置", async () => {

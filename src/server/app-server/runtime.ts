@@ -9,6 +9,7 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileAppPage,
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
   MobileMcpLoginView,
@@ -34,6 +35,7 @@ import {
   CodexAppServerClient,
   type AppServerPeer,
   type ExecCommandInput,
+  type ListAppsInput,
   type ListThreadBackgroundTerminalsInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
@@ -1224,6 +1226,36 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {};
     }
 
+    if (method === "app/list") {
+      return {
+        data: [
+          {
+            id: "browser-app",
+            name: "Browser",
+            description: "浏览器应用",
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: "plugin",
+            branding: {
+              category: "tool",
+              developer: "OpenAI",
+              website: null,
+              privacyPolicy: null,
+              termsOfService: null,
+              isDiscoverableApp: true
+            },
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: ["浏览器工具"]
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
     if (method === "plugin/skill/read") {
       return { contents: "# browser:control\n\n控制浏览器。" };
     }
@@ -1871,6 +1903,11 @@ export class AppServerGateway {
   async uninstallPlugin(pluginId: string): Promise<void> {
     await this.ensureReady();
     return this.client.uninstallPlugin(pluginId);
+  }
+
+  async listApps(input: ListAppsInput = {}): Promise<MobileAppPage> {
+    await this.ensureReady();
+    return this.client.listApps(input);
   }
 
   async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {
