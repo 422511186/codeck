@@ -997,7 +997,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
-    if (method === "account/tokenUsage/read") {
+    if (method === "account/usage/read") {
       return {
         summary: {
           lifetimeTokens: 123456n,
@@ -1010,7 +1010,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
-    if (method === "account/addCreditsNudge/sendEmail") {
+    if (method === "account/sendAddCreditsNudgeEmail") {
       return { status: "sent" };
     }
 
@@ -1038,17 +1038,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
-    if (method === "mcpServer/refresh") {
+    if (method === "config/mcpServer/reload") {
       return {};
     }
 
-    if (method === "mcpServer/oauthLogin") {
+    if (method === "mcpServer/oauth/login") {
       return {
         authorizationUrl: "https://example.com/mcp/github/oauth"
       };
     }
 
-    if (method === "mcp/resource/read") {
+    if (method === "mcpServer/resource/read") {
       return {
         contents: [
           {

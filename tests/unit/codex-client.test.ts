@@ -666,7 +666,7 @@ class FakePeer implements AppServerPeer {
       };
     }
 
-    if (method === "account/tokenUsage/read") {
+    if (method === "account/usage/read") {
       return {
         summary: {
           lifetimeTokens: 123456n,
@@ -679,7 +679,7 @@ class FakePeer implements AppServerPeer {
       };
     }
 
-    if (method === "account/addCreditsNudge/sendEmail") {
+    if (method === "account/sendAddCreditsNudgeEmail") {
       return { status: "sent" };
     }
 
@@ -707,15 +707,15 @@ class FakePeer implements AppServerPeer {
       };
     }
 
-    if (method === "mcpServer/refresh") {
+    if (method === "config/mcpServer/reload") {
       return {};
     }
 
-    if (method === "mcpServer/oauthLogin") {
+    if (method === "mcpServer/oauth/login") {
       return { authorizationUrl: "https://example.com/mcp/oauth" };
     }
 
-    if (method === "mcp/resource/read") {
+    if (method === "mcpServer/resource/read") {
       return {
         contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README" }]
       };
@@ -1650,10 +1650,10 @@ describe("CodexAppServerClient", () => {
     });
 
     expect(peer.calls.slice(-3)).toEqual([
-      { method: "mcpServer/refresh", params: undefined },
-      { method: "mcpServer/oauthLogin", params: { name: "github" } },
+      { method: "config/mcpServer/reload", params: undefined },
+      { method: "mcpServer/oauth/login", params: { name: "github" } },
       {
-        method: "mcp/resource/read",
+        method: "mcpServer/resource/read",
         params: { server: "filesystem", uri: "file:///README.md", threadId: "thread-1" }
       }
     ]);
@@ -1676,8 +1676,8 @@ describe("CodexAppServerClient", () => {
     await expect(client.sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
 
     expect(peer.calls.slice(-2)).toEqual([
-      { method: "account/tokenUsage/read", params: undefined },
-      { method: "account/addCreditsNudge/sendEmail", params: { creditType: "credits" } }
+      { method: "account/usage/read", params: undefined },
+      { method: "account/sendAddCreditsNudgeEmail", params: { creditType: "credits" } }
     ]);
   });
 

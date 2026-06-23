@@ -845,7 +845,7 @@ export class CodexAppServerClient {
   }
 
   async getAccountTokenUsage(): Promise<MobileAccountTokenUsageView> {
-    const response = (await this.peer.request("account/tokenUsage/read", undefined)) as GetAccountTokenUsageResponse;
+    const response = (await this.peer.request("account/usage/read", undefined)) as GetAccountTokenUsageResponse;
     return accountTokenUsageView(response);
   }
 
@@ -854,7 +854,7 @@ export class CodexAppServerClient {
   ): Promise<MobileAddCreditsNudgeResultView> {
     const params: SendAddCreditsNudgeEmailParams = { creditType };
     return (await this.peer.request(
-      "account/addCreditsNudge/sendEmail",
+      "account/sendAddCreditsNudgeEmail",
       params
     )) as SendAddCreditsNudgeEmailResponse;
   }
@@ -904,12 +904,12 @@ export class CodexAppServerClient {
   }
 
   async refreshMcpServer(): Promise<void> {
-    await this.peer.request("mcpServer/refresh", undefined);
+    await this.peer.request("config/mcpServer/reload", undefined);
   }
 
   async loginMcpServer(serverName: string): Promise<MobileMcpLoginView> {
     const params: McpServerOauthLoginParams = { name: serverName };
-    const response = (await this.peer.request("mcpServer/oauthLogin", params)) as McpServerOauthLoginResponse;
+    const response = (await this.peer.request("mcpServer/oauth/login", params)) as McpServerOauthLoginResponse;
     return { authorizationUrl: response.authorizationUrl };
   }
 
@@ -919,7 +919,7 @@ export class CodexAppServerClient {
       uri: input.uri,
       threadId: input.threadId ?? null
     };
-    const response = (await this.peer.request("mcp/resource/read", params)) as McpResourceReadResponse;
+    const response = (await this.peer.request("mcpServer/resource/read", params)) as McpResourceReadResponse;
     return mcpResourceReadView(response);
   }
 
