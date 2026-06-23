@@ -887,6 +887,14 @@ describe("createAppServerGateway", () => {
     await expect(gateway.runThreadShellCommand("mock-thread-1", "npm test")).resolves.toBeUndefined();
   });
 
+  it("mock 模式支持调整会话 elicitation 计数", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.incrementThreadElicitation("mock-thread-1")).resolves.toEqual({ count: 1, paused: true });
+    await expect(gateway.decrementThreadElicitation("mock-thread-1")).resolves.toEqual({ count: 0, paused: false });
+  });
+
   it("mock 模式支持归档、恢复归档和删除会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

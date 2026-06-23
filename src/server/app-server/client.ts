@@ -108,6 +108,10 @@ import type { ThreadBackgroundTerminalsTerminateParams } from "../../../docs/gen
 import type { ThreadBackgroundTerminalsTerminateResponse } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsTerminateResponse";
 import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
 import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
+import type { ThreadDecrementElicitationParams } from "../../../docs/generated/app-server-ts/v2/ThreadDecrementElicitationParams";
+import type { ThreadDecrementElicitationResponse } from "../../../docs/generated/app-server-ts/v2/ThreadDecrementElicitationResponse";
+import type { ThreadIncrementElicitationParams } from "../../../docs/generated/app-server-ts/v2/ThreadIncrementElicitationParams";
+import type { ThreadIncrementElicitationResponse } from "../../../docs/generated/app-server-ts/v2/ThreadIncrementElicitationResponse";
 import type { ThreadGoal } from "../../../docs/generated/app-server-ts/v2/ThreadGoal";
 import type { ThreadGoalClearParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalClearParams";
 import type { ThreadGoalGetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalGetParams";
@@ -195,6 +199,7 @@ import type {
   MobileSkillConfigWriteResultView,
   MobileSkillErrorView,
   MobileSkillView,
+  MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
@@ -340,6 +345,15 @@ function configWriteResultView(response: ConfigWriteResponse): MobileConfigWrite
     status: String(response.status),
     version: response.version,
     filePath: response.filePath
+  };
+}
+
+function elicitationResultView(
+  response: ThreadIncrementElicitationResponse | ThreadDecrementElicitationResponse
+): MobileThreadElicitationResult {
+  return {
+    count: Number(response.count),
+    paused: response.paused
   };
 }
 
@@ -991,6 +1005,24 @@ export class CodexAppServerClient {
   async runThreadShellCommand(threadId: string, command: string): Promise<void> {
     const params: ThreadShellCommandParams = { threadId, command };
     await this.peer.request("thread/shellCommand", params);
+  }
+
+  async incrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+    const params: ThreadIncrementElicitationParams = { threadId };
+    const response = (await this.peer.request(
+      "thread/increment_elicitation",
+      params
+    )) as ThreadIncrementElicitationResponse;
+    return elicitationResultView(response);
+  }
+
+  async decrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+    const params: ThreadDecrementElicitationParams = { threadId };
+    const response = (await this.peer.request(
+      "thread/decrement_elicitation",
+      params
+    )) as ThreadDecrementElicitationResponse;
+    return elicitationResultView(response);
   }
 
   async deleteThread(threadId: string): Promise<void> {

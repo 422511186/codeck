@@ -417,6 +417,11 @@ export type MobileThreadUnsubscribeResult = {
   status: "notLoaded" | "notSubscribed" | "unsubscribed";
 };
 
+export type MobileThreadElicitationResult = {
+  count: number;
+  paused: boolean;
+};
+
 export type MobileSettingsView = {
   model: string | null;
   modelProvider: string | null;

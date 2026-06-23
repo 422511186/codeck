@@ -6,6 +6,7 @@ import {
   compactThread,
   copyPath,
   createDirectory,
+  decrementThreadElicitation,
   deleteThread,
   disableRemoteControl,
   enableRemoteControl,
@@ -14,6 +15,7 @@ import {
   getAuthStatus,
   getConversationSummary,
   gitDiffToRemote,
+  incrementThreadElicitation,
   installPlugin,
   cleanThreadBackgroundTerminals,
   getConfigRequirements,
@@ -312,6 +314,29 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ command: "npm test" })
+    });
+  });
+
+  it("调整会话 elicitation 计数时调用 elicitation 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { count: 1, paused: true } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { count: 0, paused: false } })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(incrementThreadElicitation("thread-1")).resolves.toEqual({ count: 1, paused: true });
+    await expect(decrementThreadElicitation("thread-1")).resolves.toEqual({ count: 0, paused: false });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/elicitation/increment", {
+      method: "POST"
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/elicitation/decrement", {
+      method: "POST"
     });
   });
 

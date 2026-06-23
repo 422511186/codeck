@@ -31,6 +31,7 @@ import type {
   MobileSkillConfigWriteResultView,
   MobileTerminalSession,
   MobileThreadDetail,
+  MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadPage,
   MobileThreadSummary,
@@ -360,6 +361,32 @@ export async function runThreadShellCommand(threadId: string, command: string): 
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法执行会话 shell command");
   }
+}
+
+export async function incrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/elicitation/increment`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法增加 elicitation 计数");
+  }
+
+  const payload = (await response.json()) as { result: MobileThreadElicitationResult };
+  return payload.result;
+}
+
+export async function decrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/elicitation/decrement`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法减少 elicitation 计数");
+  }
+
+  const payload = (await response.json()) as { result: MobileThreadElicitationResult };
+  return payload.result;
 }
 
 export async function deleteThread(threadId: string): Promise<void> {

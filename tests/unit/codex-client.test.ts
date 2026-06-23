@@ -472,6 +472,14 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/increment_elicitation") {
+      return { count: 1n, paused: true };
+    }
+
+    if (method === "thread/decrement_elicitation") {
+      return { count: 0n, paused: false };
+    }
+
     if (method === "thread/settings/update") {
       return {};
     }
@@ -1507,6 +1515,19 @@ describe("CodexAppServerClient", () => {
       method: "thread/shellCommand",
       params: { threadId: "thread-1", command: "npm test -- --runInBand" }
     });
+  });
+
+  it("能增加和减少会话 elicitation 计数", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.incrementThreadElicitation("thread-1")).resolves.toEqual({ count: 1, paused: true });
+    await expect(client.decrementThreadElicitation("thread-1")).resolves.toEqual({ count: 0, paused: false });
+
+    expect(peer.calls.slice(-2)).toEqual([
+      { method: "thread/increment_elicitation", params: { threadId: "thread-1" } },
+      { method: "thread/decrement_elicitation", params: { threadId: "thread-1" } }
+    ]);
   });
 
   it("能更新当前会话设置", async () => {

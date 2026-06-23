@@ -31,6 +31,7 @@ import type {
   MobileSettingsView,
   MobileSkillConfigWriteResultView,
   MobileTerminalSession,
+  MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
@@ -212,6 +213,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private readonly mockCommandExecs = new Map<string, MockCommandExec>();
   private readonly mockFsWatches = new Map<string, string>();
   private readonly mockFileSearchSessions = new Set<string>();
+  private readonly mockElicitationCounts = new Map<string, number>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -702,6 +704,22 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const shellParams = params as { threadId?: string; command?: string };
       this.selectThread(shellParams.threadId);
       return {};
+    }
+
+    if (method === "thread/increment_elicitation") {
+      const elicitationParams = params as { threadId?: string };
+      this.selectThread(elicitationParams.threadId);
+      const count = (this.mockElicitationCounts.get(this.thread.id) ?? 0) + 1;
+      this.mockElicitationCounts.set(this.thread.id, count);
+      return { count: BigInt(count), paused: count > 0 };
+    }
+
+    if (method === "thread/decrement_elicitation") {
+      const elicitationParams = params as { threadId?: string };
+      this.selectThread(elicitationParams.threadId);
+      const count = Math.max(0, (this.mockElicitationCounts.get(this.thread.id) ?? 0) - 1);
+      this.mockElicitationCounts.set(this.thread.id, count);
+      return { count: BigInt(count), paused: count > 0 };
     }
 
     if (method === "thread/delete") {
@@ -2272,6 +2290,16 @@ export class AppServerGateway {
   async runThreadShellCommand(threadId: string, command: string): Promise<void> {
     await this.ensureReady();
     await this.client.runThreadShellCommand(threadId, command);
+  }
+
+  async incrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+    await this.ensureReady();
+    return this.client.incrementThreadElicitation(threadId);
+  }
+
+  async decrementThreadElicitation(threadId: string): Promise<MobileThreadElicitationResult> {
+    await this.ensureReady();
+    return this.client.decrementThreadElicitation(threadId);
   }
 
   async deleteThread(threadId: string): Promise<void> {
