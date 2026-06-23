@@ -6,9 +6,14 @@ import {
   execCommand,
   killProcessSession,
   listThreadBackgroundTerminals,
+  readCommandExecSession,
   readProcessSession,
+  resizeCommandExecSession,
+  startCommandExecSession,
   startProcessSession,
+  terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
+  writeCommandExecStdin,
   writeProcessStdin
 } from "../lib/client-api";
 import type { MobileBackgroundTerminalView, MobileCommandResult, MobileTerminalSession } from "../shared/codex";
@@ -28,8 +33,10 @@ function parseCommand(commandLine: string): string[] {
 export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
   const [commandLine, setCommandLine] = useState("npm --version");
   const [stdinText, setStdinText] = useState("");
+  const [execStdinText, setExecStdinText] = useState("");
   const [result, setResult] = useState<MobileCommandResult | null>(null);
   const [session, setSession] = useState<MobileTerminalSession | null>(null);
+  const [execSession, setExecSession] = useState<MobileTerminalSession | null>(null);
   const [backgroundTerminals, setBackgroundTerminals] = useState<MobileBackgroundTerminalView[]>([]);
   const [backgroundNotice, setBackgroundNotice] = useState("");
   const [running, setRunning] = useState(false);
@@ -54,6 +61,26 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
 
     return () => window.clearInterval(interval);
   }, [session?.processHandle]);
+
+  useEffect(() => {
+    if (!execSession) {
+      return;
+    }
+
+    const interval = window.setInterval(async () => {
+      try {
+        const nextSession = await readCommandExecSession(execSession.processHandle);
+        setExecSession(nextSession);
+        if (!nextSession.running) {
+          window.clearInterval(interval);
+        }
+      } catch {
+        window.clearInterval(interval);
+      }
+    }, 500);
+
+    return () => window.clearInterval(interval);
+  }, [execSession?.processHandle]);
 
   async function handleRun() {
     const command = parseCommand(commandLine);
@@ -95,6 +122,28 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
     }
   }
 
+  async function handleStartCommandExecSession() {
+    const command = parseCommand(commandLine);
+    if (!command.length) {
+      setError("命令不能为空");
+      return;
+    }
+
+    setRunning(true);
+    setError("");
+    try {
+      const nextSession = await startCommandExecSession({ command, cwd });
+      setExecSession(nextSession);
+      window.setTimeout(async () => {
+        setExecSession(await readCommandExecSession(nextSession.processHandle));
+      }, 50);
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "无法启动 Exec 会话");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   async function handleWriteStdin() {
     if (!session || !stdinText) {
       return;
@@ -121,6 +170,55 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
       setSession(await readProcessSession(session.processHandle));
     } catch (killError) {
       setError(killError instanceof Error ? killError.message : "无法终止终端会话");
+    }
+  }
+
+  async function handleWriteCommandExecStdin() {
+    if (!execSession || !execStdinText) {
+      return;
+    }
+
+    setError("");
+    try {
+      await writeCommandExecStdin(
+        execSession.processHandle,
+        execStdinText.endsWith("\n") ? execStdinText : `${execStdinText}\n`
+      );
+      setExecStdinText("");
+      setExecSession(await readCommandExecSession(execSession.processHandle));
+    } catch (writeError) {
+      setError(writeError instanceof Error ? writeError.message : "无法写入 Exec 输入");
+    }
+  }
+
+  async function handleResizeCommandExecSession() {
+    if (!execSession) {
+      return;
+    }
+
+    setError("");
+    try {
+      await resizeCommandExecSession(execSession.processHandle, 100, 30);
+      setExecSession(await readCommandExecSession(execSession.processHandle));
+    } catch (resizeError) {
+      setError(resizeError instanceof Error ? resizeError.message : "无法调整 Exec 尺寸");
+    }
+  }
+
+  async function handleTerminateCommandExecSession() {
+    if (!execSession) {
+      return;
+    }
+
+    const previousSession = execSession;
+    setExecSession({ ...previousSession, exitCode: 143, running: false });
+    setError("");
+    try {
+      await terminateCommandExecSession(previousSession.processHandle);
+      setExecSession(await readCommandExecSession(previousSession.processHandle));
+    } catch (terminateError) {
+      setExecSession(previousSession);
+      setError(terminateError instanceof Error ? terminateError.message : "无法终止 Exec 会话");
     }
   }
 
@@ -197,6 +295,9 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
       <button className="terminal-session-button" type="button" onClick={handleStartSession} disabled={running}>
         启动会话
       </button>
+      <button className="terminal-session-button" type="button" onClick={handleStartCommandExecSession} disabled={running}>
+        启动 Exec 会话
+      </button>
       {error ? <p className="form-error">{error}</p> : null}
       {result ? (
         <article className="terminal-output">
@@ -229,6 +330,48 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
           <button className="terminal-session-button" type="button" onClick={handleKillSession} disabled={!session.running}>
             终止会话
           </button>
+        </article>
+      ) : null}
+      {execSession ? (
+        <article className="terminal-output">
+          <p>{execSession.running ? "Exec 运行中" : `Exec 已退出 ${execSession.exitCode ?? "-"}`}</p>
+          <pre>{execSession.output || "等待 Exec 输出"}</pre>
+          <form
+            className="terminal-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleWriteCommandExecStdin();
+            }}
+          >
+            <input
+              aria-label="输入 exec stdin"
+              placeholder="输入 exec stdin"
+              value={execStdinText}
+              onChange={(event) => setExecStdinText(event.target.value)}
+              disabled={!execSession.running}
+            />
+            <button type="submit" disabled={!execSession.running || !execStdinText}>
+              发送 Exec 输入
+            </button>
+          </form>
+          <div className="turn-actions-row">
+            <button
+              className="terminal-session-button"
+              type="button"
+              onClick={handleResizeCommandExecSession}
+              disabled={!execSession.running}
+            >
+              调整 Exec 尺寸
+            </button>
+            <button
+              className="terminal-session-button"
+              type="button"
+              onClick={handleTerminateCommandExecSession}
+              disabled={!execSession.running}
+            >
+              终止 Exec 会话
+            </button>
+          </div>
         </article>
       ) : null}
       <div className="terminal-background-actions">

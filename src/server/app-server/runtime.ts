@@ -49,6 +49,7 @@ import {
   type SearchThreadsInput,
   type SearchFilesInput,
   type SetThreadGoalInput,
+  type StartCommandExecInput,
   type StartProcessInput,
   type StartThreadInput,
   type StartTurnInput,
@@ -79,6 +80,9 @@ import type { ReviewStartParams } from "../../../docs/generated/app-server-ts/v2
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
+import type { CommandExecResizeParams } from "../../../docs/generated/app-server-ts/v2/CommandExecResizeParams";
+import type { CommandExecTerminateParams } from "../../../docs/generated/app-server-ts/v2/CommandExecTerminateParams";
+import type { CommandExecWriteParams } from "../../../docs/generated/app-server-ts/v2/CommandExecWriteParams";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
 import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
@@ -100,6 +104,10 @@ type MockFsNode = {
   createdAtMs: number;
   modifiedAtMs: number;
   text?: string;
+};
+
+type MockCommandExec = {
+  resolve(response: MobileCommandResult): void;
 };
 
 class MockAppServerPeer implements ManagedAppServerPeer {
@@ -180,6 +188,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     ]
   ]);
   private readonly mockProcesses = new Set<string>();
+  private readonly mockCommandExecs = new Map<string, MockCommandExec>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -902,11 +911,49 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "command/exec") {
       const execParams = params as CommandExecParams;
+      if (execParams.processId && execParams.streamStdoutStderr) {
+        const processId = execParams.processId;
+        setTimeout(() => {
+          if (this.mockCommandExecs.has(processId)) {
+            this.emitCommandExecOutput(
+              processId,
+              `mock command exec: ${execParams.command.join(" ")}\ncwd: ${execParams.cwd || this.thread.cwd}\n`
+            );
+          }
+        }, 5);
+        return new Promise<MobileCommandResult>((resolve) => {
+          this.mockCommandExecs.set(processId, { resolve });
+        });
+      }
+
       return {
         exitCode: 0,
         stdout: `mock command: ${execParams.command.join(" ")}\ncwd: ${execParams.cwd || this.thread.cwd}`,
         stderr: ""
       };
+    }
+
+    if (method === "command/exec/write") {
+      const writeParams = params as CommandExecWriteParams;
+      if (writeParams.deltaBase64) {
+        const text = Buffer.from(writeParams.deltaBase64, "base64").toString("utf8").trimEnd();
+        this.emitCommandExecOutput(writeParams.processId, `stdin: ${text}\n`);
+      }
+      return {};
+    }
+
+    if (method === "command/exec/resize") {
+      const resizeParams = params as CommandExecResizeParams;
+      this.emitCommandExecOutput(resizeParams.processId, `尺寸 ${resizeParams.size.cols}x${resizeParams.size.rows}\n`);
+      return {};
+    }
+
+    if (method === "command/exec/terminate") {
+      const terminateParams = params as CommandExecTerminateParams;
+      const commandExec = this.mockCommandExecs.get(terminateParams.processId);
+      this.mockCommandExecs.delete(terminateParams.processId);
+      commandExec?.resolve({ exitCode: 143, stdout: "", stderr: "" });
+      return {};
     }
 
     if (method === "process/spawn") {
@@ -1448,6 +1495,18 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     });
   }
 
+  private emitCommandExecOutput(processId: string, text: string): void {
+    this.emitNotification({
+      method: "command/exec/outputDelta",
+      params: {
+        processId,
+        stream: "stdout",
+        deltaBase64: Buffer.from(text, "utf8").toString("base64"),
+        capReached: false
+      }
+    });
+  }
+
   private emitServerRequest(message: AppServerServerRequestMessage): void {
     for (const handler of this.serverRequestHandlers) {
       handler(message);
@@ -1782,12 +1841,15 @@ export class AppServerGateway {
   private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void>();
   private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
   private readonly terminalSessions = new Map<string, MobileTerminalSession>();
+  private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
   private processCounter = 0;
+  private commandExecCounter = 0;
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
     this.peer.onNotification((message) => {
       this.recordProcessNotification(message);
+      this.recordCommandExecNotification(message);
       const event = normalizeAppServerNotification(message);
       if (!event) {
         return;
@@ -1861,6 +1923,26 @@ export class AppServerGateway {
         output: `${session.output}${stdout}${stderr}`,
         exitCode: typeof params.exitCode === "number" ? params.exitCode : null,
         running: false
+      });
+    }
+  }
+
+  private recordCommandExecNotification(message: AppServerNotificationMessage): void {
+    const params = message.params as Record<string, unknown> | null | undefined;
+    if (!params || typeof params.processId !== "string") {
+      return;
+    }
+
+    const session = this.commandExecSessions.get(params.processId);
+    if (!session) {
+      return;
+    }
+
+    if (message.method === "command/exec/outputDelta" && typeof params.deltaBase64 === "string") {
+      const delta = Buffer.from(params.deltaBase64, "base64").toString("utf8");
+      this.commandExecSessions.set(params.processId, {
+        ...session,
+        output: `${session.output}${delta}`
       });
     }
   }
@@ -2152,6 +2234,71 @@ export class AppServerGateway {
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
     await this.ensureReady();
     return this.client.execCommand(input);
+  }
+
+  async startCommandExecSession(input: Omit<StartCommandExecInput, "processId">): Promise<MobileTerminalSession> {
+    await this.ensureReady();
+    const processId = `mobile-command-${++this.commandExecCounter}`;
+    const session: MobileTerminalSession = {
+      processHandle: processId,
+      cwd: input.cwd,
+      command: input.command,
+      output: "",
+      exitCode: null,
+      running: true
+    };
+    this.commandExecSessions.set(processId, session);
+    this.client
+      .startCommandExec({ ...input, processId })
+      .then((result) => {
+        const current = this.commandExecSessions.get(processId);
+        if (!current) {
+          return;
+        }
+        this.commandExecSessions.set(processId, {
+          ...current,
+          output: `${current.output}${result.stdout}${result.stderr}`,
+          exitCode: result.exitCode,
+          running: false
+        });
+      })
+      .catch((error) => {
+        const current = this.commandExecSessions.get(processId);
+        if (!current) {
+          return;
+        }
+        this.commandExecSessions.set(processId, {
+          ...current,
+          output: `${current.output}${error instanceof Error ? error.message : "command exec 失败"}`,
+          exitCode: 1,
+          running: false
+        });
+      });
+    return this.commandExecSessions.get(processId) ?? session;
+  }
+
+  async writeCommandExecStdin(processId: string, text: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.writeCommandExec(processId, text);
+  }
+
+  async resizeCommandExecSession(processId: string, cols: number, rows: number): Promise<void> {
+    await this.ensureReady();
+    await this.client.resizeCommandExec(processId, cols, rows);
+  }
+
+  async terminateCommandExecSession(processId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.terminateCommandExec(processId);
+  }
+
+  async readCommandExecSession(processId: string): Promise<MobileTerminalSession> {
+    await this.ensureReady();
+    const session = this.commandExecSessions.get(processId);
+    if (!session) {
+      throw new Error("找不到 command exec 会话");
+    }
+    return session;
   }
 
   async startProcessSession(input: Omit<StartProcessInput, "processHandle">): Promise<MobileTerminalSession> {

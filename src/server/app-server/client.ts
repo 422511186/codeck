@@ -10,7 +10,10 @@ import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
 import type { AppsListResponse } from "../../../docs/generated/app-server-ts/v2/AppsListResponse";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
+import type { CommandExecResizeParams } from "../../../docs/generated/app-server-ts/v2/CommandExecResizeParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
+import type { CommandExecTerminateParams } from "../../../docs/generated/app-server-ts/v2/CommandExecTerminateParams";
+import type { CommandExecWriteParams } from "../../../docs/generated/app-server-ts/v2/CommandExecWriteParams";
 import type { ConfigRequirements } from "../../../docs/generated/app-server-ts/v2/ConfigRequirements";
 import type { ConfigRequirementsReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigRequirementsReadResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
@@ -201,6 +204,12 @@ export type ExecCommandInput = {
   command: string[];
   cwd?: string;
   timeoutMs?: number;
+};
+
+export type StartCommandExecInput = {
+  processId: string;
+  command: string[];
+  cwd: string;
 };
 
 export type SearchFilesInput = {
@@ -1225,6 +1234,48 @@ export class CodexAppServerClient {
       stdout: response.stdout,
       stderr: response.stderr
     };
+  }
+
+  async startCommandExec(input: StartCommandExecInput): Promise<MobileCommandResult> {
+    const params: CommandExecParams = {
+      processId: input.processId,
+      command: input.command,
+      cwd: input.cwd,
+      tty: true,
+      streamStdin: true,
+      streamStdoutStderr: true,
+      timeoutMs: null,
+      size: { cols: 80, rows: 24 }
+    };
+    const response = (await this.peer.request("command/exec", params)) as CommandExecResponse;
+
+    return {
+      exitCode: response.exitCode,
+      stdout: response.stdout,
+      stderr: response.stderr
+    };
+  }
+
+  async writeCommandExec(processId: string, text: string): Promise<void> {
+    const params: CommandExecWriteParams = {
+      processId,
+      deltaBase64: Buffer.from(text, "utf8").toString("base64"),
+      closeStdin: false
+    };
+    await this.peer.request("command/exec/write", params);
+  }
+
+  async resizeCommandExec(processId: string, cols: number, rows: number): Promise<void> {
+    const params: CommandExecResizeParams = {
+      processId,
+      size: { cols, rows }
+    };
+    await this.peer.request("command/exec/resize", params);
+  }
+
+  async terminateCommandExec(processId: string): Promise<void> {
+    const params: CommandExecTerminateParams = { processId };
+    await this.peer.request("command/exec/terminate", params);
   }
 
   async startProcess(input: StartProcessInput): Promise<void> {

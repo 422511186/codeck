@@ -825,6 +825,64 @@ export async function execCommand(input: {
   return payload.result;
 }
 
+export async function startCommandExecSession(input: { command: string[]; cwd: string }): Promise<MobileTerminalSession> {
+  const response = await fetch("/api/codex/command-exec/spawn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动 command exec 会话");
+  }
+
+  const payload = (await response.json()) as { session: MobileTerminalSession };
+  return payload.session;
+}
+
+export async function writeCommandExecStdin(processId: string, text: string): Promise<void> {
+  const response = await fetch(`/api/codex/command-exec/${encodeURIComponent(processId)}/stdin`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法写入 command exec 输入");
+  }
+}
+
+export async function resizeCommandExecSession(processId: string, cols: number, rows: number): Promise<void> {
+  const response = await fetch(`/api/codex/command-exec/${encodeURIComponent(processId)}/resize`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cols, rows })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法调整 command exec 尺寸");
+  }
+}
+
+export async function readCommandExecSession(processId: string): Promise<MobileTerminalSession> {
+  const response = await fetch(`/api/codex/command-exec/${encodeURIComponent(processId)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取 command exec 会话");
+  }
+
+  const payload = (await response.json()) as { session: MobileTerminalSession };
+  return payload.session;
+}
+
+export async function terminateCommandExecSession(processId: string): Promise<void> {
+  const response = await fetch(`/api/codex/command-exec/${encodeURIComponent(processId)}/terminate`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法终止 command exec 会话");
+  }
+}
+
 export async function startProcessSession(input: { command: string[]; cwd: string }): Promise<MobileTerminalSession> {
   const response = await fetch("/api/codex/process/spawn", {
     method: "POST",

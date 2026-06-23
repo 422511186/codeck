@@ -415,6 +415,42 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持 command exec 会话控制", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    const session = await gateway.startCommandExecSession({
+      command: ["node", "-i"],
+      cwd: "C:\\Users\\huang\\workspace"
+    });
+
+    expect(session).toMatchObject({
+      cwd: "C:\\Users\\huang\\workspace",
+      command: ["node", "-i"],
+      exitCode: null,
+      running: true
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(gateway.readCommandExecSession(session.processHandle)).resolves.toMatchObject({
+      output: expect.stringContaining("mock command exec: node -i"),
+      running: true
+    });
+
+    await gateway.writeCommandExecStdin(session.processHandle, "继续\n");
+    await gateway.resizeCommandExecSession(session.processHandle, 100, 30);
+    await expect(gateway.readCommandExecSession(session.processHandle)).resolves.toMatchObject({
+      output: expect.stringContaining("stdin: 继续"),
+      running: true
+    });
+
+    await gateway.terminateCommandExecSession(session.processHandle);
+    await expect(gateway.readCommandExecSession(session.processHandle)).resolves.toMatchObject({
+      exitCode: 143,
+      running: false
+    });
+  });
+
   it("mock 模式支持管理会话后台终端", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

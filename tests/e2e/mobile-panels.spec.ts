@@ -50,6 +50,15 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("stdin: 继续")).toBeVisible();
   await page.getByRole("button", { name: "终止会话" }).click();
   await expect(page.getByText("已退出 143")).toBeVisible();
+  await page.getByRole("button", { name: "启动 Exec 会话" }).click();
+  await expect(page.getByText("mock command exec: npm --version")).toBeVisible();
+  await page.getByPlaceholder("输入 exec stdin").fill("继续");
+  await page.getByRole("button", { name: "发送 Exec 输入" }).click();
+  await expect(page.getByText("stdin: 继续")).toBeVisible();
+  await page.getByRole("button", { name: "调整 Exec 尺寸" }).click();
+  await expect(page.getByText("尺寸 100x30")).toBeVisible();
+  await page.getByRole("button", { name: "终止 Exec 会话" }).click();
+  await expect(page.getByText("Exec 已退出 143")).toBeVisible();
   await page.getByRole("button", { name: "刷新后台终端" }).click();
   await expect(page.getByText("npm run dev")).toBeVisible();
   await expect(page.getByText("PID 4242")).toBeVisible();

@@ -580,6 +580,14 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (
+      method === "command/exec/write" ||
+      method === "command/exec/resize" ||
+      method === "command/exec/terminate"
+    ) {
+      return {};
+    }
+
     if (method === "process/spawn" || method === "process/writeStdin" || method === "process/kill") {
       return {};
     }
@@ -1536,6 +1544,54 @@ describe("CodexAppServerClient", () => {
       method: "command/exec",
       params: { command: ["npm", "--version"], cwd: "C:\\repo", timeoutMs: 30_000 }
     });
+  });
+
+  it("能启动并控制 command exec 会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.startCommandExec({
+        processId: "cmd-1",
+        command: ["node", "-i"],
+        cwd: "C:\\repo"
+      })
+    ).resolves.toEqual({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: ""
+    });
+    await expect(client.writeCommandExec("cmd-1", "继续\n")).resolves.toBeUndefined();
+    await expect(client.resizeCommandExec("cmd-1", 100, 30)).resolves.toBeUndefined();
+    await expect(client.terminateCommandExec("cmd-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-4)).toEqual([
+      {
+        method: "command/exec",
+        params: {
+          processId: "cmd-1",
+          command: ["node", "-i"],
+          cwd: "C:\\repo",
+          tty: true,
+          streamStdin: true,
+          streamStdoutStderr: true,
+          timeoutMs: null,
+          size: { cols: 80, rows: 24 }
+        }
+      },
+      {
+        method: "command/exec/write",
+        params: { processId: "cmd-1", deltaBase64: "57un57utCg==", closeStdin: false }
+      },
+      {
+        method: "command/exec/resize",
+        params: { processId: "cmd-1", size: { cols: 100, rows: 30 } }
+      },
+      {
+        method: "command/exec/terminate",
+        params: { processId: "cmd-1" }
+      }
+    ]);
   });
 
   it("能启动交互式终端会话、写入 stdin 并终止进程", async () => {

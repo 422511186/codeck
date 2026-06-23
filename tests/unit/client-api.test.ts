@@ -27,6 +27,7 @@ import {
   readPlugin,
   readPluginSkill,
   readMcpResource,
+  readCommandExecSession,
   readProcessSession,
   readRemoteControlPairingStatus,
   refreshMcpServer,
@@ -39,16 +40,20 @@ import {
   setThreadMemoryMode,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
+  startCommandExecSession,
   startWindowsSandboxSetup,
   startRemoteControlPairing,
   startProcessSession,
   startReview,
   uninstallPlugin,
   updateThreadSettings,
+  terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
   writeSkillConfig,
   writeFile,
+  writeCommandExecStdin,
   writeProcessStdin,
+  resizeCommandExecSession,
   killProcessSession
 } from "../../src/lib/client-api";
 
@@ -430,6 +435,72 @@ describe("client-api", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/process/mobile-process-1", { cache: "no-store" });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/process/mobile-process-1/kill", { method: "POST" });
+  });
+
+  it("管理 command exec 会话时调用 command-exec 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session: {
+            processHandle: "mobile-command-1",
+            cwd: "C:\\repo",
+            command: ["node", "-i"],
+            output: "",
+            exitCode: null,
+            running: true
+          }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          session: {
+            processHandle: "mobile-command-1",
+            cwd: "C:\\repo",
+            command: ["node", "-i"],
+            output: "command exec 输出",
+            exitCode: null,
+            running: true
+          }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startCommandExecSession({ command: ["node", "-i"], cwd: "C:\\repo" })).resolves.toMatchObject({
+      processHandle: "mobile-command-1",
+      running: true
+    });
+    await expect(writeCommandExecStdin("mobile-command-1", "继续\n")).resolves.toBeUndefined();
+    await expect(resizeCommandExecSession("mobile-command-1", 100, 30)).resolves.toBeUndefined();
+    await expect(readCommandExecSession("mobile-command-1")).resolves.toMatchObject({
+      output: "command exec 输出",
+      running: true
+    });
+    await expect(terminateCommandExecSession("mobile-command-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/command-exec/spawn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: ["node", "-i"], cwd: "C:\\repo" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/command-exec/mobile-command-1/stdin", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "继续\n" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/command-exec/mobile-command-1/resize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cols: 100, rows: 30 })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/command-exec/mobile-command-1", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/codex/command-exec/mobile-command-1/terminate", {
+      method: "POST"
+    });
   });
 
   it("管理会话后台终端时调用 thread background terminal 端点", async () => {
