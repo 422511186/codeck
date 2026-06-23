@@ -13,6 +13,11 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "Files" }).click();
   await expect(page.getByRole("heading", { name: "文件" })).toBeVisible();
   await expect(page.getByRole("button", { name: "src" })).toBeVisible();
+  await page.getByLabel("搜索文件").fill("app");
+  await page.getByRole("button", { name: "搜索文件" }).click();
+  await expect(page.getByText("src\\app.ts")).toBeVisible();
+  await page.getByRole("button", { name: "app.ts" }).click();
+  await expect(page.locator(".file-preview textarea")).toHaveValue("export const app = 'mock';\n");
   await page.getByRole("button", { name: "README.md" }).click();
   await expect(page.locator(".file-preview textarea")).toHaveValue("# Codex Web\n\n移动端 Web 工作台 mock 文件。");
   await page.locator(".file-preview textarea").fill("# 已保存\n\n来自手机端 E2E。");

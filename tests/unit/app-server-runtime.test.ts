@@ -225,6 +225,17 @@ describe("createAppServerGateway", () => {
       stdout: "mock command: npm --version\ncwd: C:\\Users\\huang\\workspace",
       stderr: ""
     });
+    await expect(gateway.searchFiles({ query: "app", roots: ["C:\\Users\\huang\\workspace"] })).resolves.toEqual([
+      {
+        root: "C:\\Users\\huang\\workspace",
+        path: "src\\app.ts",
+        fullPath: "C:\\Users\\huang\\workspace\\src\\app.ts",
+        fileName: "app.ts",
+        matchType: "file",
+        score: 100,
+        indices: [0, 1, 2]
+      }
+    ]);
     await expect(gateway.readSettings()).resolves.toEqual({
       model: "gpt-5-codex",
       modelProvider: "openai",

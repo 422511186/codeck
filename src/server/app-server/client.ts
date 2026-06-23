@@ -2,6 +2,9 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { InitializeParams } from "../../../docs/generated/app-server-ts/InitializeParams";
 import type { InitializeResponse } from "../../../docs/generated/app-server-ts/InitializeResponse";
+import type { FuzzyFileSearchParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchParams";
+import type { FuzzyFileSearchResponse } from "../../../docs/generated/app-server-ts/FuzzyFileSearchResponse";
+import type { FuzzyFileSearchResult } from "../../../docs/generated/app-server-ts/FuzzyFileSearchResult";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
@@ -134,6 +137,7 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileFileSearchResult,
   MobileHookErrorView,
   MobileHookNoticeView,
   MobileHookView,
@@ -191,6 +195,12 @@ export type ExecCommandInput = {
   command: string[];
   cwd?: string;
   timeoutMs?: number;
+};
+
+export type SearchFilesInput = {
+  query: string;
+  roots: string[];
+  cancellationToken?: string | null;
 };
 
 export type StartProcessInput = {
@@ -382,6 +392,21 @@ function joinChildPath(parentPath: string, childName: string): string {
   const hasWindowsSeparator = parentPath.includes("\\");
   const pathApi = hasWindowsSeparator ? path.win32 : path.posix;
   return pathApi.join(parentPath, childName);
+}
+
+function fileSearchResult(result: FuzzyFileSearchResult): MobileFileSearchResult {
+  const fullPath = /^[A-Za-z]:[\\/]/.test(result.path) || result.path.startsWith("\\\\")
+    ? result.path
+    : joinChildPath(result.root, result.path);
+  return {
+    root: result.root,
+    path: result.path,
+    fullPath,
+    fileName: result.file_name,
+    matchType: result.match_type,
+    score: result.score,
+    indices: result.indices
+  };
 }
 
 function settingsValue(value: unknown): string | null {
@@ -1150,6 +1175,16 @@ export class CodexAppServerClient {
       createdAtMs: response.createdAtMs,
       modifiedAtMs: response.modifiedAtMs
     };
+  }
+
+  async searchFiles(input: SearchFilesInput): Promise<MobileFileSearchResult[]> {
+    const params: FuzzyFileSearchParams = {
+      query: input.query,
+      roots: input.roots,
+      cancellationToken: input.cancellationToken ?? null
+    };
+    const response = (await this.peer.request("fuzzyFileSearch", params)) as FuzzyFileSearchResponse;
+    return response.files.map(fileSearchResult);
   }
 
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {

@@ -12,6 +12,7 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileFileSearchResult,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -776,6 +777,21 @@ export async function getMetadata(path: string): Promise<MobileFileMetadata> {
 
   const payload = (await response.json()) as { metadata: MobileFileMetadata };
   return payload.metadata;
+}
+
+export async function searchFiles(input: { query: string; roots: string[] }): Promise<MobileFileSearchResult[]> {
+  const response = await fetch("/api/codex/fs/search", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法搜索文件");
+  }
+
+  const payload = (await response.json()) as { results: MobileFileSearchResult[] };
+  return payload.results;
 }
 
 export async function execCommand(input: {

@@ -16,6 +16,7 @@ import {
   getConfigRequirements,
   getWindowsSandboxReadiness,
   listApps,
+  searchFiles,
   listThreadBackgroundTerminals,
   listThreads,
   loginMcpServer,
@@ -333,6 +334,44 @@ describe("client-api", () => {
       "/api/codex/fs/metadata?path=C%3A%5Crepo%5CREADME.md",
       { cache: "no-store" }
     );
+  });
+
+  it("搜索文件时调用 fuzzy file search 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            root: "C:\\repo",
+            path: "src\\app.ts",
+            fullPath: "C:\\repo\\src\\app.ts",
+            fileName: "app.ts",
+            matchType: "file",
+            score: 99,
+            indices: [0, 1, 2]
+          }
+        ]
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchFiles({ query: "app", roots: ["C:\\repo"] })).resolves.toEqual([
+      {
+        root: "C:\\repo",
+        path: "src\\app.ts",
+        fullPath: "C:\\repo\\src\\app.ts",
+        fileName: "app.ts",
+        matchType: "file",
+        score: 99,
+        indices: [0, 1, 2]
+      }
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/fs/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "app", roots: ["C:\\repo"] })
+    });
   });
 
   it("管理交互式终端会话时调用 process 端点", async () => {

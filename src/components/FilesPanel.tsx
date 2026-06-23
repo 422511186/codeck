@@ -8,9 +8,10 @@ import {
   readDirectory,
   readFile,
   removePath,
+  searchFiles,
   writeFile
 } from "../lib/client-api";
-import type { MobileFileContent, MobileFileEntry, MobileFileMetadata } from "../shared/codex";
+import type { MobileFileContent, MobileFileEntry, MobileFileMetadata, MobileFileSearchResult } from "../shared/codex";
 
 type FilesPanelProps = {
   rootPath: string;
@@ -22,6 +23,8 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
   const [file, setFile] = useState<MobileFileContent | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<MobileFileEntry | null>(null);
   const [draftText, setDraftText] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState<MobileFileSearchResult[]>([]);
   const [directoryPath, setDirectoryPath] = useState("");
   const [copyTargetPath, setCopyTargetPath] = useState("");
   const [metadata, setMetadata] = useState<MobileFileMetadata | null>(null);
@@ -87,6 +90,15 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
     } catch (readError) {
       setError(readError instanceof Error ? readError.message : "无法读取文件");
     }
+  }
+
+  async function handleOpenSearchResult(result: MobileFileSearchResult) {
+    await handleOpen({
+      name: result.fileName,
+      path: result.fullPath,
+      isDirectory: result.matchType === "directory",
+      isFile: result.matchType === "file"
+    });
   }
 
   function resolvePath(input: string): string {
@@ -187,6 +199,26 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
     }, "元数据已读取");
   }
 
+  async function handleSearchFiles() {
+    if (!searchText.trim()) {
+      setError("请输入搜索关键词");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const results = await searchFiles({ query: searchText.trim(), roots: [rootPath] });
+      setSearchResults(results);
+      setNotice(results.length ? `找到 ${results.length} 个结果` : "没有搜索结果");
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : "无法搜索文件");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="panel-view" aria-label="文件面板">
       <div className="section-title">
@@ -196,6 +228,37 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
       <p className="path-line">{currentPath}</p>
       {error ? <p className="form-error">{error}</p> : null}
       {notice ? <p className="form-success">{notice}</p> : null}
+      <form
+        className="file-toolbox"
+        onSubmit={(event) => {
+          event.preventDefault();
+          handleSearchFiles();
+        }}
+      >
+        <label>
+          <span>搜索文件</span>
+          <input
+            aria-label="搜索文件"
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="文件名或路径"
+            disabled={busy}
+          />
+        </label>
+        <button type="submit" disabled={busy || !searchText.trim()}>
+          搜索文件
+        </button>
+      </form>
+      {searchResults.length ? (
+        <div className="file-search-results">
+          {searchResults.map((result) => (
+            <button className="file-row" type="button" key={result.fullPath} onClick={() => handleOpenSearchResult(result)}>
+              <span>{result.fileName}</span>
+              <small>{result.path}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="file-toolbox">
         <label>
           <span>新目录</span>

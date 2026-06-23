@@ -333,6 +333,16 @@ export type MobileFileMetadata = {
   modifiedAtMs: number;
 };
 
+export type MobileFileSearchResult = {
+  root: string;
+  path: string;
+  fullPath: string;
+  fileName: string;
+  matchType: "file" | "directory";
+  score: number;
+  indices: number[] | null;
+};
+
 export type MobileCommandResult = {
   exitCode: number;
   stdout: string;

@@ -529,6 +529,21 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "fuzzyFileSearch") {
+      return {
+        files: [
+          {
+            root: "C:\\repo",
+            path: "src\\app.ts",
+            match_type: "file",
+            file_name: "app.ts",
+            score: 99,
+            indices: [0, 1, 2]
+          }
+        ]
+      };
+    }
+
     if (method === "command/exec") {
       return {
         exitCode: 0,
@@ -1456,6 +1471,28 @@ describe("CodexAppServerClient", () => {
       },
       { method: "fs/getMetadata", params: { path: "C:\\Users\\huang\\workspace\\demo\\README.md" } }
     ]);
+  });
+
+  it("能搜索文件并整理成移动端结果", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.searchFiles({ query: "app", roots: ["C:\\repo"] })).resolves.toEqual([
+      {
+        root: "C:\\repo",
+        path: "src\\app.ts",
+        fullPath: "C:\\repo\\src\\app.ts",
+        fileName: "app.ts",
+        matchType: "file",
+        score: 99,
+        indices: [0, 1, 2]
+      }
+    ]);
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "fuzzyFileSearch",
+      params: { query: "app", roots: ["C:\\repo"], cancellationToken: null }
+    });
   });
 
   it("能执行终端命令", async () => {

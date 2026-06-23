@@ -16,6 +16,7 @@ import type {
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
+  MobileFileSearchResult,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
@@ -46,6 +47,7 @@ import {
   type PluginSkillReadInput,
   type ReadMcpResourceInput,
   type SearchThreadsInput,
+  type SearchFilesInput,
   type SetThreadGoalInput,
   type StartProcessInput,
   type StartThreadInput,
@@ -146,6 +148,15 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     [
       "C:\\Users\\huang\\workspace\\src",
       { type: "directory", createdAtMs: 1_700_000_000_000, modifiedAtMs: 1_700_000_000_000 }
+    ],
+    [
+      "C:\\Users\\huang\\workspace\\src\\app.ts",
+      {
+        type: "file",
+        createdAtMs: 1_700_000_000_000,
+        modifiedAtMs: 1_700_000_000_000,
+        text: "export const app = 'mock';\n"
+      }
     ],
     [
       "C:\\Users\\huang\\workspace\\README.md",
@@ -840,6 +851,35 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         createdAtMs: node.createdAtMs,
         modifiedAtMs: node.modifiedAtMs
       };
+    }
+
+    if (method === "fuzzyFileSearch") {
+      const searchParams = params as { query?: string; roots?: string[] };
+      const query = (searchParams.query ?? "").toLowerCase();
+      const roots = searchParams.roots?.length ? searchParams.roots : [this.workspaceRoot];
+      const files = [...this.mockFs.entries()]
+        .filter(([, node]) => node.type === "file")
+        .filter(([candidatePath]) => roots.some((root) => candidatePath.startsWith(this.normalizeMockPath(root))))
+        .map(([candidatePath]) => {
+          const root = roots.find((candidateRoot) => candidatePath.startsWith(this.normalizeMockPath(candidateRoot))) ?? this.workspaceRoot;
+          const normalizedRoot = this.normalizeMockPath(root);
+          const relativePath = candidatePath.slice(normalizedRoot.length).replace(/^\\+/, "");
+          const fileName = relativePath.split("\\").at(-1) ?? relativePath;
+          return { root: normalizedRoot, relativePath, fileName };
+        })
+        .filter((candidate) => {
+          const haystack = `${candidate.relativePath}\n${candidate.fileName}`.toLowerCase();
+          return !query || haystack.includes(query);
+        })
+        .map((candidate) => ({
+          root: candidate.root,
+          path: candidate.relativePath,
+          match_type: "file" as const,
+          file_name: candidate.fileName,
+          score: candidate.fileName.toLowerCase().includes(query) ? 100 : 50,
+          indices: query ? [...query].map((_, index) => index) : null
+        }));
+      return { files };
     }
 
     if (method === "command/exec") {
@@ -2062,6 +2102,11 @@ export class AppServerGateway {
   async getMetadata(path: string): Promise<MobileFileMetadata> {
     await this.ensureReady();
     return this.client.getMetadata(path);
+  }
+
+  async searchFiles(input: SearchFilesInput): Promise<MobileFileSearchResult[]> {
+    await this.ensureReady();
+    return this.client.searchFiles(input);
   }
 
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
