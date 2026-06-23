@@ -21,6 +21,7 @@ import {
   deleteThread,
   forkThread,
   decrementThreadElicitation,
+  getConversationSummary,
   incrementThreadElicitation,
   interruptTurn,
   listModels,
@@ -41,6 +42,7 @@ import {
   startThread,
   startTurn,
   unarchiveThread,
+  unsubscribeThread,
   updateThreadSettings
 } from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
@@ -699,6 +701,44 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleReadThreadSummary() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const summary = await getConversationSummary(selectedThread.id);
+      appendThreadNotice(
+        selectedThread.id,
+        "conversation-summary",
+        `摘要：${summary.preview || summary.title || summary.status}\n路径：${summary.cwd}`
+      );
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法读取会话摘要");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleUnsubscribeThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const result = await unsubscribeThread(selectedThread.id);
+      appendThreadNotice(selectedThread.id, "thread-unsubscribe", `取消订阅：${result.status}`);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法取消订阅会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleDeleteThread() {
     if (!selectedThread) {
       return;
@@ -923,6 +963,8 @@ export function MobileWorkbench() {
           onRename={handleRenameThread}
           onArchive={handleArchiveThread}
           onUnarchive={handleUnarchiveThread}
+          onReadSummary={handleReadThreadSummary}
+          onUnsubscribe={handleUnsubscribeThread}
           onDelete={handleDeleteThread}
           onCompact={handleCompactThread}
           onReview={handleStartReview}

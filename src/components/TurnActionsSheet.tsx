@@ -9,6 +9,8 @@ type TurnActionsSheetProps = {
   onRename(name: string): Promise<void>;
   onArchive(): Promise<void>;
   onUnarchive(): Promise<void>;
+  onReadSummary(): Promise<void>;
+  onUnsubscribe(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
   onReview(): Promise<void>;
@@ -32,6 +34,8 @@ export function TurnActionsSheet({
   onRename,
   onArchive,
   onUnarchive,
+  onReadSummary,
+  onUnsubscribe,
   onDelete,
   onCompact,
   onReview,
@@ -126,6 +130,14 @@ export function TurnActionsSheet({
         </button>
         <button type="button" onClick={onReview} disabled={busy}>
           审查改动
+        </button>
+      </div>
+      <div className="turn-actions-row">
+        <button type="button" onClick={onReadSummary} disabled={busy}>
+          读取摘要
+        </button>
+        <button type="button" onClick={onUnsubscribe} disabled={busy}>
+          取消订阅
         </button>
       </div>
       <div className="turn-actions-row">

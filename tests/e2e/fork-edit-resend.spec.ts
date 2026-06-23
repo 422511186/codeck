@@ -95,3 +95,20 @@ test("手机端可以执行会话命令并控制 elicitation 计数", async ({ p
   await page.getByRole("button", { name: "恢复 elicitation" }).click();
   await expect(page.getByText("Elicitation 已恢复：0")).toBeVisible();
 });
+
+test("手机端可以读取当前会话摘要", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "读取摘要" }).click();
+
+  await expect(page.getByText(/摘要：/)).toBeVisible();
+  await expect(page.getByText(/C:\\Users\\huang\\workspace/)).toBeVisible();
+});
+
+test("手机端可以取消订阅当前会话", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "取消订阅" }).click();
+
+  await expect(page.getByText("取消订阅：unsubscribed")).toBeVisible();
+});
