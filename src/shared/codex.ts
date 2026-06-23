@@ -85,6 +85,28 @@ export type MobileMcpServerView = {
   toolCount: number;
   resourceCount: number;
   resourceTemplateCount: number;
+  resources: MobileMcpResourceView[];
+};
+
+export type MobileMcpResourceView = {
+  uri: string;
+  name: string;
+  mimeType: string | null;
+};
+
+export type MobileMcpLoginView = {
+  authorizationUrl: string;
+};
+
+export type MobileMcpResourceContentView = {
+  uri: string;
+  mimeType: string | null;
+  text?: string;
+  blob?: string;
+};
+
+export type MobileMcpResourceReadView = {
+  contents: MobileMcpResourceContentView[];
 };
 
 export type MobileCollaborationModeView = {

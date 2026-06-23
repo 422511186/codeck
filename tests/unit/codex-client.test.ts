@@ -649,6 +649,20 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "mcpServer/refresh") {
+      return {};
+    }
+
+    if (method === "mcpServer/oauthLogin") {
+      return { authorizationUrl: "https://example.com/mcp/oauth" };
+    }
+
+    if (method === "mcp/resource/read") {
+      return {
+        contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README" }]
+      };
+    }
+
     if (method === "modelProvider/capabilities/read") {
       return {
         namespaceTools: true,
@@ -1377,14 +1391,16 @@ describe("CodexAppServerClient", () => {
           authStatus: "bearerToken",
           toolCount: 2,
           resourceCount: 1,
-          resourceTemplateCount: 0
+          resourceTemplateCount: 0,
+          resources: [{ uri: "file:///README.md", name: "README", mimeType: "text/markdown" }]
         },
         {
           name: "github",
           authStatus: "notLoggedIn",
           toolCount: 1,
           resourceCount: 0,
-          resourceTemplateCount: 0
+          resourceTemplateCount: 0,
+          resources: []
         }
       ],
       collaborationModes: [
@@ -1460,6 +1476,28 @@ describe("CodexAppServerClient", () => {
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );
+  });
+
+  it("能刷新 MCP、启动 OAuth 登录并读取资源", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.refreshMcpServer()).resolves.toBeUndefined();
+    await expect(client.loginMcpServer("github")).resolves.toEqual({ authorizationUrl: "https://example.com/mcp/oauth" });
+    await expect(
+      client.readMcpResource({ server: "filesystem", uri: "file:///README.md", threadId: "thread-1" })
+    ).resolves.toEqual({
+      contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README" }]
+    });
+
+    expect(peer.calls.slice(-3)).toEqual([
+      { method: "mcpServer/refresh", params: undefined },
+      { method: "mcpServer/oauthLogin", params: { name: "github" } },
+      {
+        method: "mcp/resource/read",
+        params: { server: "filesystem", uri: "file:///README.md", threadId: "thread-1" }
+      }
+    ]);
   });
 
   it("能管理远程控制连接、配对和客户端授权", async () => {

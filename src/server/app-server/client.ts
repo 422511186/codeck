@@ -23,6 +23,10 @@ import type { ListMcpServerStatusResponse } from "../../../docs/generated/app-se
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
+import type { McpResourceReadParams } from "../../../docs/generated/app-server-ts/v2/McpResourceReadParams";
+import type { McpResourceReadResponse } from "../../../docs/generated/app-server-ts/v2/McpResourceReadResponse";
+import type { McpServerOauthLoginParams } from "../../../docs/generated/app-server-ts/v2/McpServerOauthLoginParams";
+import type { McpServerOauthLoginResponse } from "../../../docs/generated/app-server-ts/v2/McpServerOauthLoginResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
 import type { PluginDetail } from "../../../docs/generated/app-server-ts/v2/PluginDetail";
 import type { PluginInstallParams } from "../../../docs/generated/app-server-ts/v2/PluginInstallParams";
@@ -100,8 +104,10 @@ import type {
   MobileFileEntry,
   MobileFileMetadata,
   MobileMcpServerView,
+  MobileMcpLoginView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
+  MobileMcpResourceReadView,
   MobilePluginMarketplaceErrorView,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -200,6 +206,12 @@ export type PluginSkillReadInput = {
   remoteMarketplaceName: string;
   remotePluginId: string;
   skillName: string;
+};
+
+export type ReadMcpResourceInput = {
+  server: string;
+  uri: string;
+  threadId?: string | null;
 };
 
 export type WriteSkillConfigInput = {
@@ -407,8 +419,23 @@ function mcpServerViews(response: ListMcpServerStatusResponse): MobileMcpServerV
     authStatus: server.authStatus,
     toolCount: Object.keys(server.tools).length,
     resourceCount: server.resources.length,
-    resourceTemplateCount: server.resourceTemplates.length
+    resourceTemplateCount: server.resourceTemplates.length,
+    resources: server.resources.map((resource) => ({
+      uri: resource.uri,
+      name: resource.title || resource.name,
+      mimeType: resource.mimeType ?? null
+    }))
   }));
+}
+
+function mcpResourceReadView(response: McpResourceReadResponse): MobileMcpResourceReadView {
+  return {
+    contents: response.contents.map((content) => ({
+      uri: content.uri,
+      mimeType: content.mimeType ?? null,
+      ...("text" in content ? { text: content.text } : { blob: content.blob })
+    }))
+  };
 }
 
 function collaborationModeViews(response: CollaborationModeListResponse): MobileCollaborationModeView[] {
@@ -743,6 +770,26 @@ export class CodexAppServerClient {
     };
     const response = (await this.peer.request("skills/config/write", params)) as SkillsConfigWriteResponse;
     return { effectiveEnabled: response.effectiveEnabled };
+  }
+
+  async refreshMcpServer(): Promise<void> {
+    await this.peer.request("mcpServer/refresh", undefined);
+  }
+
+  async loginMcpServer(serverName: string): Promise<MobileMcpLoginView> {
+    const params: McpServerOauthLoginParams = { name: serverName };
+    const response = (await this.peer.request("mcpServer/oauthLogin", params)) as McpServerOauthLoginResponse;
+    return { authorizationUrl: response.authorizationUrl };
+  }
+
+  async readMcpResource(input: ReadMcpResourceInput): Promise<MobileMcpResourceReadView> {
+    const params: McpResourceReadParams = {
+      server: input.server,
+      uri: input.uri,
+      threadId: input.threadId ?? null
+    };
+    const response = (await this.peer.request("mcp/resource/read", params)) as McpResourceReadResponse;
+    return mcpResourceReadView(response);
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

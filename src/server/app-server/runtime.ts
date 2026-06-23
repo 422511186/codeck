@@ -5,6 +5,8 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileMcpLoginView,
+  MobileMcpResourceReadView,
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -30,6 +32,7 @@ import {
   type ListThreadTurnsInput,
   type PluginLookupInput,
   type PluginSkillReadInput,
+  type ReadMcpResourceInput,
   type SearchThreadsInput,
   type SetThreadGoalInput,
   type StartProcessInput,
@@ -942,6 +945,28 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "mcpServer/refresh") {
+      return {};
+    }
+
+    if (method === "mcpServer/oauthLogin") {
+      return {
+        authorizationUrl: "https://example.com/mcp/github/oauth"
+      };
+    }
+
+    if (method === "mcp/resource/read") {
+      return {
+        contents: [
+          {
+            uri: "file:///README.md",
+            mimeType: "text/markdown",
+            text: "# README\n\n来自 MCP 资源。"
+          }
+        ]
+      };
+    }
+
     if (method === "modelProvider/capabilities/read") {
       return {
         namespaceTools: true,
@@ -1707,6 +1732,21 @@ export class AppServerGateway {
   async writeSkillConfig(input: WriteSkillConfigInput): Promise<MobileSkillConfigWriteResultView> {
     await this.ensureReady();
     return this.client.writeSkillConfig(input);
+  }
+
+  async refreshMcpServer(_serverName: string): Promise<void> {
+    await this.ensureReady();
+    return this.client.refreshMcpServer();
+  }
+
+  async loginMcpServer(serverName: string): Promise<MobileMcpLoginView> {
+    await this.ensureReady();
+    return this.client.loginMcpServer(serverName);
+  }
+
+  async readMcpResource(input: ReadMcpResourceInput): Promise<MobileMcpResourceReadView> {
+    await this.ensureReady();
+    return this.client.readMcpResource(input);
   }
 
   async enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

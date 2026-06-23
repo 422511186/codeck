@@ -4,6 +4,8 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileMcpLoginView,
+  MobileMcpResourceReadView,
   MobileModelOption,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -468,6 +470,44 @@ export async function writeSkillConfig(input: {
 
   const payload = (await response.json()) as { result: MobileSkillConfigWriteResultView };
   return payload.result;
+}
+
+export async function refreshMcpServer(serverName: string): Promise<void> {
+  const response = await fetch(`/api/codex/mcp/servers/${encodeURIComponent(serverName)}/refresh`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法刷新 MCP 服务");
+  }
+}
+
+export async function loginMcpServer(serverName: string): Promise<MobileMcpLoginView> {
+  const response = await fetch(`/api/codex/mcp/servers/${encodeURIComponent(serverName)}/login`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动 MCP 登录");
+  }
+
+  const payload = (await response.json()) as { login: MobileMcpLoginView };
+  return payload.login;
+}
+
+export async function readMcpResource(input: {
+  server: string;
+  uri: string;
+  threadId?: string | null;
+}): Promise<MobileMcpResourceReadView> {
+  const response = await fetch("/api/codex/mcp/resources/read", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ server: input.server, uri: input.uri, threadId: input.threadId ?? null })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取 MCP 资源");
+  }
+
+  const payload = (await response.json()) as { resource: MobileMcpResourceReadView };
+  return payload.resource;
 }
 
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {

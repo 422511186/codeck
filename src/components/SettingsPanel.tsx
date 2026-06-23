@@ -5,10 +5,13 @@ import {
   disableRemoteControl,
   enableRemoteControl,
   installPlugin,
+  loginMcpServer,
+  readMcpResource,
   readRemoteControlPairingStatus,
   readSettings,
   readPlugin,
   readPluginSkill,
+  refreshMcpServer,
   revokeRemoteControlClient,
   setSkillsExtraRoots,
   startRemoteControlPairing,
@@ -17,6 +20,7 @@ import {
 } from "../lib/client-api";
 import type {
   MobileModelOption,
+  MobileMcpResourceReadView,
   MobilePluginDetailView,
   MobileRemoteControlPairingView,
   MobileSettingsView
@@ -151,6 +155,9 @@ export function SettingsPanel({
   const [skillRootText, setSkillRootText] = useState("");
   const [skillNotice, setSkillNotice] = useState("");
   const [pluginSkillContent, setPluginSkillContent] = useState("");
+  const [mcpNotice, setMcpNotice] = useState("");
+  const [mcpAuthorizationUrl, setMcpAuthorizationUrl] = useState("");
+  const [mcpResource, setMcpResource] = useState<MobileMcpResourceReadView | null>(null);
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -254,6 +261,51 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法读取配对状态");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleRefreshMcpServer(serverName: string) {
+    setRemoteBusy(true);
+    setError("");
+    setMcpNotice("");
+    try {
+      await refreshMcpServer(serverName);
+      setMcpNotice(`${serverName} 已刷新`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法刷新 MCP 服务");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleLoginMcpServer(serverName: string) {
+    setRemoteBusy(true);
+    setError("");
+    setMcpNotice("");
+    try {
+      const login = await loginMcpServer(serverName);
+      setMcpAuthorizationUrl(login.authorizationUrl);
+      setMcpNotice(`${serverName} 登录已启动`);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法启动 MCP 登录");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadMcpResource(serverName: string, uri: string) {
+    setRemoteBusy(true);
+    setError("");
+    setMcpNotice("");
+    try {
+      const resource = await readMcpResource({ server: serverName, uri });
+      setMcpResource(resource);
+      setMcpNotice(`已读取 ${uri}`);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取 MCP 资源");
     } finally {
       setRemoteBusy(false);
     }
@@ -483,6 +535,51 @@ export function SettingsPanel({
               </button>
             );
           })}
+        </div>
+      ) : null}
+      {settings?.mcpServers.length ? (
+        <div className="mcp-control-panel">
+          {settings.mcpServers.map((server) => (
+            <div className="mcp-server-block" key={server.name}>
+              <div className="plugin-action-row">
+                <span>{server.name}</span>
+                <button type="button" onClick={() => handleRefreshMcpServer(server.name)} disabled={remoteBusy}>
+                  刷新 {server.name}
+                </button>
+                <button type="button" onClick={() => handleLoginMcpServer(server.name)} disabled={remoteBusy}>
+                  登录 {server.name}
+                </button>
+              </div>
+              {server.resources.length ? (
+                <div className="skill-control-panel">
+                  {server.resources.map((resource) => (
+                    <button
+                      type="button"
+                      key={resource.uri}
+                      onClick={() => handleReadMcpResource(server.name, resource.uri)}
+                      disabled={remoteBusy}
+                    >
+                      读取资源 {resource.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {mcpAuthorizationUrl ? (
+            <p className="settings-note">
+              OAuth URL：<span>{mcpAuthorizationUrl}</span>
+            </p>
+          ) : null}
+          {mcpResource ? (
+            <pre className="settings-code">
+              {mcpResource.contents
+                .map((content) => content.text ?? content.blob ?? "")
+                .filter(Boolean)
+                .join("\n\n")}
+            </pre>
+          ) : null}
+          {mcpNotice ? <p className="settings-note">{mcpNotice}</p> : null}
         </div>
       ) : null}
       {settings?.plugins.length ? (

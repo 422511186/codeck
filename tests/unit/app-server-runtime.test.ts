@@ -268,14 +268,16 @@ describe("createAppServerGateway", () => {
           authStatus: "bearerToken",
           toolCount: 2,
           resourceCount: 1,
-          resourceTemplateCount: 0
+          resourceTemplateCount: 0,
+          resources: [{ uri: "file:///README.md", name: "README", mimeType: "text/markdown" }]
         },
         {
           name: "github",
           authStatus: "notLoggedIn",
           toolCount: 1,
           resourceCount: 0,
-          resourceTemplateCount: 0
+          resourceTemplateCount: 0,
+          resources: []
         }
       ],
       collaborationModes: [
@@ -542,6 +544,21 @@ describe("createAppServerGateway", () => {
     await expect(gateway.setSkillsExtraRoots(["C:\\Users\\huang\\workspace\\skills"])).resolves.toBeUndefined();
     await expect(gateway.writeSkillConfig({ name: "openai-docs", enabled: false })).resolves.toEqual({
       effectiveEnabled: false
+    });
+  });
+
+  it("mock 模式支持刷新 MCP、启动 OAuth 登录和读取资源", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.refreshMcpServer("filesystem")).resolves.toBeUndefined();
+    await expect(gateway.loginMcpServer("github")).resolves.toEqual({
+      authorizationUrl: "https://example.com/mcp/github/oauth"
+    });
+    await expect(
+      gateway.readMcpResource({ server: "filesystem", uri: "file:///README.md", threadId: "mock-thread-1" })
+    ).resolves.toEqual({
+      contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README\n\n来自 MCP 资源。" }]
     });
   });
 

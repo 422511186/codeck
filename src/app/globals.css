@@ -741,6 +741,7 @@ pre {
 }
 
 .remote-control-panel button,
+.mcp-control-panel button,
 .plugin-control-panel button,
 .skill-control-panel button {
   min-height: 40px;
@@ -752,7 +753,13 @@ pre {
 }
 
 .plugin-control-panel,
+.mcp-control-panel,
 .skill-control-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-server-block {
   display: grid;
   gap: 8px;
 }

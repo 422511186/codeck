@@ -11,11 +11,14 @@ import {
   getMetadata,
   installPlugin,
   listThreads,
+  loginMcpServer,
   renameThread,
   readPlugin,
   readPluginSkill,
+  readMcpResource,
   readProcessSession,
   readRemoteControlPairingStatus,
+  refreshMcpServer,
   resumeThread,
   resetMemory,
   removePath,
@@ -455,6 +458,38 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "openai-docs", path: null, enabled: false })
+    });
+  });
+
+  it("管理 MCP 服务时调用 mcp 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ login: { authorizationUrl: "https://example.com/oauth" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          resource: {
+            contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README" }]
+          }
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(refreshMcpServer("filesystem")).resolves.toBeUndefined();
+    await expect(loginMcpServer("github")).resolves.toEqual({ authorizationUrl: "https://example.com/oauth" });
+    await expect(readMcpResource({ server: "filesystem", uri: "file:///README.md", threadId: "thread-1" })).resolves.toEqual({
+      contents: [{ uri: "file:///README.md", mimeType: "text/markdown", text: "# README" }]
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/mcp/servers/filesystem/refresh", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/mcp/servers/github/login", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/mcp/resources/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ server: "filesystem", uri: "file:///README.md", threadId: "thread-1" })
     });
   });
 });

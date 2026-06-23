@@ -58,6 +58,12 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();
   await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
+  await page.getByRole("button", { name: "刷新 filesystem" }).click();
+  await expect(page.getByText("filesystem 已刷新")).toBeVisible();
+  await page.getByRole("button", { name: "登录 github" }).click();
+  await expect(page.getByText("https://example.com/mcp/github/oauth")).toBeVisible();
+  await page.getByRole("button", { name: "读取资源 README" }).click();
+  await expect(page.getByText("来自 MCP 资源。")).toBeVisible();
   await expect(page.getByText("Code / Ask")).toBeVisible();
   await expect(page.getByText("1 个启用 / 2 个 Skills")).toBeVisible();
   await expect(page.getByText("openai-docs / repo-helper")).toBeVisible();
