@@ -747,7 +747,9 @@ export function MobileWorkbench() {
 
         {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
         {activePanel === "files" && selectedThread ? <FilesPanel rootPath={selectedThread.cwd} /> : null}
-        {activePanel === "terminal" && selectedThread ? <TerminalPanel cwd={selectedThread.cwd} /> : null}
+        {activePanel === "terminal" && selectedThread ? (
+          <TerminalPanel threadId={selectedThread.id} cwd={selectedThread.cwd} />
+        ) : null}
         {activePanel === "settings" ? (
           <SettingsPanel
             models={models}

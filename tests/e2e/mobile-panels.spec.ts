@@ -45,6 +45,13 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("stdin: 继续")).toBeVisible();
   await page.getByRole("button", { name: "终止会话" }).click();
   await expect(page.getByText("已退出 143")).toBeVisible();
+  await page.getByRole("button", { name: "刷新后台终端" }).click();
+  await expect(page.getByText("npm run dev")).toBeVisible();
+  await expect(page.getByText("PID 4242")).toBeVisible();
+  await page.getByRole("button", { name: "终止 mock-bg-1" }).click();
+  await expect(page.getByText("已终止后台终端")).toBeVisible();
+  await page.getByRole("button", { name: "清理后台终端" }).click();
+  await expect(page.getByText("后台终端已清理")).toBeVisible();
 
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();

@@ -534,6 +534,29 @@ pre {
   opacity: 0.55;
 }
 
+.terminal-background-actions,
+.terminal-background-list {
+  display: grid;
+  gap: 8px;
+}
+
+.terminal-background-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.terminal-background-actions button {
+  min-height: 42px;
+  border: 1px solid #39404a;
+  border-radius: 8px;
+  background: #202734;
+  color: #f2f2f2;
+  font-weight: 600;
+}
+
+.terminal-background-actions button:disabled {
+  opacity: 0.55;
+}
+
 .terminal-output p {
   margin: 0;
   color: #8f9bad;

@@ -70,6 +70,11 @@ import type { SendAddCreditsNudgeEmailParams } from "../../../docs/generated/app
 import type { SendAddCreditsNudgeEmailResponse } from "../../../docs/generated/app-server-ts/v2/SendAddCreditsNudgeEmailResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
+import type { ThreadBackgroundTerminalsCleanParams } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsCleanParams";
+import type { ThreadBackgroundTerminalsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsListParams";
+import type { ThreadBackgroundTerminalsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsListResponse";
+import type { ThreadBackgroundTerminalsTerminateParams } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsTerminateParams";
+import type { ThreadBackgroundTerminalsTerminateResponse } from "../../../docs/generated/app-server-ts/v2/ThreadBackgroundTerminalsTerminateResponse";
 import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
 import type { ThreadDeleteParams } from "../../../docs/generated/app-server-ts/v2/ThreadDeleteParams";
 import type { ThreadGoal } from "../../../docs/generated/app-server-ts/v2/ThreadGoal";
@@ -112,6 +117,7 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileBackgroundTerminalPage,
   MobileCollaborationModeView,
   MobileFileContent,
   MobileFileEntry,
@@ -234,6 +240,12 @@ export type WriteSkillConfigInput = {
   name?: string | null;
   path?: string | null;
   enabled: boolean;
+};
+
+export type ListThreadBackgroundTerminalsInput = {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -372,6 +384,21 @@ function accountTokenUsageView(response: GetAccountTokenUsageResponse): MobileAc
         startDate: bucket.startDate,
         tokens: Number(bucket.tokens)
       })) ?? null
+  };
+}
+
+function backgroundTerminalPage(response: ThreadBackgroundTerminalsListResponse): MobileBackgroundTerminalPage {
+  return {
+    terminals: response.data.map((terminal) => ({
+      itemId: terminal.itemId,
+      processId: terminal.processId,
+      command: terminal.command,
+      cwd: terminal.cwd,
+      osPid: terminal.osPid,
+      cpuPercent: terminal.cpuPercent,
+      rssKb: nullableNumber(terminal.rssKb)
+    })),
+    nextCursor: response.nextCursor
   };
 }
 
@@ -1069,6 +1096,35 @@ export class CodexAppServerClient {
   async killProcess(processHandle: string): Promise<void> {
     const params: ProcessKillParams = { processHandle };
     await this.peer.request("process/kill", params);
+  }
+
+  async listThreadBackgroundTerminals(input: ListThreadBackgroundTerminalsInput): Promise<MobileBackgroundTerminalPage> {
+    const params: ThreadBackgroundTerminalsListParams = {
+      threadId: input.threadId,
+      cursor: input.cursor,
+      limit: input.limit
+    };
+    const response = (await this.peer.request(
+      "thread/backgroundTerminals/list",
+      params
+    )) as ThreadBackgroundTerminalsListResponse;
+    return backgroundTerminalPage(response);
+  }
+
+  async terminateThreadBackgroundTerminal(
+    threadId: string,
+    processId: string
+  ): Promise<ThreadBackgroundTerminalsTerminateResponse> {
+    const params: ThreadBackgroundTerminalsTerminateParams = { threadId, processId };
+    return (await this.peer.request(
+      "thread/backgroundTerminals/terminate",
+      params
+    )) as ThreadBackgroundTerminalsTerminateResponse;
+  }
+
+  async cleanThreadBackgroundTerminals(threadId: string): Promise<void> {
+    const params: ThreadBackgroundTerminalsCleanParams = { threadId };
+    await this.peer.request("thread/backgroundTerminals/clean", params);
   }
 
   async readSettings(): Promise<MobileSettingsView> {

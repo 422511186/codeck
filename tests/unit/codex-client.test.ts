@@ -541,6 +541,31 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/backgroundTerminals/list") {
+      return {
+        data: [
+          {
+            itemId: "item-bg-1",
+            processId: "bg-proc-1",
+            command: "npm run dev",
+            cwd: "C:\\repo",
+            osPid: 4242,
+            cpuPercent: 1.5,
+            rssKb: 2048n
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
+    if (method === "thread/backgroundTerminals/terminate") {
+      return { terminated: true };
+    }
+
+    if (method === "thread/backgroundTerminals/clean") {
+      return {};
+    }
+
     if (method === "config/read") {
       return {
         config: {
@@ -1426,6 +1451,36 @@ describe("CodexAppServerClient", () => {
         }
       },
       { method: "process/kill", params: { processHandle: "mobile-process-1" } }
+    ]);
+  });
+
+  it("能管理会话后台终端", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadBackgroundTerminals({ threadId: "thread-1" })).resolves.toEqual({
+      terminals: [
+        {
+          itemId: "item-bg-1",
+          processId: "bg-proc-1",
+          command: "npm run dev",
+          cwd: "C:\\repo",
+          osPid: 4242,
+          cpuPercent: 1.5,
+          rssKb: 2048
+        }
+      ],
+      nextCursor: null
+    });
+    await expect(client.terminateThreadBackgroundTerminal("thread-1", "bg-proc-1")).resolves.toEqual({
+      terminated: true
+    });
+    await expect(client.cleanThreadBackgroundTerminals("thread-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-3)).toEqual([
+      { method: "thread/backgroundTerminals/list", params: { threadId: "thread-1", cursor: undefined, limit: undefined } },
+      { method: "thread/backgroundTerminals/terminate", params: { threadId: "thread-1", processId: "bg-proc-1" } },
+      { method: "thread/backgroundTerminals/clean", params: { threadId: "thread-1" } }
     ]);
   });
 

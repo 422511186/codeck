@@ -392,6 +392,34 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持管理会话后台终端", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.listThreadBackgroundTerminals({ threadId: "mock-thread-1" })).resolves.toEqual({
+      terminals: [
+        {
+          itemId: "mock-bg-item-1",
+          processId: "mock-bg-1",
+          command: "npm run dev",
+          cwd: "C:\\Users\\huang\\workspace",
+          osPid: 4242,
+          cpuPercent: 1.5,
+          rssKb: 2048
+        }
+      ],
+      nextCursor: null
+    });
+    await expect(gateway.terminateThreadBackgroundTerminal("mock-thread-1", "mock-bg-1")).resolves.toEqual({
+      terminated: true
+    });
+    await expect(gateway.listThreadBackgroundTerminals({ threadId: "mock-thread-1" })).resolves.toEqual({
+      terminals: [],
+      nextCursor: null
+    });
+    await expect(gateway.cleanThreadBackgroundTerminals("mock-thread-1")).resolves.toBeUndefined();
+  });
+
   it("mock 模式支持 turns 和 items 分页读取", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

@@ -2,15 +2,19 @@
 
 import { useEffect, useState } from "react";
 import {
+  cleanThreadBackgroundTerminals,
   execCommand,
   killProcessSession,
+  listThreadBackgroundTerminals,
   readProcessSession,
   startProcessSession,
+  terminateThreadBackgroundTerminal,
   writeProcessStdin
 } from "../lib/client-api";
-import type { MobileCommandResult, MobileTerminalSession } from "../shared/codex";
+import type { MobileBackgroundTerminalView, MobileCommandResult, MobileTerminalSession } from "../shared/codex";
 
 type TerminalPanelProps = {
+  threadId: string;
   cwd: string;
 };
 
@@ -21,11 +25,13 @@ function parseCommand(commandLine: string): string[] {
     .filter(Boolean);
 }
 
-export function TerminalPanel({ cwd }: TerminalPanelProps) {
+export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
   const [commandLine, setCommandLine] = useState("npm --version");
   const [stdinText, setStdinText] = useState("");
   const [result, setResult] = useState<MobileCommandResult | null>(null);
   const [session, setSession] = useState<MobileTerminalSession | null>(null);
+  const [backgroundTerminals, setBackgroundTerminals] = useState<MobileBackgroundTerminalView[]>([]);
+  const [backgroundNotice, setBackgroundNotice] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
@@ -118,6 +124,53 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
     }
   }
 
+  async function handleListBackgroundTerminals() {
+    setRunning(true);
+    setError("");
+    setBackgroundNotice("");
+    try {
+      const page = await listThreadBackgroundTerminals(threadId);
+      setBackgroundTerminals(page.terminals);
+      if (!page.terminals.length) {
+        setBackgroundNotice("没有后台终端");
+      }
+    } catch (listError) {
+      setError(listError instanceof Error ? listError.message : "无法读取后台终端");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleTerminateBackgroundTerminal(processId: string) {
+    setRunning(true);
+    setError("");
+    setBackgroundNotice("");
+    try {
+      await terminateThreadBackgroundTerminal(threadId, processId);
+      setBackgroundTerminals((terminals) => terminals.filter((terminal) => terminal.processId !== processId));
+      setBackgroundNotice("已终止后台终端");
+    } catch (terminateError) {
+      setError(terminateError instanceof Error ? terminateError.message : "无法终止后台终端");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleCleanBackgroundTerminals() {
+    setRunning(true);
+    setError("");
+    setBackgroundNotice("");
+    try {
+      await cleanThreadBackgroundTerminals(threadId);
+      setBackgroundTerminals([]);
+      setBackgroundNotice("后台终端已清理");
+    } catch (cleanError) {
+      setError(cleanError instanceof Error ? cleanError.message : "无法清理后台终端");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <section className="panel-view" aria-label="终端面板">
       <div className="section-title">
@@ -177,6 +230,54 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
             终止会话
           </button>
         </article>
+      ) : null}
+      <div className="terminal-background-actions">
+        <button type="button" onClick={handleListBackgroundTerminals} disabled={running}>
+          刷新后台终端
+        </button>
+        <button type="button" onClick={handleCleanBackgroundTerminals} disabled={running}>
+          清理后台终端
+        </button>
+      </div>
+      {backgroundNotice ? <p className="settings-note">{backgroundNotice}</p> : null}
+      {backgroundTerminals.length ? (
+        <div className="terminal-background-list">
+          {backgroundTerminals.map((terminal) => (
+            <article className="terminal-output" key={terminal.processId}>
+              <p>{terminal.command}</p>
+              <dl className="settings-list">
+                <div className="settings-row">
+                  <dt>进程</dt>
+                  <dd>{terminal.processId}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>PID</dt>
+                  <dd>{terminal.osPid === null ? "-" : `PID ${terminal.osPid}`}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>目录</dt>
+                  <dd>{terminal.cwd}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>CPU</dt>
+                  <dd>{terminal.cpuPercent === null ? "-" : `${terminal.cpuPercent}%`}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>内存</dt>
+                  <dd>{terminal.rssKb === null ? "-" : `${terminal.rssKb} KB`}</dd>
+                </div>
+              </dl>
+              <button
+                className="terminal-session-button"
+                type="button"
+                onClick={() => handleTerminateBackgroundTerminal(terminal.processId)}
+                disabled={running}
+              >
+                终止 {terminal.processId}
+              </button>
+            </article>
+          ))}
+        </div>
       ) : null}
     </section>
   );

@@ -12,6 +12,8 @@ import {
   getMetadata,
   getAccountTokenUsage,
   installPlugin,
+  cleanThreadBackgroundTerminals,
+  listThreadBackgroundTerminals,
   listThreads,
   loginMcpServer,
   loginWithApiKey,
@@ -37,6 +39,7 @@ import {
   startReview,
   uninstallPlugin,
   updateThreadSettings,
+  terminateThreadBackgroundTerminal,
   writeSkillConfig,
   writeFile,
   writeProcessStdin,
@@ -383,6 +386,57 @@ describe("client-api", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/process/mobile-process-1", { cache: "no-store" });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/process/mobile-process-1/kill", { method: "POST" });
+  });
+
+  it("管理会话后台终端时调用 thread background terminal 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          terminals: [
+            {
+              itemId: "item-bg-1",
+              processId: "bg-proc-1",
+              command: "npm run dev",
+              cwd: "C:\\repo",
+              osPid: 4242,
+              cpuPercent: 1.5,
+              rssKb: 2048
+            }
+          ],
+          nextCursor: null
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ result: { terminated: true } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listThreadBackgroundTerminals("thread-1")).resolves.toEqual({
+      terminals: [
+        {
+          itemId: "item-bg-1",
+          processId: "bg-proc-1",
+          command: "npm run dev",
+          cwd: "C:\\repo",
+          osPid: 4242,
+          cpuPercent: 1.5,
+          rssKb: 2048
+        }
+      ],
+      nextCursor: null
+    });
+    await expect(terminateThreadBackgroundTerminal("thread-1", "bg-proc-1")).resolves.toEqual({ terminated: true });
+    await expect(cleanThreadBackgroundTerminals("thread-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/background-terminals", {
+      cache: "no-store"
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/background-terminals/bg-proc-1/terminate", {
+      method: "POST"
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/threads/thread-1/background-terminals/clean", {
+      method: "POST"
+    });
   });
 
   it("切换记忆模式和重置记忆时调用 memory 端点", async () => {

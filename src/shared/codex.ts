@@ -311,6 +311,25 @@ export type MobileTerminalSession = {
   running: boolean;
 };
 
+export type MobileBackgroundTerminalView = {
+  itemId: string;
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid: number | null;
+  cpuPercent: number | null;
+  rssKb: number | null;
+};
+
+export type MobileBackgroundTerminalPage = {
+  terminals: MobileBackgroundTerminalView[];
+  nextCursor: string | null;
+};
+
+export type MobileBackgroundTerminalTerminateResult = {
+  terminated: boolean;
+};
+
 export type MobileSettingsView = {
   model: string | null;
   modelProvider: string | null;

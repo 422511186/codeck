@@ -9,6 +9,8 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileBackgroundTerminalPage,
+  MobileBackgroundTerminalTerminateResult,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -32,6 +34,7 @@ import {
   CodexAppServerClient,
   type AppServerPeer,
   type ExecCommandInput,
+  type ListThreadBackgroundTerminalsInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
   type PluginLookupInput,
@@ -116,6 +119,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private remotePairingClaimed = false;
   private goals = new Map<string, MobileThreadGoalView>();
   private accountState: "chatgpt" | "apiKey" | "none" = "chatgpt";
+  private backgroundTerminals = [
+    {
+      itemId: "mock-bg-item-1",
+      processId: "mock-bg-1",
+      command: "npm run dev",
+      cwd: "C:\\Users\\huang\\workspace",
+      osPid: 4242,
+      cpuPercent: 1.5,
+      rssKb: 2048n
+    }
+  ];
   private readonly workspaceRoot = "C:\\Users\\huang\\workspace";
   private readonly mockFs = new Map<string, MockFsNode>([
     [
@@ -445,6 +459,30 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           turnId: this.thread.turns.at(-1)?.id || "mock-turn-1"
         }
       });
+      return {};
+    }
+
+    if (method === "thread/backgroundTerminals/list") {
+      this.selectThread((params as { threadId?: string }).threadId);
+      return {
+        data: this.backgroundTerminals,
+        nextCursor: null
+      };
+    }
+
+    if (method === "thread/backgroundTerminals/terminate") {
+      this.selectThread((params as { threadId?: string }).threadId);
+      const terminalParams = params as { processId?: string };
+      const previousLength = this.backgroundTerminals.length;
+      this.backgroundTerminals = this.backgroundTerminals.filter(
+        (terminal) => terminal.processId !== terminalParams.processId
+      );
+      return { terminated: this.backgroundTerminals.length !== previousLength };
+    }
+
+    if (method === "thread/backgroundTerminals/clean") {
+      this.selectThread((params as { threadId?: string }).threadId);
+      this.backgroundTerminals = [];
       return {};
     }
 
@@ -1981,6 +2019,24 @@ export class AppServerGateway {
       throw new Error("找不到终端会话");
     }
     return session;
+  }
+
+  async listThreadBackgroundTerminals(input: ListThreadBackgroundTerminalsInput): Promise<MobileBackgroundTerminalPage> {
+    await this.ensureReady();
+    return this.client.listThreadBackgroundTerminals(input);
+  }
+
+  async terminateThreadBackgroundTerminal(
+    threadId: string,
+    processId: string
+  ): Promise<MobileBackgroundTerminalTerminateResult> {
+    await this.ensureReady();
+    return this.client.terminateThreadBackgroundTerminal(threadId, processId);
+  }
+
+  async cleanThreadBackgroundTerminals(threadId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.cleanThreadBackgroundTerminals(threadId);
   }
 
   async readSettings(): Promise<MobileSettingsView> {

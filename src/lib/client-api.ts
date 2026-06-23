@@ -4,6 +4,8 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileBackgroundTerminalPage,
+  MobileBackgroundTerminalTerminateResult,
   MobileCommandResult,
   MobileFileContent,
   MobileFileEntry,
@@ -784,6 +786,45 @@ export async function killProcessSession(processHandle: string): Promise<void> {
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法终止终端会话");
+  }
+}
+
+export async function listThreadBackgroundTerminals(threadId: string): Promise<MobileBackgroundTerminalPage> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/background-terminals`, {
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取后台终端");
+  }
+
+  return response.json() as Promise<MobileBackgroundTerminalPage>;
+}
+
+export async function terminateThreadBackgroundTerminal(
+  threadId: string,
+  processId: string
+): Promise<MobileBackgroundTerminalTerminateResult> {
+  const response = await fetch(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/background-terminals/${encodeURIComponent(processId)}/terminate`,
+    { method: "POST" }
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法终止后台终端");
+  }
+
+  const payload = (await response.json()) as { result: MobileBackgroundTerminalTerminateResult };
+  return payload.result;
+}
+
+export async function cleanThreadBackgroundTerminals(threadId: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/background-terminals/clean`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法清理后台终端");
   }
 }
 
