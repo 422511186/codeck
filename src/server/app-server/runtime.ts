@@ -128,6 +128,17 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private goals = new Map<string, MobileThreadGoalView>();
   private accountState: "chatgpt" | "apiKey" | "none" = "chatgpt";
   private windowsSandboxStatus: "ready" | "notConfigured" | "updateRequired" = "updateRequired";
+  private experimentalFeatures = [
+    {
+      name: "appshots",
+      stage: "beta",
+      displayName: "Appshots",
+      description: "自动保存移动端应用截图",
+      announcement: "Appshots 已可在移动端试用",
+      enabled: false,
+      defaultEnabled: false
+    }
+  ];
   private backgroundTerminals = [
     {
       itemId: "mock-bg-item-1",
@@ -1330,6 +1341,23 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "experimentalFeature/list") {
+      return {
+        data: this.experimentalFeatures,
+        nextCursor: null
+      };
+    }
+
+    if (method === "experimentalFeature/enablement/set") {
+      const enablement = (params as { enablement?: Record<string, boolean | undefined> }).enablement ?? {};
+      this.experimentalFeatures = this.experimentalFeatures.map((feature) =>
+        Object.prototype.hasOwnProperty.call(enablement, feature.name)
+          ? { ...feature, enabled: Boolean(enablement[feature.name]) }
+          : feature
+      );
+      return {};
+    }
+
     if (method === "windowsSandbox/readiness") {
       return { status: this.windowsSandboxStatus };
     }
@@ -2021,6 +2049,11 @@ export class AppServerGateway {
   async writeSkillConfig(input: WriteSkillConfigInput): Promise<MobileSkillConfigWriteResultView> {
     await this.ensureReady();
     return this.client.writeSkillConfig(input);
+  }
+
+  async setExperimentalFeatureEnablement(name: string, enabled: boolean): Promise<void> {
+    await this.ensureReady();
+    await this.client.setExperimentalFeatureEnablement(name, enabled);
   }
 
   async refreshMcpServer(_serverName: string): Promise<void> {

@@ -284,6 +284,16 @@ export type MobileWindowsSandboxSetupResultView = {
   started: boolean;
 };
 
+export type MobileExperimentalFeatureView = {
+  name: string;
+  stage: string;
+  displayName: string | null;
+  description: string | null;
+  announcement: string | null;
+  enabled: boolean;
+  defaultEnabled: boolean;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";
@@ -384,6 +394,7 @@ export type MobileSettingsView = {
   approvalPolicy: string | null;
   sandboxMode: string | null;
   loadedThreadIds: string[];
+  experimentalFeatures: MobileExperimentalFeatureView[];
   remoteControlStatus: string;
   remoteControlServerName: string;
   remoteControlInstallationId: string;

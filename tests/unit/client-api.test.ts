@@ -34,6 +34,7 @@ import {
   resetMemory,
   removePath,
   revokeRemoteControlClient,
+  setExperimentalFeatureEnablement,
   setThreadGoal,
   setThreadMemoryMode,
   setSkillsExtraRoots,
@@ -683,6 +684,22 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ mode: "unelevated", cwd: "C:\\repo" })
+    });
+  });
+
+  it("设置实验功能启用状态时调用 experimental-features 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setExperimentalFeatureEnablement("appshots", true)).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/experimental-features/enablement", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "appshots", enabled: true })
     });
   });
 

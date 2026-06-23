@@ -606,6 +606,18 @@ export async function writeSkillConfig(input: {
   return payload.result;
 }
 
+export async function setExperimentalFeatureEnablement(name: string, enabled: boolean): Promise<void> {
+  const response = await fetch("/api/codex/experimental-features/enablement", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, enabled })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法设置实验功能");
+  }
+}
+
 export async function refreshMcpServer(serverName: string): Promise<void> {
   const response = await fetch(`/api/codex/mcp/servers/${encodeURIComponent(serverName)}/refresh`, { method: "POST" });
   if (!response.ok) {

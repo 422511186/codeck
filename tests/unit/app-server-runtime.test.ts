@@ -243,6 +243,17 @@ describe("createAppServerGateway", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       loadedThreadIds: ["mock-thread-1"],
+      experimentalFeatures: [
+        {
+          name: "appshots",
+          stage: "beta",
+          displayName: "Appshots",
+          description: "自动保存移动端应用截图",
+          announcement: "Appshots 已可在移动端试用",
+          enabled: false,
+          defaultEnabled: false
+        }
+      ],
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "mock-installation",
@@ -630,6 +641,16 @@ describe("createAppServerGateway", () => {
       started: true
     });
     await expect(gateway.getWindowsSandboxReadiness()).resolves.toEqual({ status: "ready" });
+  });
+
+  it("mock 模式支持切换实验功能", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.setExperimentalFeatureEnablement("appshots", true)).resolves.toBeUndefined();
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      experimentalFeatures: [expect.objectContaining({ name: "appshots", enabled: true })]
+    });
   });
 
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {

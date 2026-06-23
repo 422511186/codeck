@@ -16,6 +16,9 @@ import type { ConfigRequirementsReadResponse } from "../../../docs/generated/app
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
 import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
 import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
+import type { ExperimentalFeatureEnablementSetParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureEnablementSetParams";
+import type { ExperimentalFeatureListParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureListParams";
+import type { ExperimentalFeatureListResponse } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureListResponse";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
 import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
@@ -136,6 +139,7 @@ import type {
   MobileBackgroundTerminalPage,
   MobileCollaborationModeView,
   MobileConfigRequirementsView,
+  MobileExperimentalFeatureView,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -493,6 +497,18 @@ function configRequirementsView(requirements: ConfigRequirements | null): Mobile
     allowRemoteControl: requirements.allowRemoteControl,
     featureRequirements: booleanRecord(requirements.featureRequirements)
   };
+}
+
+function experimentalFeatureViews(response: ExperimentalFeatureListResponse): MobileExperimentalFeatureView[] {
+  return response.data.map((feature) => ({
+    name: feature.name,
+    stage: feature.stage,
+    displayName: feature.displayName,
+    description: feature.description,
+    announcement: feature.announcement,
+    enabled: feature.enabled,
+    defaultEnabled: feature.defaultEnabled
+  }));
 }
 
 function accountView(response: GetAccountResponse): MobileAccountView {
@@ -1028,6 +1044,13 @@ export class CodexAppServerClient {
     return { effectiveEnabled: response.effectiveEnabled };
   }
 
+  async setExperimentalFeatureEnablement(name: string, enabled: boolean): Promise<void> {
+    const params: ExperimentalFeatureEnablementSetParams = {
+      enablement: { [name]: enabled }
+    };
+    await this.peer.request("experimentalFeature/enablement/set", params);
+  }
+
   async refreshMcpServer(): Promise<void> {
     await this.peer.request("config/mcpServer/reload", undefined);
   }
@@ -1275,7 +1298,8 @@ export class CodexAppServerClient {
       skillsResponse,
       hooksResponse,
       pluginResponse,
-      loadedThreadsResponse
+      loadedThreadsResponse,
+      experimentalFeaturesResponse
     ] = await Promise.all([
       this.peer.request("config/read", {}),
       this.peer.request("remoteControl/status/read", {}),
@@ -1291,7 +1315,12 @@ export class CodexAppServerClient {
       this.peer.request("thread/loaded/list", {
         cursor: undefined,
         limit: 50
-      } satisfies ThreadLoadedListParams)
+      } satisfies ThreadLoadedListParams),
+      this.peer.request("experimentalFeature/list", {
+        cursor: undefined,
+        limit: 50,
+        threadId: undefined
+      } satisfies ExperimentalFeatureListParams)
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
@@ -1311,6 +1340,7 @@ export class CodexAppServerClient {
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
       loadedThreadIds: (loadedThreadsResponse as ThreadLoadedListResponse).data,
+      experimentalFeatures: experimentalFeatureViews(experimentalFeaturesResponse as ExperimentalFeatureListResponse),
       remoteControlStatus: remoteControl.status,
       remoteControlServerName: remoteControl.serverName,
       remoteControlInstallationId: remoteControl.installationId,

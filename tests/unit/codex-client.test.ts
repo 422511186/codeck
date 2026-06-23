@@ -54,6 +54,27 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "experimentalFeature/list") {
+      return {
+        data: [
+          {
+            name: "appshots",
+            stage: "beta",
+            displayName: "Appshots",
+            description: "自动保存应用截图",
+            announcement: "Appshots 已可试用",
+            enabled: false,
+            defaultEnabled: false
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
+    if (method === "experimentalFeature/enablement/set") {
+      return {};
+    }
+
     if (method === "thread/read") {
       return {
         thread: {
@@ -1599,6 +1620,17 @@ describe("CodexAppServerClient", () => {
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       loadedThreadIds: ["thread-1", "thread-2"],
+      experimentalFeatures: [
+        {
+          name: "appshots",
+          stage: "beta",
+          displayName: "Appshots",
+          description: "自动保存应用截图",
+          announcement: "Appshots 已可试用",
+          enabled: false,
+          defaultEnabled: false
+        }
+      ],
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "install-1",
@@ -1738,9 +1770,22 @@ describe("CodexAppServerClient", () => {
         { method: "hooks/list", params: {} },
         { method: "plugin/list", params: { cwds: null, marketplaceKinds: null } },
         { method: "thread/loaded/list", params: { cursor: undefined, limit: 50 } },
+        { method: "experimentalFeature/list", params: { cursor: undefined, limit: 50, threadId: undefined } },
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );
+  });
+
+  it("能设置实验功能启用状态", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.setExperimentalFeatureEnablement("appshots", true)).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "experimentalFeature/enablement/set",
+      params: { enablement: { appshots: true } }
+    });
   });
 
   it("能刷新 MCP、启动 OAuth 登录并读取资源", async () => {

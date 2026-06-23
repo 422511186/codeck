@@ -21,6 +21,7 @@ import {
   readPluginSkill,
   refreshMcpServer,
   revokeRemoteControlClient,
+  setExperimentalFeatureEnablement,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
   startWindowsSandboxSetup,
@@ -85,6 +86,15 @@ function providerCapabilitiesLabel(settings: MobileSettingsView): string {
   ].filter(Boolean);
 
   return enabled.length ? enabled.join(" / ") : "-";
+}
+
+function experimentalFeaturesLabel(settings: MobileSettingsView): string {
+  if (!settings.experimentalFeatures.length) {
+    return "无实验功能";
+  }
+
+  const enabledCount = settings.experimentalFeatures.filter((feature) => feature.enabled).length;
+  return `${enabledCount} 个启用 / ${settings.experimentalFeatures.length} 个实验功能`;
 }
 
 function remoteClientsLabel(settings: MobileSettingsView): string {
@@ -206,6 +216,7 @@ export function SettingsPanel({
   const [configRequirementsNotice, setConfigRequirementsNotice] = useState("");
   const [windowsSandboxReadiness, setWindowsSandboxReadiness] = useState<MobileWindowsSandboxReadinessView | null>(null);
   const [windowsSandboxNotice, setWindowsSandboxNotice] = useState("");
+  const [experimentalFeatureNotice, setExperimentalFeatureNotice] = useState("");
   const [skillRootText, setSkillRootText] = useState("");
   const [skillNotice, setSkillNotice] = useState("");
   const [pluginSkillContent, setPluginSkillContent] = useState("");
@@ -267,6 +278,7 @@ export function SettingsPanel({
         ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
         ["额度", rateLimitLabel(settings)],
         ["Provider 能力", providerCapabilitiesLabel(settings)],
+        ["实验功能", experimentalFeaturesLabel(settings)],
         ["已加载会话", loadedThreadsLabel(settings)],
         ["会话 ID", loadedThreadIdsLabel(settings)],
         ["远程客户端", remoteClientsLabel(settings)],
@@ -593,6 +605,21 @@ export function SettingsPanel({
       setWindowsSandboxReadiness(await getWindowsSandboxReadiness());
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法启动 Windows Sandbox 设置");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleSetExperimentalFeature(name: string, enabled: boolean) {
+    setRemoteBusy(true);
+    setError("");
+    setExperimentalFeatureNotice("");
+    try {
+      await setExperimentalFeatureEnablement(name, enabled);
+      setExperimentalFeatureNotice(`实验功能 ${name} 已${enabled ? "启用" : "禁用"}`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法设置实验功能");
     } finally {
       setRemoteBusy(false);
     }
@@ -1019,6 +1046,38 @@ export function SettingsPanel({
             </div>
           ) : null}
           {appsNotice ? <p className="settings-note">{appsNotice}</p> : null}
+        </div>
+      ) : null}
+      {settings ? (
+        <div className="experimental-feature-panel">
+          {settings.experimentalFeatures.map((feature) => {
+            const label = feature.displayName || feature.name;
+            return (
+              <dl className="settings-list" key={feature.name}>
+                <div className="settings-row">
+                  <dt>实验功能</dt>
+                  <dd>{label}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>状态</dt>
+                  <dd>{`${feature.enabled ? "启用" : "禁用"} / ${feature.stage}`}</dd>
+                </div>
+                <div className="settings-row">
+                  <dt>说明</dt>
+                  <dd>{feature.description || feature.announcement || "-"}</dd>
+                </div>
+                <button
+                  type="button"
+                  className="remote-client-button"
+                  onClick={() => handleSetExperimentalFeature(feature.name, !feature.enabled)}
+                  disabled={remoteBusy}
+                >
+                  {feature.enabled ? "禁用" : "启用"} {label}
+                </button>
+              </dl>
+            );
+          })}
+          {experimentalFeatureNotice ? <p className="settings-note">{experimentalFeatureNotice}</p> : null}
         </div>
       ) : null}
       {settings ? (
