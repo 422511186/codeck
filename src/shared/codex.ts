@@ -104,6 +104,7 @@ export type MobileRateLimitView = {
   usedPercent: number | null;
   windowDurationMins: number | null;
   resetsAt: number | null;
+  resetCreditsAvailable: number | null;
 };
 
 export type MobileModelProviderCapabilitiesView = {

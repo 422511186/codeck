@@ -669,7 +669,10 @@ function rateLimitView(response: GetAccountRateLimitsResponse): MobileRateLimitV
     limitName: snapshot.limitName,
     usedPercent: primary.usedPercent,
     windowDurationMins: primary.windowDurationMins,
-    resetsAt: primary.resetsAt
+    resetsAt: primary.resetsAt,
+    resetCreditsAvailable: response.rateLimitResetCredits
+      ? Number(response.rateLimitResetCredits.availableCount)
+      : null
   };
 }
 

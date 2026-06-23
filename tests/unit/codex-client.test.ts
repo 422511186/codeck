@@ -855,7 +855,7 @@ class FakePeer implements AppServerPeer {
           rateLimitReachedType: null
         },
         rateLimitsByLimitId: null,
-        rateLimitResetCredits: null
+        rateLimitResetCredits: { availableCount: 1n }
       };
     }
 
@@ -1933,7 +1933,8 @@ describe("CodexAppServerClient", () => {
         limitName: "Codex",
         usedPercent: 42,
         windowDurationMins: 300,
-        resetsAt: 1_800_000_000
+        resetsAt: 1_800_000_000,
+        resetCreditsAvailable: 1
       },
       providerCapabilities: {
         namespaceTools: true,

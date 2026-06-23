@@ -274,7 +274,8 @@ describe("createAppServerGateway", () => {
         limitName: "Codex",
         usedPercent: 42,
         windowDurationMins: 300,
-        resetsAt: 1_800_000_000
+        resetsAt: 1_800_000_000,
+        resetCreditsAvailable: 1
       },
       providerCapabilities: {
         namespaceTools: true,
@@ -837,6 +838,9 @@ describe("createAppServerGateway", () => {
       dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
     });
     await expect(gateway.consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "reset" });
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      rateLimit: { usedPercent: 0, resetCreditsAvailable: 0 }
+    });
     await expect(gateway.consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "alreadyRedeemed" });
     await expect(gateway.sendAddCreditsNudgeEmail("usage_limit")).resolves.toEqual({ status: "sent" });
   });

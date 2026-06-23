@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   cancelAccountLogin,
+  consumeRateLimitResetCredit,
   disableRemoteControl,
   enableRemoteControl,
   getConfigRequirements,
@@ -82,6 +83,11 @@ function rateLimitLabel(settings: MobileSettingsView): string {
 
   const name = settings.rateLimit.limitName || settings.rateLimit.limitId || "主额度";
   return `${name} ${Math.round(settings.rateLimit.usedPercent)}%`;
+}
+
+function rateLimitResetCreditsLabel(settings: MobileSettingsView): string {
+  const count = settings.rateLimit?.resetCreditsAvailable;
+  return count === null || count === undefined ? "-" : `${count} 个可用`;
 }
 
 function providerCapabilitiesLabel(settings: MobileSettingsView): string {
@@ -310,6 +316,7 @@ export function SettingsPanel({
         ["计划", settings.account.planType],
         ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
         ["额度", rateLimitLabel(settings)],
+        ["重置 credit", rateLimitResetCreditsLabel(settings)],
         ["Provider 能力", providerCapabilitiesLabel(settings)],
         ["实验功能", experimentalFeaturesLabel(settings)],
         ["已加载会话", loadedThreadsLabel(settings)],
@@ -474,6 +481,25 @@ export function SettingsPanel({
       setAccountUsageNotice(`提醒结果：${result.status}`);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法发送加购提醒");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleConsumeRateLimitResetCredit() {
+    setRemoteBusy(true);
+    setError("");
+    setAccountUsageNotice("");
+    try {
+      const idempotencyKey =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `mobile-reset-${Date.now()}`;
+      const result = await consumeRateLimitResetCredit(idempotencyKey);
+      setAccountUsageNotice(`重置 credit：${result.outcome}`);
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法消费重置额度 credit");
     } finally {
       setRemoteBusy(false);
     }
@@ -871,6 +897,13 @@ export function SettingsPanel({
             </button>
             <button type="button" onClick={() => handleSendAddCreditsNudge("usage_limit")} disabled={remoteBusy}>
               发送用量限制提醒
+            </button>
+            <button
+              type="button"
+              onClick={handleConsumeRateLimitResetCredit}
+              disabled={remoteBusy || settings.rateLimit?.resetCreditsAvailable === 0}
+            >
+              消费重置 credit
             </button>
           </div>
           {accountUsage ? (

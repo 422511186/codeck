@@ -136,6 +136,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private itemCounter = 2;
   private requestCounter = 0;
   private rateLimitUsedPercent = 42;
+  private rateLimitResetCreditsAvailable = 1;
   private remoteControlEnabled = true;
   private remoteControlEnvironmentId: string | null = "mock-env";
   private remoteControlClients = [
@@ -1379,7 +1380,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           rateLimitReachedType: null
         },
         rateLimitsByLimitId: null,
-        rateLimitResetCredits: null
+        rateLimitResetCredits: { availableCount: BigInt(this.rateLimitResetCreditsAvailable) }
       };
     }
 
@@ -1404,6 +1405,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       if (resetParams.idempotencyKey) {
         this.consumedRateLimitResetCredits.add(resetParams.idempotencyKey);
       }
+      if (this.rateLimitResetCreditsAvailable <= 0) {
+        return { outcome: "noCredit" };
+      }
+      this.rateLimitResetCreditsAvailable -= 1;
       this.rateLimitUsedPercent = 0;
       return { outcome: "reset" };
     }

@@ -110,6 +110,11 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "发送用量限制提醒" }).click();
   await expect(page.getByText("提醒结果：sent")).toBeVisible();
   await expect(page.getByText("Codex 42%")).toBeVisible();
+  await expect(page.getByText("1 个可用")).toBeVisible();
+  await page.getByRole("button", { name: "消费重置 credit" }).click();
+  await expect(page.getByText("重置 credit：reset")).toBeVisible();
+  await expect(page.getByText("Codex 0%")).toBeVisible();
+  await expect(page.getByText("0 个可用")).toBeVisible();
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();
   await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
@@ -214,7 +219,6 @@ test("设置面板会响应 app-server 集成状态更新", async ({ page }) => 
   await login(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByText("Codex 42%")).toBeVisible();
 
   await page.evaluate(async () => {
     const response = await fetch("/api/codex/turns/start", {

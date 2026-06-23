@@ -110,7 +110,7 @@ http://<后端机器局域网 IP>:3000
 - interrupt 和 steer 对当前 turn 生效。
 - Files 面板只能读取 `CODEX_WEB_WORKSPACE_ROOTS` 内路径。
 - Terminal 面板只能在 `CODEX_WEB_WORKSPACE_ROOTS` 内 cwd 执行命令。
-- Settings 面板能显示模型、思考强度、审批策略、沙箱模式、remote-control 状态。
+- Settings 面板能显示模型、思考强度、审批策略、沙箱模式、remote-control 状态、账号额度和重置 credit，并能消费可用重置 credit。
 - `logs/audit.jsonl` 追加记录敏感动作，且不包含原始 token、secret、password、url。
 
 ### 5. 安全检查
