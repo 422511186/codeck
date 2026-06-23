@@ -49,6 +49,11 @@ import { TurnActionsSheet } from "./TurnActionsSheet";
 
 type ActivePanel = "chats" | "run" | "files" | "terminal" | "settings";
 
+type FsChangedEvent = {
+  watchId: string;
+  paths: string[];
+};
+
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
   const [appServerStatus, setAppServerStatus] = useState<AppServerStatusView>({ state: "idle" });
@@ -66,6 +71,7 @@ export function MobileWorkbench() {
   const [threadSearchTerm, setThreadSearchTerm] = useState("");
   const [searchingThreads, setSearchingThreads] = useState(false);
   const [settingsRefreshVersion, setSettingsRefreshVersion] = useState(0);
+  const [latestFsChangedEvent, setLatestFsChangedEvent] = useState<FsChangedEvent | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const threadSearchRequestIdRef = useRef(0);
 
@@ -118,6 +124,12 @@ export function MobileWorkbench() {
           const browserEvent = codexEvent.event;
           if (browserEvent?.kind === "settings_invalidated") {
             setSettingsRefreshVersion((version) => version + 1);
+          }
+          if (browserEvent?.kind === "fs_changed") {
+            setLatestFsChangedEvent({
+              watchId: browserEvent.watchId,
+              paths: browserEvent.paths
+            });
           }
           if (browserEvent?.kind === "thread_goal_updated") {
             setSelectedThread((current) =>
@@ -746,7 +758,9 @@ export function MobileWorkbench() {
         ) : null}
 
         {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
-        {activePanel === "files" && selectedThread ? <FilesPanel rootPath={selectedThread.cwd} /> : null}
+        {activePanel === "files" && selectedThread ? (
+          <FilesPanel rootPath={selectedThread.cwd} fsChangedEvent={latestFsChangedEvent} />
+        ) : null}
         {activePanel === "terminal" && selectedThread ? (
           <TerminalPanel threadId={selectedThread.id} cwd={selectedThread.cwd} />
         ) : null}

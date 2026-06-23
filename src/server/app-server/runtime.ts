@@ -89,6 +89,8 @@ import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/
 import type { FsReadDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsReadDirectoryParams";
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
+import type { FsUnwatchParams } from "../../../docs/generated/app-server-ts/v2/FsUnwatchParams";
+import type { FsWatchParams } from "../../../docs/generated/app-server-ts/v2/FsWatchParams";
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2/ProcessKillParams";
 import type { ProcessResizePtyParams } from "../../../docs/generated/app-server-ts/v2/ProcessResizePtyParams";
@@ -190,6 +192,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   ]);
   private readonly mockProcesses = new Set<string>();
   private readonly mockCommandExecs = new Map<string, MockCommandExec>();
+  private readonly mockFsWatches = new Map<string, string>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -848,24 +851,28 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "fs/writeFile") {
       const writeParams = params as FsWriteFileParams;
       this.writeMockFile(writeParams.path, Buffer.from(writeParams.dataBase64, "base64").toString("utf8"));
+      this.emitMockFsChanged([writeParams.path]);
       return {};
     }
 
     if (method === "fs/createDirectory") {
       const createParams = params as FsCreateDirectoryParams;
       this.createMockDirectory(createParams.path);
+      this.emitMockFsChanged([createParams.path]);
       return {};
     }
 
     if (method === "fs/remove") {
       const removeParams = params as FsRemoveParams;
       this.removeMockPath(removeParams.path);
+      this.emitMockFsChanged([removeParams.path]);
       return {};
     }
 
     if (method === "fs/copy") {
       const copyParams = params as FsCopyParams;
       this.copyMockPath(copyParams.sourcePath, copyParams.destinationPath);
+      this.emitMockFsChanged([copyParams.destinationPath]);
       return {};
     }
 
@@ -879,6 +886,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         createdAtMs: node.createdAtMs,
         modifiedAtMs: node.modifiedAtMs
       };
+    }
+
+    if (method === "fs/watch") {
+      const watchParams = params as FsWatchParams;
+      const normalizedPath = this.normalizeMockPath(watchParams.path);
+      this.mockFsWatches.set(watchParams.watchId, normalizedPath);
+      return { path: normalizedPath };
+    }
+
+    if (method === "fs/unwatch") {
+      const unwatchParams = params as FsUnwatchParams;
+      this.mockFsWatches.delete(unwatchParams.watchId);
+      return {};
     }
 
     if (method === "fuzzyFileSearch") {
@@ -1671,6 +1691,30 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     this.touchMockPath(parentPath);
   }
 
+  private emitMockFsChanged(paths: string[]): void {
+    const normalizedPaths = paths.map((changedPath) => this.normalizeMockPath(changedPath));
+    for (const [watchId, watchedPath] of this.mockFsWatches) {
+      const changedPaths = normalizedPaths.filter((changedPath) => this.isMockPathInsideWatch(changedPath, watchedPath));
+      if (!changedPaths.length) {
+        continue;
+      }
+
+      this.emitNotification({
+        method: "fs/changed",
+        params: {
+          watchId,
+          changedPaths
+        }
+      });
+    }
+  }
+
+  private isMockPathInsideWatch(changedPath: string, watchedPath: string): boolean {
+    const normalizedChangedPath = changedPath.toLowerCase();
+    const normalizedWatchedPath = watchedPath.toLowerCase();
+    return normalizedChangedPath === normalizedWatchedPath || normalizedChangedPath.startsWith(`${normalizedWatchedPath}\\`);
+  }
+
   private threadMatchesSearch(thread: Thread, searchTerm: string): boolean {
     if (!searchTerm) {
       return true;
@@ -1851,6 +1895,7 @@ export class AppServerGateway {
   private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
   private processCounter = 0;
   private commandExecCounter = 0;
+  private fsWatchCounter = 0;
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
@@ -2231,6 +2276,17 @@ export class AppServerGateway {
   async getMetadata(path: string): Promise<MobileFileMetadata> {
     await this.ensureReady();
     return this.client.getMetadata(path);
+  }
+
+  async watchPath(path: string): Promise<{ watchId: string; path: string }> {
+    await this.ensureReady();
+    const watchId = `mobile-watch-${++this.fsWatchCounter}`;
+    return this.client.watchPath(watchId, path);
+  }
+
+  async unwatchPath(watchId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.unwatchPath(watchId);
   }
 
   async searchFiles(input: SearchFilesInput): Promise<MobileFileSearchResult[]> {

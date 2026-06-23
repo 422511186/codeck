@@ -49,10 +49,12 @@ import {
   updateThreadSettings,
   terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
+  unwatchPath,
   writeSkillConfig,
   writeFile,
   writeCommandExecStdin,
   writeProcessStdin,
+  watchPath,
   resizeProcessSession,
   resizeCommandExecSession,
   killProcessSession
@@ -378,6 +380,33 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query: "app", roots: ["C:\\repo"] })
+    });
+  });
+
+  it("监听和停止监听文件变化时调用 fs watch 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ watch: { watchId: "mobile-watch-1", path: "C:\\repo" } })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(watchPath("C:\\repo")).resolves.toEqual({
+      watchId: "mobile-watch-1",
+      path: "C:\\repo"
+    });
+    await expect(unwatchPath("mobile-watch-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/fs/watch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "C:\\repo" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/fs/unwatch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ watchId: "mobile-watch-1" })
     });
   });
 

@@ -223,6 +223,25 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把文件监听变更映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "fs/changed",
+        params: {
+          watchId: "watch-1",
+          changedPaths: ["C:\\repo\\README.md", "C:\\repo\\src"]
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "fs_changed",
+        watchId: "watch-1",
+        paths: ["C:\\repo\\README.md", "C:\\repo\\src"]
+      }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

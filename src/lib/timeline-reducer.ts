@@ -39,7 +39,8 @@ export function applyCodexTimelineEvent(
   if (
     event.kind === "settings_invalidated" ||
     event.kind === "thread_goal_updated" ||
-    event.kind === "thread_goal_cleared"
+    event.kind === "thread_goal_cleared" ||
+    event.kind === "fs_changed"
   ) {
     return thread;
   }

@@ -12,6 +12,9 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
 
   await page.getByRole("button", { name: "Files" }).click();
   await expect(page.getByRole("heading", { name: "文件" })).toBeVisible();
+  await page.getByRole("button", { name: "开始监听" }).click();
+  await expect(page.getByText("已开始监听文件变化")).toBeVisible();
+  await expect(page.getByText(/正在监听：C:\\Users\\huang\\workspace/)).toBeVisible();
   await expect(page.getByRole("button", { name: "src" })).toBeVisible();
   await page.getByLabel("搜索文件").fill("app");
   await page.getByRole("button", { name: "搜索文件" }).click();
@@ -23,6 +26,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.locator(".file-preview textarea").fill("# 已保存\n\n来自手机端 E2E。");
   await page.getByRole("button", { name: "保存文件" }).click();
   await expect(page.getByText("文件已保存")).toBeVisible();
+  await expect(page.locator(".file-change-list").getByText("README.md")).toBeVisible();
   await expect(page.locator(".file-preview textarea")).toHaveValue("# 已保存\n\n来自手机端 E2E。");
   await page.getByLabel("新目录").fill("docs");
   await page.getByRole("button", { name: "创建目录" }).click();
@@ -37,6 +41,8 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "删除" }).click();
   await expect(page.getByText("路径已删除")).toBeVisible();
   await expect(page.getByRole("button", { name: "README.copy.md" })).toHaveCount(0);
+  await page.getByRole("button", { name: "停止监听" }).click();
+  await expect(page.getByText("已停止监听文件变化")).toBeVisible();
 
   await page.getByRole("button", { name: "Terminal" }).click();
   await expect(page.getByRole("heading", { name: "终端" })).toBeVisible();

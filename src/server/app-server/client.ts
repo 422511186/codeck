@@ -31,6 +31,9 @@ import type { FsReadDirectoryResponse } from "../../../docs/generated/app-server
 import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/FsReadFileParams";
 import type { FsReadFileResponse } from "../../../docs/generated/app-server-ts/v2/FsReadFileResponse";
 import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
+import type { FsUnwatchParams } from "../../../docs/generated/app-server-ts/v2/FsUnwatchParams";
+import type { FsWatchParams } from "../../../docs/generated/app-server-ts/v2/FsWatchParams";
+import type { FsWatchResponse } from "../../../docs/generated/app-server-ts/v2/FsWatchResponse";
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
@@ -1210,6 +1213,17 @@ export class CodexAppServerClient {
       createdAtMs: response.createdAtMs,
       modifiedAtMs: response.modifiedAtMs
     };
+  }
+
+  async watchPath(watchId: string, targetPath: string): Promise<{ watchId: string; path: string }> {
+    const params: FsWatchParams = { watchId, path: targetPath };
+    const response = (await this.peer.request("fs/watch", params)) as FsWatchResponse;
+    return { watchId, path: response.path };
+  }
+
+  async unwatchPath(watchId: string): Promise<void> {
+    const params: FsUnwatchParams = { watchId };
+    await this.peer.request("fs/unwatch", params);
   }
 
   async searchFiles(input: SearchFilesInput): Promise<MobileFileSearchResult[]> {

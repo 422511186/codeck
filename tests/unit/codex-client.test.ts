@@ -547,6 +547,15 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "fs/watch") {
+      const watchParams = params as { path?: string };
+      return { path: watchParams.path };
+    }
+
+    if (method === "fs/unwatch") {
+      return {};
+    }
+
     if (method === "fs/getMetadata") {
       return {
         isDirectory: false,
@@ -1511,6 +1520,22 @@ describe("CodexAppServerClient", () => {
         params: { path: "C:\\Users\\huang\\workspace\\demo\\README.copy.md", recursive: true, force: true }
       },
       { method: "fs/getMetadata", params: { path: "C:\\Users\\huang\\workspace\\demo\\README.md" } }
+    ]);
+  });
+
+  it("能启动和停止文件系统监听", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.watchPath("watch-1", "C:\\repo\\src")).resolves.toEqual({
+      watchId: "watch-1",
+      path: "C:\\repo\\src"
+    });
+    await expect(client.unwatchPath("watch-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-2)).toEqual([
+      { method: "fs/watch", params: { watchId: "watch-1", path: "C:\\repo\\src" } },
+      { method: "fs/unwatch", params: { watchId: "watch-1" } }
     ]);
   });
 

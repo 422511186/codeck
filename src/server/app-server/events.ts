@@ -87,6 +87,11 @@ export type BrowserCodexEvent =
   | {
       kind: "thread_goal_cleared";
       threadId: string;
+    }
+  | {
+      kind: "fs_changed";
+      watchId: string;
+      paths: string[];
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -305,6 +310,22 @@ export function normalizeAppServerNotification(
       event: {
         kind: "thread_goal_cleared",
         threadId: params.threadId
+      }
+    };
+  }
+
+  if (message.method === "fs/changed") {
+    const params = message.params as { watchId?: unknown; changedPaths?: unknown } | null | undefined;
+    if (!params || typeof params.watchId !== "string" || !Array.isArray(params.changedPaths)) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "fs_changed",
+        watchId: params.watchId,
+        paths: params.changedPaths.filter((changedPath): changedPath is string => typeof changedPath === "string")
       }
     };
   }

@@ -435,6 +435,29 @@ pre {
   opacity: 0.55;
 }
 
+.file-watch-status {
+  min-width: 0;
+  color: #8f9bad;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-change-list {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #254839;
+  border-radius: 8px;
+  background: #12231c;
+  color: #b8f3d0;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.file-change-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .file-preview,
 .terminal-output,
 .diff-preview {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   copyPath,
   createDirectory,
@@ -9,15 +9,21 @@ import {
   readFile,
   removePath,
   searchFiles,
+  unwatchPath,
+  watchPath,
   writeFile
 } from "../lib/client-api";
 import type { MobileFileContent, MobileFileEntry, MobileFileMetadata, MobileFileSearchResult } from "../shared/codex";
 
 type FilesPanelProps = {
   rootPath: string;
+  fsChangedEvent?: {
+    watchId: string;
+    paths: string[];
+  } | null;
 };
 
-export function FilesPanel({ rootPath }: FilesPanelProps) {
+export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps) {
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [entries, setEntries] = useState<MobileFileEntry[]>([]);
   const [file, setFile] = useState<MobileFileContent | null>(null);
@@ -28,9 +34,12 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
   const [directoryPath, setDirectoryPath] = useState("");
   const [copyTargetPath, setCopyTargetPath] = useState("");
   const [metadata, setMetadata] = useState<MobileFileMetadata | null>(null);
+  const [activeWatch, setActiveWatch] = useState<{ watchId: string; path: string } | null>(null);
+  const [lastChangedPaths, setLastChangedPaths] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const activeWatchRef = useRef(activeWatch);
 
   async function loadDirectory(path = currentPath) {
     setError("");
@@ -71,6 +80,29 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
   useEffect(() => {
     setCurrentPath(rootPath);
   }, [rootPath]);
+
+  useEffect(() => {
+    activeWatchRef.current = activeWatch;
+  }, [activeWatch]);
+
+  useEffect(() => {
+    return () => {
+      const watch = activeWatchRef.current;
+      if (watch) {
+        void unwatchPath(watch.watchId).catch(() => undefined);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeWatch || fsChangedEvent?.watchId !== activeWatch.watchId) {
+      return;
+    }
+
+    setLastChangedPaths(fsChangedEvent.paths);
+    setNotice(`监听到变更：${fsChangedEvent.paths[0] || activeWatch.path}`);
+    void loadDirectory();
+  }, [fsChangedEvent, activeWatch]);
 
   async function handleOpen(entry: MobileFileEntry) {
     setError("");
@@ -219,6 +251,29 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
     }
   }
 
+  async function handleStartWatch() {
+    await runFileAction(async () => {
+      if (activeWatch) {
+        await unwatchPath(activeWatch.watchId);
+      }
+      const watch = await watchPath(currentPath);
+      setActiveWatch(watch);
+      setLastChangedPaths([]);
+    }, "已开始监听文件变化");
+  }
+
+  async function handleStopWatch() {
+    if (!activeWatch) {
+      return;
+    }
+
+    await runFileAction(async () => {
+      await unwatchPath(activeWatch.watchId);
+      setActiveWatch(null);
+      setLastChangedPaths([]);
+    }, "已停止监听文件变化");
+  }
+
   return (
     <section className="panel-view" aria-label="文件面板">
       <div className="section-title">
@@ -228,6 +283,22 @@ export function FilesPanel({ rootPath }: FilesPanelProps) {
       <p className="path-line">{currentPath}</p>
       {error ? <p className="form-error">{error}</p> : null}
       {notice ? <p className="form-success">{notice}</p> : null}
+      <div className="file-toolbox">
+        <button type="button" onClick={handleStartWatch} disabled={busy}>
+          开始监听
+        </button>
+        <button type="button" onClick={handleStopWatch} disabled={busy || !activeWatch}>
+          停止监听
+        </button>
+        <span className="file-watch-status">{activeWatch ? `正在监听：${activeWatch.path}` : "未监听"}</span>
+      </div>
+      {lastChangedPaths.length ? (
+        <div className="file-change-list" aria-label="文件变更">
+          {lastChangedPaths.map((changedPath) => (
+            <span key={changedPath}>{changedPath}</span>
+          ))}
+        </div>
+      ) : null}
       <form
         className="file-toolbox"
         onSubmit={(event) => {

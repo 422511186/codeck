@@ -381,6 +381,35 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持监听文件变化并停止监听", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+
+    await expect(gateway.watchPath("C:\\Users\\huang\\workspace")).resolves.toEqual({
+      watchId: "mobile-watch-1",
+      path: "C:\\Users\\huang\\workspace"
+    });
+    await gateway.writeFile("C:\\Users\\huang\\workspace\\README.md", "# 触发监听");
+
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: {
+        kind: "fs_changed",
+        watchId: "mobile-watch-1",
+        paths: ["C:\\Users\\huang\\workspace\\README.md"]
+      }
+    });
+
+    events.length = 0;
+    await expect(gateway.unwatchPath("mobile-watch-1")).resolves.toBeUndefined();
+    await gateway.writeFile("C:\\Users\\huang\\workspace\\README.md", "# 停止监听后不广播");
+
+    expect(events).toEqual([]);
+  });
+
   it("mock 模式支持交互式终端会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

@@ -791,6 +791,33 @@ export async function getMetadata(path: string): Promise<MobileFileMetadata> {
   return payload.metadata;
 }
 
+export async function watchPath(path: string): Promise<{ watchId: string; path: string }> {
+  const response = await fetch("/api/codex/fs/watch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法监听文件变化");
+  }
+
+  const payload = (await response.json()) as { watch: { watchId: string; path: string } };
+  return payload.watch;
+}
+
+export async function unwatchPath(watchId: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/unwatch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ watchId })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法停止监听文件变化");
+  }
+}
+
 export async function searchFiles(input: { query: string; roots: string[] }): Promise<MobileFileSearchResult[]> {
   const response = await fetch("/api/codex/fs/search", {
     method: "POST",
