@@ -84,15 +84,28 @@ describe("client-api", () => {
   });
 
   it("搜索会话历史时把 search 参数发送给后端", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ threads: [], nextCursor: null })
-    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ threads: [], nextCursor: null })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ threads: [], nextCursor: null })
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(listThreads("示例")).resolves.toEqual({ threads: [], nextCursor: null });
+    await expect(listThreads("示例", { archived: true })).resolves.toEqual({ threads: [], nextCursor: null });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads?search=%E7%A4%BA%E4%BE%8B", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads?search=%E7%A4%BA%E4%BE%8B", {
+      cache: "no-store"
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/codex/threads?search=%E7%A4%BA%E4%BE%8B&archived=true",
+      { cache: "no-store" }
+    );
   });
 
   it("管理 Codex 账号登录状态时调用 account 端点", async () => {

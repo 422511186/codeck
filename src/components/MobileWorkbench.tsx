@@ -40,6 +40,7 @@ import {
   steerTurn,
   startThread,
   startTurn,
+  unarchiveThread,
   updateThreadSettings
 } from "../lib/client-api";
 import { applyCodexTimelineEvent } from "../lib/timeline-reducer";
@@ -85,6 +86,7 @@ export function MobileWorkbench() {
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
   const [selectedPermissions, setSelectedPermissions] = useState("default");
   const [threadSearchTerm, setThreadSearchTerm] = useState("");
+  const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [searchingThreads, setSearchingThreads] = useState(false);
   const [settingsRefreshVersion, setSettingsRefreshVersion] = useState(0);
   const [latestFsChangedEvent, setLatestFsChangedEvent] = useState<FsChangedEvent | null>(null);
@@ -233,7 +235,7 @@ export function MobileWorkbench() {
     async function loadWorkbenchData() {
       setLoadError("");
       try {
-        const [threadPage, modelOptions] = await Promise.all([listThreads(), listModels()]);
+        const [threadPage, modelOptions] = await Promise.all([listThreads("", { archived: false }), listModels()]);
         const requests = await listPendingServerRequests();
         const status = await readCodexStatus();
 
@@ -314,7 +316,7 @@ export function MobileWorkbench() {
     const requestId = ++threadSearchRequestIdRef.current;
 
     try {
-      const page = await listThreads(searchTerm);
+      const page = await listThreads(searchTerm, { archived: showArchivedThreads });
       if (threadSearchRequestIdRef.current === requestId) {
         setThreads(page.threads);
       }
@@ -326,6 +328,26 @@ export function MobileWorkbench() {
       if (threadSearchRequestIdRef.current === requestId) {
         setSearchingThreads(false);
       }
+    }
+  }
+
+  async function handleToggleArchivedThreads() {
+    const nextArchived = !showArchivedThreads;
+    setShowArchivedThreads(nextArchived);
+    setSearchingThreads(true);
+    setLoadError("");
+    try {
+      const page = await listThreads(threadSearchTerm, { archived: nextArchived });
+      setThreads(page.threads);
+      if (page.threads[0]) {
+        setSelectedThread(await resumeThread(page.threads[0].id));
+      } else {
+        setSelectedThread(null);
+      }
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法切换会话历史视图");
+    } finally {
+      setSearchingThreads(false);
     }
   }
 
@@ -444,7 +466,7 @@ export function MobileWorkbench() {
   }
 
   async function refreshThreadsAfterRemoval() {
-    const page = await listThreads(threadSearchTerm);
+    const page = await listThreads(threadSearchTerm, { archived: showArchivedThreads });
     setThreads(page.threads);
     if (page.threads[0]) {
       setSelectedThread(await resumeThread(page.threads[0].id));
@@ -660,6 +682,23 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleUnarchiveThread() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await unarchiveThread(selectedThread.id);
+      await refreshThreadsAfterRemoval();
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法恢复归档会话");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleDeleteThread() {
     if (!selectedThread) {
       return;
@@ -792,9 +831,12 @@ export function MobileWorkbench() {
 
             <section className="thread-list" aria-label="会话历史">
               <div className="section-title">
-                <h2>历史会话</h2>
+                <h2>{showArchivedThreads ? "归档会话" : "历史会话"}</h2>
                 <span>{searchingThreads ? "搜索中" : threads.length}</span>
               </div>
+              <button className="secondary-action" type="button" onClick={handleToggleArchivedThreads} disabled={searchingThreads}>
+                {showArchivedThreads ? "显示活跃" : "显示归档"}
+              </button>
               <input
                 className="thread-search-input"
                 type="search"
@@ -815,7 +857,7 @@ export function MobileWorkbench() {
                 ))
               ) : (
                 <article className="empty-state">
-                  <h2>{threadSearchTerm.trim() ? "没有匹配的会话" : "新会话"}</h2>
+                  <h2>{threadSearchTerm.trim() ? "没有匹配的会话" : showArchivedThreads ? "没有归档会话" : "新会话"}</h2>
                   <p>{threadSearchTerm.trim() ? threadSearchTerm.trim() : "Codex"}</p>
                 </article>
               )}
@@ -876,9 +918,11 @@ export function MobileWorkbench() {
         <TurnActionsSheet
           thread={selectedThread}
           busy={sending}
+          archived={showArchivedThreads}
           onFork={handleForkThread}
           onRename={handleRenameThread}
           onArchive={handleArchiveThread}
+          onUnarchive={handleUnarchiveThread}
           onDelete={handleDeleteThread}
           onCompact={handleCompactThread}
           onReview={handleStartReview}

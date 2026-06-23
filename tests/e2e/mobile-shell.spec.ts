@@ -61,7 +61,7 @@ test("手机端可以重命名、归档和删除会话", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "手机重命名" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^手机重命名/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "归档" }).click();
+  await page.getByRole("button", { name: "归档", exact: true }).click();
   await expect(page.getByRole("button", { name: /^手机重命名/ })).toHaveCount(0);
 
   await page.getByTitle("新会话").click();
@@ -71,4 +71,26 @@ test("手机端可以重命名、归档和删除会话", async ({ page }) => {
 
   await page.getByRole("button", { name: "删除", exact: true }).click();
   await expect(page.getByRole("button", { name: /^手机删除/ })).toHaveCount(0);
+});
+
+test("手机端可以查看归档会话并恢复", async ({ page }) => {
+  await page.goto("/");
+  await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
+  await page.getByRole("button", { name: "登录" }).click();
+
+  await page.getByTitle("新会话").click();
+  await page.getByPlaceholder("重命名会话").fill("手机归档恢复");
+  await page.getByRole("button", { name: "改名" }).click();
+  await expect(page.getByRole("button", { name: /^手机归档恢复/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "归档", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^手机归档恢复/ })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "显示归档" }).click();
+  await page.getByRole("button", { name: /^手机归档恢复/ }).click();
+  await expect(page.getByRole("heading", { name: "手机归档恢复" })).toBeVisible();
+
+  await page.getByRole("button", { name: "恢复归档" }).click();
+  await page.getByRole("button", { name: "显示活跃" }).click();
+  await expect(page.getByRole("button", { name: /^手机归档恢复/ })).toBeVisible();
 });

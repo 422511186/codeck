@@ -100,6 +100,7 @@ http://<后端机器局域网 IP>:3000
 
 - 登录后能看到当前会话、连接状态、底部导航。
 - 会话历史可以读取并切换。
+- 可以查看归档会话列表，并把归档会话恢复到活跃历史。
 - 新建会话后可以发送第一条消息。
 - 可以切换模型和思考强度，并能正常发送文本。
 - 可以上传图片，发送后 Codex 收到 `localImage`。
@@ -108,7 +109,7 @@ http://<后端机器局域网 IP>:3000
 - fork 后切换到新会话。
 - 编辑重发会先 rollback，再发送新输入。
 - interrupt 和 steer 对当前 turn 生效。
-- 会话操作可以发送 shell command，并能暂停/恢复 elicitation 计数。
+- 会话操作可以归档/恢复会话、发送 shell command，并能暂停/恢复 elicitation 计数。
 - Files 面板只能读取 `CODEX_WEB_WORKSPACE_ROOTS` 内路径。
 - Terminal 面板只能在 `CODEX_WEB_WORKSPACE_ROOTS` 内 cwd 执行命令。
 - Settings 面板能显示模型、思考强度、审批策略、沙箱模式、remote-control 状态、账号额度和重置 credit，并能消费可用重置 credit。

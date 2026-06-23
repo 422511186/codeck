@@ -11,18 +11,21 @@ export async function GET(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");
     const searchTerm = (url.searchParams.get("search") || url.searchParams.get("q") || "").trim();
+    const archived = url.searchParams.get("archived") === "true";
     const gateway = getAppServerGateway();
     const page = searchTerm
       ? await gateway.searchThreads({
           searchTerm,
           limit: 30,
-          cursor
+          cursor,
+          archived
         })
       : await gateway.listThreads({
           limit: 30,
           cursor,
           sortKey: "updated_at",
-          sortDirection: "desc"
+          sortDirection: "desc",
+          archived
         });
 
     return NextResponse.json({ ok: true, ...page });

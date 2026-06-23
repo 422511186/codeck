@@ -252,6 +252,16 @@ pre {
   font-size: 12px;
 }
 
+.secondary-action {
+  min-height: 36px;
+  border: 1px solid #2d3440;
+  border-radius: 8px;
+  background: #151a21;
+  color: #e7ecf4;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
 .thread-search-input {
   width: 100%;
   min-height: 42px;

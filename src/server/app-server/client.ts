@@ -291,6 +291,7 @@ export type SearchThreadsInput = {
   searchTerm: string;
   cursor?: string | null;
   limit?: number | null;
+  archived?: boolean | null;
 };
 
 export type GetConversationSummaryInput =
@@ -891,7 +892,8 @@ export class CodexAppServerClient {
       cursor: input.cursor,
       limit: input.limit,
       sortKey: "updated_at",
-      sortDirection: "desc"
+      sortDirection: "desc",
+      archived: input.archived
     };
     const response = (await this.peer.request("thread/search", params)) as ThreadSearchResponse;
 

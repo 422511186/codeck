@@ -112,6 +112,7 @@ import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v
 import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
+import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 
@@ -310,8 +311,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     }
 
     if (method === "thread/list") {
+      const listParams = params as ThreadListParams | undefined;
+      const sourceThreads = listParams?.archived ? [...this.archivedThreads.values()] : this.threads;
       return {
-        data: this.threads.map((thread) => ({ ...thread, turns: [] })),
+        data: sourceThreads.map((thread) => ({ ...thread, turns: [] })),
         nextCursor: null,
         backwardsCursor: null
       };
@@ -320,7 +323,8 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "thread/search") {
       const searchParams = params as ThreadSearchParams;
       const searchTerm = searchParams.searchTerm.trim().toLowerCase();
-      const results = this.threads
+      const sourceThreads = searchParams.archived ? [...this.archivedThreads.values()] : this.threads;
+      const results = sourceThreads
         .filter((thread) => this.threadMatchesSearch(thread, searchTerm))
         .slice(0, searchParams.limit || undefined)
         .map((thread) => ({
@@ -1805,7 +1809,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   }
 
   private selectThread(threadId: string | undefined): Thread {
-    const thread = this.threads.find((item) => item.id === threadId) || this.thread;
+    const thread =
+      this.threads.find((item) => item.id === threadId) ||
+      (threadId ? this.archivedThreads.get(threadId) : null) ||
+      this.thread;
     this.thread = thread;
     return thread;
   }

@@ -176,10 +176,13 @@ export async function sendAddCreditsNudgeEmail(
   return payload.result;
 }
 
-export async function listThreads(searchTerm = ""): Promise<MobileThreadPage> {
+export async function listThreads(searchTerm = "", options: { archived?: boolean } = {}): Promise<MobileThreadPage> {
   const params = new URLSearchParams();
   if (searchTerm.trim()) {
     params.set("search", searchTerm.trim());
+  }
+  if (options.archived) {
+    params.set("archived", "true");
   }
   const query = params.toString();
   const response = await fetch(`/api/codex/threads${query ? `?${query}` : ""}`, { cache: "no-store" });

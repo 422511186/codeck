@@ -4,9 +4,11 @@ import type { MobileThreadDetail } from "../shared/codex";
 type TurnActionsSheetProps = {
   thread: MobileThreadDetail;
   busy: boolean;
+  archived: boolean;
   onFork(): Promise<void>;
   onRename(name: string): Promise<void>;
   onArchive(): Promise<void>;
+  onUnarchive(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
   onReview(): Promise<void>;
@@ -25,9 +27,11 @@ type TurnActionsSheetProps = {
 export function TurnActionsSheet({
   thread,
   busy,
+  archived,
   onFork,
   onRename,
   onArchive,
+  onUnarchive,
   onDelete,
   onCompact,
   onReview,
@@ -125,9 +129,15 @@ export function TurnActionsSheet({
         </button>
       </div>
       <div className="turn-actions-row">
-        <button type="button" onClick={onArchive} disabled={busy}>
-          归档
-        </button>
+        {archived ? (
+          <button type="button" onClick={onUnarchive} disabled={busy}>
+            恢复归档
+          </button>
+        ) : (
+          <button type="button" onClick={onArchive} disabled={busy}>
+            归档
+          </button>
+        )}
         <button type="button" onClick={onDelete} disabled={busy}>
           删除
         </button>
