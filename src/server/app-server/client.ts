@@ -136,6 +136,8 @@ import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-t
 import type { ThreadTurnsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListResponse";
 import type { ThreadUnarchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveParams";
 import type { ThreadUnarchiveResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveResponse";
+import type { ThreadUnsubscribeParams } from "../../../docs/generated/app-server-ts/v2/ThreadUnsubscribeParams";
+import type { ThreadUnsubscribeResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnsubscribeResponse";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -188,6 +190,7 @@ import type {
   MobileSkillErrorView,
   MobileSkillView,
   MobileThreadGoalView,
+  MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -929,6 +932,12 @@ export class CodexAppServerClient {
     const params: ThreadUnarchiveParams = { threadId };
     const response = (await this.peer.request("thread/unarchive", params)) as ThreadUnarchiveResponse;
     return threadDetail(response.thread);
+  }
+
+  async unsubscribeThread(threadId: string): Promise<MobileThreadUnsubscribeResult> {
+    const params: ThreadUnsubscribeParams = { threadId };
+    const response = (await this.peer.request("thread/unsubscribe", params)) as ThreadUnsubscribeResponse;
+    return { status: response.status };
   }
 
   async deleteThread(threadId: string): Promise<void> {

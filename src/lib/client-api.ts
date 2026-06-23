@@ -32,6 +32,7 @@ import type {
   MobileThreadDetail,
   MobileThreadGoalView,
   MobileThreadPage,
+  MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileWindowsSandboxReadinessView,
   MobileWindowsSandboxSetupResultView
@@ -310,6 +311,17 @@ export async function unarchiveThread(threadId: string): Promise<MobileThreadDet
 
   const payload = (await response.json()) as { thread: MobileThreadDetail };
   return payload.thread;
+}
+
+export async function unsubscribeThread(threadId: string): Promise<MobileThreadUnsubscribeResult> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/unsubscribe`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法取消订阅会话");
+  }
+
+  const payload = (await response.json()) as { result: MobileThreadUnsubscribeResult };
+  return payload.result;
 }
 
 export async function deleteThread(threadId: string): Promise<void> {

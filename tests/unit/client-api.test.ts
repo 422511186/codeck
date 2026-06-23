@@ -51,6 +51,7 @@ import {
   startReview,
   uninstallPlugin,
   unarchiveThread,
+  unsubscribeThread,
   updateThreadSettings,
   terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
@@ -236,6 +237,18 @@ describe("client-api", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/archive", { method: "POST" });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/unarchive", { method: "POST" });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/threads/thread-1/delete", { method: "POST" });
+  });
+
+  it("取消订阅会话时调用 unsubscribe 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ result: { status: "unsubscribed" } })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(unsubscribeThread("thread-1")).resolves.toEqual({ status: "unsubscribed" });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/unsubscribe", { method: "POST" });
   });
 
   it("更新会话设置时调用 settings 端点", async () => {

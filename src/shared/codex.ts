@@ -408,6 +408,10 @@ export type MobileBackgroundTerminalTerminateResult = {
   terminated: boolean;
 };
 
+export type MobileThreadUnsubscribeResult = {
+  status: "notLoaded" | "notSubscribed" | "unsubscribed";
+};
+
 export type MobileSettingsView = {
   model: string | null;
   modelProvider: string | null;

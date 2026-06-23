@@ -440,6 +440,10 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/unsubscribe") {
+      return { status: "unsubscribed" };
+    }
+
     if (method === "thread/settings/update") {
       return {};
     }
@@ -1451,6 +1455,18 @@ describe("CodexAppServerClient", () => {
       { method: "thread/unarchive", params: { threadId: "thread-1" } },
       { method: "thread/delete", params: { threadId: "thread-1" } }
     ]);
+  });
+
+  it("能取消订阅当前会话", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.unsubscribeThread("thread-1")).resolves.toEqual({ status: "unsubscribed" });
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/unsubscribe",
+      params: { threadId: "thread-1" }
+    });
   });
 
   it("能更新当前会话设置", async () => {

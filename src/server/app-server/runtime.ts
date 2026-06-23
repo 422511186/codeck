@@ -31,6 +31,7 @@ import type {
   MobileSkillConfigWriteResultView,
   MobileTerminalSession,
   MobileThreadGoalView,
+  MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -658,6 +659,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.thread = { ...archivedThread, updatedAt: Math.floor(Date.now() / 1000) };
       this.upsertThread(this.thread);
       return { thread: this.thread };
+    }
+
+    if (method === "thread/unsubscribe") {
+      const actionParams = params as { threadId?: string };
+      this.selectThread(actionParams.threadId);
+      return { status: "unsubscribed" };
     }
 
     if (method === "thread/delete") {
@@ -2208,6 +2215,11 @@ export class AppServerGateway {
   async unarchiveThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
     return this.client.unarchiveThread(threadId);
+  }
+
+  async unsubscribeThread(threadId: string): Promise<MobileThreadUnsubscribeResult> {
+    await this.ensureReady();
+    return this.client.unsubscribeThread(threadId);
   }
 
   async deleteThread(threadId: string): Promise<void> {
