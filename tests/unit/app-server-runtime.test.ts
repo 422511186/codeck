@@ -598,6 +598,28 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持读取配置要求和管理 Windows Sandbox", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.getConfigRequirements()).resolves.toEqual({
+      allowedApprovalPolicies: ["untrusted"],
+      allowedSandboxModes: ["workspace-write"],
+      allowedWindowsSandboxImplementations: ["unelevated"],
+      allowedPermissionProfiles: { default: true, "full-auto": true },
+      defaultPermissions: "default",
+      allowManagedHooksOnly: false,
+      allowAppshots: true,
+      allowRemoteControl: true,
+      featureRequirements: { skills: true, plugins: true }
+    });
+    await expect(gateway.getWindowsSandboxReadiness()).resolves.toEqual({ status: "updateRequired" });
+    await expect(gateway.startWindowsSandboxSetup({ mode: "unelevated", cwd: "C:\\Users\\huang\\workspace" })).resolves.toEqual({
+      started: true
+    });
+    await expect(gateway.getWindowsSandboxReadiness()).resolves.toEqual({ status: "ready" });
+  });
+
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

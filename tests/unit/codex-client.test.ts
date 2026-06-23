@@ -956,6 +956,36 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "configRequirements/read") {
+      return {
+        requirements: {
+          allowedApprovalPolicies: ["untrusted"],
+          allowedApprovalsReviewers: null,
+          allowedSandboxModes: ["workspace-write"],
+          allowedWindowsSandboxImplementations: ["unelevated"],
+          allowedPermissionProfiles: { default: true },
+          defaultPermissions: "default",
+          allowedWebSearchModes: null,
+          allowManagedHooksOnly: false,
+          allowAppshots: true,
+          allowRemoteControl: true,
+          computerUse: null,
+          featureRequirements: { skills: true },
+          hooks: null,
+          enforceResidency: null,
+          network: null
+        }
+      };
+    }
+
+    if (method === "windowsSandbox/readiness") {
+      return { status: "updateRequired" };
+    }
+
+    if (method === "windowsSandbox/setupStart") {
+      return { started: true };
+    }
+
     if (method === "plugin/skill/read") {
       return { contents: "# browser:control\n\n控制浏览器。" };
     }
@@ -1826,6 +1856,33 @@ describe("CodexAppServerClient", () => {
     });
 
     expect(peer.calls.at(-1)).toEqual({ method: "app/list", params: { cursor: undefined, limit: undefined, threadId: undefined, forceRefetch: undefined } });
+  });
+
+  it("能读取配置要求和管理 Windows Sandbox", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.getConfigRequirements()).resolves.toEqual({
+      allowedApprovalPolicies: ["untrusted"],
+      allowedSandboxModes: ["workspace-write"],
+      allowedWindowsSandboxImplementations: ["unelevated"],
+      allowedPermissionProfiles: { default: true },
+      defaultPermissions: "default",
+      allowManagedHooksOnly: false,
+      allowAppshots: true,
+      allowRemoteControl: true,
+      featureRequirements: { skills: true }
+    });
+    await expect(client.getWindowsSandboxReadiness()).resolves.toEqual({ status: "updateRequired" });
+    await expect(client.startWindowsSandboxSetup({ mode: "unelevated", cwd: "C:\\repo" })).resolves.toEqual({
+      started: true
+    });
+
+    expect(peer.calls.slice(-3)).toEqual([
+      { method: "configRequirements/read", params: undefined },
+      { method: "windowsSandbox/readiness", params: undefined },
+      { method: "windowsSandbox/setupStart", params: { mode: "unelevated", cwd: "C:\\repo" } }
+    ]);
   });
 
   it("能读取插件 Skill、设置额外根目录并写入 Skill 配置", async () => {

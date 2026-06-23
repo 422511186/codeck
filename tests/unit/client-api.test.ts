@@ -13,6 +13,8 @@ import {
   getAccountTokenUsage,
   installPlugin,
   cleanThreadBackgroundTerminals,
+  getConfigRequirements,
+  getWindowsSandboxReadiness,
   listApps,
   listThreadBackgroundTerminals,
   listThreads,
@@ -35,6 +37,7 @@ import {
   setThreadMemoryMode,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
+  startWindowsSandboxSetup,
   startRemoteControlPairing,
   startProcessSession,
   startReview,
@@ -599,6 +602,49 @@ describe("client-api", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/apps", { cache: "no-store" });
+  });
+
+  it("读取配置要求和管理 Windows Sandbox 时调用对应端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          requirements: {
+            allowedApprovalPolicies: ["untrusted"],
+            allowedSandboxModes: ["workspace-write"],
+            allowedWindowsSandboxImplementations: ["unelevated"],
+            allowRemoteControl: true,
+            defaultPermissions: "default"
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ readiness: { status: "updateRequired" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { started: true } })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getConfigRequirements()).resolves.toEqual({
+      allowedApprovalPolicies: ["untrusted"],
+      allowedSandboxModes: ["workspace-write"],
+      allowedWindowsSandboxImplementations: ["unelevated"],
+      allowRemoteControl: true,
+      defaultPermissions: "default"
+    });
+    await expect(getWindowsSandboxReadiness()).resolves.toEqual({ status: "updateRequired" });
+    await expect(startWindowsSandboxSetup("unelevated", "C:\\repo")).resolves.toEqual({ started: true });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/config/requirements", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/windows-sandbox/readiness", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/windows-sandbox/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "unelevated", cwd: "C:\\repo" })
+    });
   });
 
   it("读取插件 Skill、设置额外根目录和写入 Skill 配置时调用 Skills 端点", async () => {

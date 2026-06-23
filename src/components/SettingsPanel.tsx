@@ -5,7 +5,9 @@ import {
   cancelAccountLogin,
   disableRemoteControl,
   enableRemoteControl,
+  getConfigRequirements,
   getAccountTokenUsage,
+  getWindowsSandboxReadiness,
   installPlugin,
   listApps,
   loginWithApiKey,
@@ -21,6 +23,7 @@ import {
   revokeRemoteControlClient,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
+  startWindowsSandboxSetup,
   startRemoteControlPairing,
   uninstallPlugin,
   writeSkillConfig
@@ -28,11 +31,13 @@ import {
 import type {
   MobileAccountTokenUsageView,
   MobileAppView,
+  MobileConfigRequirementsView,
   MobileModelOption,
   MobileMcpResourceReadView,
   MobilePluginDetailView,
   MobileRemoteControlPairingView,
-  MobileSettingsView
+  MobileSettingsView,
+  MobileWindowsSandboxReadinessView
 } from "../shared/codex";
 
 type SettingsPanelProps = {
@@ -40,6 +45,7 @@ type SettingsPanelProps = {
   selectedModelId: string;
   selectedReasoningEffort: string;
   selectedPermissions: string;
+  cwd: string;
   refreshVersion: number;
   onModelChange(modelId: string): void;
   onReasoningEffortChange(reasoningEffort: string): void;
@@ -174,6 +180,7 @@ export function SettingsPanel({
   selectedModelId,
   selectedReasoningEffort,
   selectedPermissions,
+  cwd,
   refreshVersion,
   onModelChange,
   onReasoningEffortChange,
@@ -186,6 +193,10 @@ export function SettingsPanel({
   const [pluginNotice, setPluginNotice] = useState("");
   const [apps, setApps] = useState<MobileAppView[]>([]);
   const [appsNotice, setAppsNotice] = useState("");
+  const [configRequirements, setConfigRequirements] = useState<MobileConfigRequirementsView | null>(null);
+  const [configRequirementsNotice, setConfigRequirementsNotice] = useState("");
+  const [windowsSandboxReadiness, setWindowsSandboxReadiness] = useState<MobileWindowsSandboxReadinessView | null>(null);
+  const [windowsSandboxNotice, setWindowsSandboxNotice] = useState("");
   const [skillRootText, setSkillRootText] = useState("");
   const [skillNotice, setSkillNotice] = useState("");
   const [pluginSkillContent, setPluginSkillContent] = useState("");
@@ -527,6 +538,50 @@ export function SettingsPanel({
       setAppsNotice(page.apps.length ? `${page.apps.length} 个 Apps` : "没有 Apps");
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法读取 Apps 列表");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadConfigRequirements() {
+    setRemoteBusy(true);
+    setError("");
+    setConfigRequirementsNotice("");
+    try {
+      const requirements = await getConfigRequirements();
+      setConfigRequirements(requirements);
+      setConfigRequirementsNotice(requirements ? "配置要求已读取" : "没有配置要求");
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取配置要求");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadWindowsSandboxReadiness() {
+    setRemoteBusy(true);
+    setError("");
+    setWindowsSandboxNotice("");
+    try {
+      const readiness = await getWindowsSandboxReadiness();
+      setWindowsSandboxReadiness(readiness);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法检查 Windows Sandbox");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleStartWindowsSandboxSetup() {
+    setRemoteBusy(true);
+    setError("");
+    setWindowsSandboxNotice("");
+    try {
+      const result = await startWindowsSandboxSetup("unelevated", cwd || null);
+      setWindowsSandboxNotice(result.started ? "Sandbox 设置已启动" : "Sandbox 设置未启动");
+      setWindowsSandboxReadiness(await getWindowsSandboxReadiness());
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法启动 Windows Sandbox 设置");
     } finally {
       setRemoteBusy(false);
     }
@@ -953,6 +1008,77 @@ export function SettingsPanel({
             </div>
           ) : null}
           {appsNotice ? <p className="settings-note">{appsNotice}</p> : null}
+        </div>
+      ) : null}
+      {settings ? (
+        <div className="config-requirements-panel">
+          <div className="turn-actions-row">
+            <button type="button" onClick={handleReadConfigRequirements} disabled={remoteBusy}>
+              读取配置要求
+            </button>
+            <button type="button" onClick={handleReadWindowsSandboxReadiness} disabled={remoteBusy}>
+              检查 Windows Sandbox
+            </button>
+            <button type="button" onClick={handleStartWindowsSandboxSetup} disabled={remoteBusy}>
+              设置 Windows Sandbox
+            </button>
+          </div>
+          {configRequirements ? (
+            <dl className="settings-list">
+              <div className="settings-row">
+                <dt>默认权限</dt>
+                <dd>{configRequirements.defaultPermissions || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>审批策略</dt>
+                <dd>{configRequirements.allowedApprovalPolicies?.join(" / ") || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>Sandbox</dt>
+                <dd>{configRequirements.allowedSandboxModes?.join(" / ") || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>Windows Sandbox</dt>
+                <dd>{configRequirements.allowedWindowsSandboxImplementations?.join(" / ") || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>远控</dt>
+                <dd>{configRequirements.allowRemoteControl === null ? "-" : configRequirements.allowRemoteControl ? "允许" : "禁止"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>权限配置</dt>
+                <dd>
+                  {configRequirements.allowedPermissionProfiles
+                    ? Object.entries(configRequirements.allowedPermissionProfiles)
+                        .filter(([, enabled]) => enabled)
+                        .map(([name]) => name)
+                        .join(" / ") || "-"
+                    : "-"}
+                </dd>
+              </div>
+              <div className="settings-row">
+                <dt>功能要求</dt>
+                <dd>
+                  {configRequirements.featureRequirements
+                    ? Object.entries(configRequirements.featureRequirements)
+                        .filter(([, enabled]) => enabled)
+                        .map(([name]) => name)
+                        .join(" / ") || "-"
+                    : "-"}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+          {windowsSandboxReadiness ? (
+            <dl className="settings-list">
+              <div className="settings-row">
+                <dt>Sandbox 状态</dt>
+                <dd>{windowsSandboxReadiness.status}</dd>
+              </div>
+            </dl>
+          ) : null}
+          {configRequirementsNotice ? <p className="settings-note">{configRequirementsNotice}</p> : null}
+          {windowsSandboxNotice ? <p className="settings-note">{windowsSandboxNotice}</p> : null}
         </div>
       ) : null}
       {settings ? (

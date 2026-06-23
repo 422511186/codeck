@@ -264,6 +264,26 @@ export type MobileAppPage = {
   nextCursor: string | null;
 };
 
+export type MobileConfigRequirementsView = {
+  allowedApprovalPolicies: string[] | null;
+  allowedSandboxModes: string[] | null;
+  allowedWindowsSandboxImplementations: string[] | null;
+  allowedPermissionProfiles: Record<string, boolean> | null;
+  defaultPermissions: string | null;
+  allowManagedHooksOnly: boolean | null;
+  allowAppshots: boolean | null;
+  allowRemoteControl: boolean | null;
+  featureRequirements: Record<string, boolean> | null;
+};
+
+export type MobileWindowsSandboxReadinessView = {
+  status: "ready" | "notConfigured" | "updateRequired";
+};
+
+export type MobileWindowsSandboxSetupResultView = {
+  started: boolean;
+};
+
 export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool";

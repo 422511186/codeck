@@ -8,6 +8,8 @@ import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/Ap
 import type { AppsListResponse } from "../../../docs/generated/app-server-ts/v2/AppsListResponse";
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
+import type { ConfigRequirements } from "../../../docs/generated/app-server-ts/v2/ConfigRequirements";
+import type { ConfigRequirementsReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigRequirementsReadResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
 import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
 import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
@@ -113,6 +115,10 @@ import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/T
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2/TurnSteerResponse";
+import type { WindowsSandboxReadinessResponse } from "../../../docs/generated/app-server-ts/v2/WindowsSandboxReadinessResponse";
+import type { WindowsSandboxSetupMode } from "../../../docs/generated/app-server-ts/v2/WindowsSandboxSetupMode";
+import type { WindowsSandboxSetupStartParams } from "../../../docs/generated/app-server-ts/v2/WindowsSandboxSetupStartParams";
+import type { WindowsSandboxSetupStartResponse } from "../../../docs/generated/app-server-ts/v2/WindowsSandboxSetupStartResponse";
 import type {
   MobileCommandResult,
   MobileAccountView,
@@ -124,6 +130,7 @@ import type {
   MobileAppView,
   MobileBackgroundTerminalPage,
   MobileCollaborationModeView,
+  MobileConfigRequirementsView,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -154,7 +161,9 @@ import type {
   MobileThreadDetail,
   MobileThreadPage,
   MobileThreadSummary,
-  MobileTimelineItem
+  MobileTimelineItem,
+  MobileWindowsSandboxReadinessView,
+  MobileWindowsSandboxSetupResultView
 } from "../../shared/codex";
 import { createTurnUserInput } from "./user-input";
 
@@ -258,6 +267,11 @@ export type ListAppsInput = {
   limit?: number | null;
   threadId?: string | null;
   forceRefetch?: boolean;
+};
+
+export type WindowsSandboxSetupInput = {
+  mode: WindowsSandboxSetupMode;
+  cwd?: string | null;
 };
 
 function statusLabel(status: ThreadStatus): string {
@@ -425,6 +439,32 @@ function appView(app: AppInfo): MobileAppView {
     isAccessible: app.isAccessible,
     isEnabled: app.isEnabled,
     pluginDisplayNames: app.pluginDisplayNames
+  };
+}
+
+function booleanRecord(value: { [key in string]?: boolean } | null): Record<string, boolean> | null {
+  if (!value) {
+    return null;
+  }
+
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => entry[1] !== undefined));
+}
+
+function configRequirementsView(requirements: ConfigRequirements | null): MobileConfigRequirementsView | null {
+  if (!requirements) {
+    return null;
+  }
+
+  return {
+    allowedApprovalPolicies: requirements.allowedApprovalPolicies?.map(String) ?? null,
+    allowedSandboxModes: requirements.allowedSandboxModes?.map(String) ?? null,
+    allowedWindowsSandboxImplementations: requirements.allowedWindowsSandboxImplementations?.map(String) ?? null,
+    allowedPermissionProfiles: booleanRecord(requirements.allowedPermissionProfiles),
+    defaultPermissions: requirements.defaultPermissions,
+    allowManagedHooksOnly: requirements.allowManagedHooksOnly,
+    allowAppshots: requirements.allowAppshots,
+    allowRemoteControl: requirements.allowRemoteControl,
+    featureRequirements: booleanRecord(requirements.featureRequirements)
   };
 }
 
@@ -916,6 +956,24 @@ export class CodexAppServerClient {
       apps: response.data.map(appView),
       nextCursor: response.nextCursor
     };
+  }
+
+  async getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
+    const response = (await this.peer.request("configRequirements/read", undefined)) as ConfigRequirementsReadResponse;
+    return configRequirementsView(response.requirements);
+  }
+
+  async getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {
+    const response = (await this.peer.request("windowsSandbox/readiness", undefined)) as WindowsSandboxReadinessResponse;
+    return { status: response.status };
+  }
+
+  async startWindowsSandboxSetup(input: WindowsSandboxSetupInput): Promise<MobileWindowsSandboxSetupResultView> {
+    const params: WindowsSandboxSetupStartParams = {
+      mode: input.mode,
+      cwd: input.cwd ?? null
+    };
+    return (await this.peer.request("windowsSandbox/setupStart", params)) as WindowsSandboxSetupStartResponse;
   }
 
   async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {

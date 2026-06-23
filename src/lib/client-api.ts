@@ -8,6 +8,7 @@ import type {
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
   MobileCommandResult,
+  MobileConfigRequirementsView,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -26,7 +27,9 @@ import type {
   MobileThreadDetail,
   MobileThreadGoalView,
   MobileThreadPage,
-  MobileTimelinePage
+  MobileTimelinePage,
+  MobileWindowsSandboxReadinessView,
+  MobileWindowsSandboxSetupResultView
 } from "../shared/codex";
 import type { PendingServerRequestView } from "../server/app-server/pending-requests";
 
@@ -503,6 +506,46 @@ export async function listApps(): Promise<MobileAppPage> {
   }
 
   return response.json() as Promise<MobileAppPage>;
+}
+
+export async function getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
+  const response = await fetch("/api/codex/config/requirements", { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取配置要求");
+  }
+
+  const payload = (await response.json()) as { requirements: MobileConfigRequirementsView | null };
+  return payload.requirements;
+}
+
+export async function getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {
+  const response = await fetch("/api/codex/windows-sandbox/readiness", { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法检查 Windows Sandbox");
+  }
+
+  const payload = (await response.json()) as { readiness: MobileWindowsSandboxReadinessView };
+  return payload.readiness;
+}
+
+export async function startWindowsSandboxSetup(
+  mode: "elevated" | "unelevated",
+  cwd?: string | null
+): Promise<MobileWindowsSandboxSetupResultView> {
+  const response = await fetch("/api/codex/windows-sandbox/setup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode, cwd: cwd ?? null })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动 Windows Sandbox 设置");
+  }
+
+  const payload = (await response.json()) as { result: MobileWindowsSandboxSetupResultView };
+  return payload.result;
 }
 
 export async function readPluginSkill(input: {

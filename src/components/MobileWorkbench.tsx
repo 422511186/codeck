@@ -756,6 +756,7 @@ export function MobileWorkbench() {
             selectedModelId={selectedModel?.id || ""}
             selectedReasoningEffort={selectedReasoningEffort}
             selectedPermissions={selectedPermissions}
+            cwd={selectedThread?.cwd || ""}
             refreshVersion={settingsRefreshVersion}
             onModelChange={handleModelChange}
             onReasoningEffortChange={handleReasoningEffortChange}

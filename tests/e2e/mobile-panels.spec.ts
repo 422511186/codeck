@@ -102,6 +102,14 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("Browser")).toBeVisible();
   await expect(page.getByText("可用 / 已启用")).toBeVisible();
   await expect(page.getByText("浏览器工具").last()).toBeVisible();
+  await page.getByRole("button", { name: "读取配置要求" }).click();
+  await expect(page.getByText("默认权限", { exact: true })).toBeVisible();
+  await expect(page.getByText("default", { exact: true })).toBeVisible();
+  await expect(page.getByText("workspace-write").nth(1)).toBeVisible();
+  await page.getByRole("button", { name: "检查 Windows Sandbox" }).click();
+  await expect(page.getByText("updateRequired")).toBeVisible();
+  await page.getByRole("button", { name: "设置 Windows Sandbox" }).click();
+  await expect(page.getByText("Sandbox 设置已启动")).toBeVisible();
 
   await page.getByRole("button", { name: "Chats" }).click();
   await page.getByPlaceholder("给 Codex 发送消息").fill("生成 diff");

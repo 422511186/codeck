@@ -12,6 +12,7 @@ import type {
   MobileAppPage,
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
+  MobileConfigRequirementsView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -28,7 +29,9 @@ import type {
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
-  MobileThreadSummary
+  MobileThreadSummary,
+  MobileWindowsSandboxReadinessView,
+  MobileWindowsSandboxSetupResultView
 } from "../../shared/codex";
 import { getRuntimeConfig } from "../runtime";
 import {
@@ -48,6 +51,7 @@ import {
   type StartThreadInput,
   type StartTurnInput,
   type UpdateThreadSettingsInput,
+  type WindowsSandboxSetupInput,
   type WriteSkillConfigInput
 } from "./client";
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
@@ -121,6 +125,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private remotePairingClaimed = false;
   private goals = new Map<string, MobileThreadGoalView>();
   private accountState: "chatgpt" | "apiKey" | "none" = "chatgpt";
+  private windowsSandboxStatus: "ready" | "notConfigured" | "updateRequired" = "updateRequired";
   private backgroundTerminals = [
     {
       itemId: "mock-bg-item-1",
@@ -1256,6 +1261,37 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "configRequirements/read") {
+      return {
+        requirements: {
+          allowedApprovalPolicies: ["untrusted"],
+          allowedApprovalsReviewers: null,
+          allowedSandboxModes: ["workspace-write"],
+          allowedWindowsSandboxImplementations: ["unelevated"],
+          allowedPermissionProfiles: { default: true, "full-auto": true },
+          defaultPermissions: "default",
+          allowedWebSearchModes: null,
+          allowManagedHooksOnly: false,
+          allowAppshots: true,
+          allowRemoteControl: true,
+          computerUse: null,
+          featureRequirements: { skills: true, plugins: true },
+          hooks: null,
+          enforceResidency: null,
+          network: null
+        }
+      };
+    }
+
+    if (method === "windowsSandbox/readiness") {
+      return { status: this.windowsSandboxStatus };
+    }
+
+    if (method === "windowsSandbox/setupStart") {
+      this.windowsSandboxStatus = "ready";
+      return { started: true };
+    }
+
     if (method === "plugin/skill/read") {
       return { contents: "# browser:control\n\n控制浏览器。" };
     }
@@ -1908,6 +1944,21 @@ export class AppServerGateway {
   async listApps(input: ListAppsInput = {}): Promise<MobileAppPage> {
     await this.ensureReady();
     return this.client.listApps(input);
+  }
+
+  async getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
+    await this.ensureReady();
+    return this.client.getConfigRequirements();
+  }
+
+  async getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {
+    await this.ensureReady();
+    return this.client.getWindowsSandboxReadiness();
+  }
+
+  async startWindowsSandboxSetup(input: WindowsSandboxSetupInput): Promise<MobileWindowsSandboxSetupResultView> {
+    await this.ensureReady();
+    return this.client.startWindowsSandboxSetup(input);
   }
 
   async readPluginSkill(input: PluginSkillReadInput): Promise<MobilePluginSkillContentView> {
