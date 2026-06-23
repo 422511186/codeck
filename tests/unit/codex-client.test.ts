@@ -195,6 +195,23 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "getConversationSummary") {
+      return {
+        summary: {
+          conversationId: "thread-1",
+          path: "C:\\Users\\huang\\.codex\\threads\\thread-1.jsonl",
+          preview: "摘要预览",
+          timestamp: "2026-06-23T01:00:00.000Z",
+          updatedAt: "2026-06-23T02:00:00.000Z",
+          modelProvider: "openai",
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          gitInfo: null
+        }
+      };
+    }
+
     if (method === "thread/resume") {
       return {
         thread: {
@@ -2323,6 +2340,26 @@ describe("CodexAppServerClient", () => {
         sortKey: "updated_at",
         sortDirection: "desc"
       }
+    });
+  });
+
+  it("能读取会话摘要", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.getConversationSummary({ conversationId: "thread-1" })).resolves.toEqual({
+      id: "thread-1",
+      title: "摘要预览",
+      preview: "摘要预览",
+      cwd: "C:\\Users\\huang\\workspace\\demo",
+      modelProvider: "openai",
+      status: "summary",
+      updatedAt: Date.parse("2026-06-23T02:00:00.000Z") / 1000
+    });
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "getConversationSummary",
+      params: { conversationId: "thread-1" }
     });
   });
 });

@@ -852,6 +852,17 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持读取会话摘要", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.getConversationSummary({ conversationId: "mock-thread-1" })).resolves.toMatchObject({
+      id: "mock-thread-1",
+      title: "这是用于移动端联调的示例会话",
+      status: "summary"
+    });
+  });
+
   it("mock 模式支持取消订阅会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

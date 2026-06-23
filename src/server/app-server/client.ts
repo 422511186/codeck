@@ -10,6 +10,8 @@ import type { FuzzyFileSearchSessionStopParams } from "../../../docs/generated/a
 import type { FuzzyFileSearchSessionUpdateParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchSessionUpdateParams";
 import type { GetAuthStatusParams } from "../../../docs/generated/app-server-ts/GetAuthStatusParams";
 import type { GetAuthStatusResponse } from "../../../docs/generated/app-server-ts/GetAuthStatusResponse";
+import type { GetConversationSummaryParams } from "../../../docs/generated/app-server-ts/GetConversationSummaryParams";
+import type { GetConversationSummaryResponse } from "../../../docs/generated/app-server-ts/GetConversationSummaryResponse";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
@@ -269,6 +271,10 @@ export type SearchThreadsInput = {
   limit?: number | null;
 };
 
+export type GetConversationSummaryInput =
+  | { conversationId: string; rolloutPath?: never }
+  | { rolloutPath: string; conversationId?: never };
+
 export type UpdateThreadSettingsInput = {
   threadId: string;
   model?: string;
@@ -361,6 +367,15 @@ function threadSummary(thread: Thread): MobileThreadSummary {
   };
 }
 
+function timestampSeconds(value: string | null): number {
+  if (!value) {
+    return 0;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : 0;
+}
+
 function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
   return item.content
     .map((content) => {
@@ -425,6 +440,19 @@ function threadDetail(thread: Thread): MobileThreadDetail {
     ...threadSummary(thread),
     lastTurnId: thread.turns.at(-1)?.id || null,
     timeline
+  };
+}
+
+function conversationSummaryView(response: GetConversationSummaryResponse): MobileThreadSummary {
+  const summary = response.summary;
+  return {
+    id: summary.conversationId,
+    title: summary.preview || "未命名会话",
+    preview: summary.preview,
+    cwd: summary.cwd,
+    modelProvider: summary.modelProvider,
+    status: "summary",
+    updatedAt: timestampSeconds(summary.updatedAt || summary.timestamp)
   };
 }
 
@@ -840,6 +868,13 @@ export class CodexAppServerClient {
       })),
       nextCursor: response.nextCursor
     };
+  }
+
+  async getConversationSummary(input: GetConversationSummaryInput): Promise<MobileThreadSummary> {
+    const params: GetConversationSummaryParams =
+      input.conversationId !== undefined ? { conversationId: input.conversationId } : { rolloutPath: input.rolloutPath };
+    const response = (await this.peer.request("getConversationSummary", params)) as GetConversationSummaryResponse;
+    return conversationSummaryView(response);
   }
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {

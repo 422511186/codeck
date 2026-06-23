@@ -50,6 +50,7 @@ import {
   type ListThreadTurnsInput,
   type PluginLookupInput,
   type PluginSkillReadInput,
+  type GetConversationSummaryInput,
   type ReadMcpResourceInput,
   type SearchThreadsInput,
   type SearchFilesInput,
@@ -322,6 +323,28 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         data: results,
         nextCursor: null,
         backwardsCursor: null
+      };
+    }
+
+    if (method === "getConversationSummary") {
+      const summaryParams = params as { conversationId?: string; rolloutPath?: string };
+      const thread =
+        this.threads.find((item) => item.id === summaryParams.conversationId) ||
+        [...this.archivedThreads.values()].find((item) => item.id === summaryParams.conversationId) ||
+        this.thread;
+      return {
+        summary: {
+          conversationId: thread.id,
+          path: summaryParams.rolloutPath || thread.path || `C:\\Users\\huang\\.codex\\threads\\${thread.id}.jsonl`,
+          preview: thread.preview || thread.name || "未命名会话",
+          timestamp: new Date(thread.createdAt * 1000).toISOString(),
+          updatedAt: new Date(thread.updatedAt * 1000).toISOString(),
+          modelProvider: thread.modelProvider,
+          cwd: thread.cwd,
+          cliVersion: thread.cliVersion,
+          source: thread.source,
+          gitInfo: thread.gitInfo
+        }
       };
     }
 
@@ -2164,6 +2187,11 @@ export class AppServerGateway {
   async searchThreads(input: SearchThreadsInput): Promise<MobileThreadPage> {
     await this.ensureReady();
     return this.client.searchThreads(input);
+  }
+
+  async getConversationSummary(input: GetConversationSummaryInput): Promise<MobileThreadSummary> {
+    await this.ensureReady();
+    return this.client.getConversationSummary(input);
   }
 
   async listModels(): Promise<MobileModelOption[]> {

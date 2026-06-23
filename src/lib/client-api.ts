@@ -32,6 +32,7 @@ import type {
   MobileThreadDetail,
   MobileThreadGoalView,
   MobileThreadPage,
+  MobileThreadSummary,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileWindowsSandboxReadinessView,
@@ -195,6 +196,19 @@ export async function resumeThread(threadId: string): Promise<MobileThreadDetail
 
   const payload = (await response.json()) as { thread: MobileThreadDetail };
   return payload.thread;
+}
+
+export async function getConversationSummary(threadId: string): Promise<MobileThreadSummary> {
+  const response = await fetch(`/api/codex/conversation-summary?threadId=${encodeURIComponent(threadId)}`, {
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取会话摘要");
+  }
+
+  const payload = (await response.json()) as { summary: MobileThreadSummary };
+  return payload.summary;
 }
 
 export async function startThread(input: { model?: string; permissions?: string } = {}): Promise<MobileThreadDetail> {

@@ -12,6 +12,7 @@ import {
   getMetadata,
   getAccountTokenUsage,
   getAuthStatus,
+  getConversationSummary,
   installPlugin,
   cleanThreadBackgroundTerminals,
   getConfigRequirements,
@@ -212,6 +213,36 @@ describe("client-api", () => {
     await expect(resumeThread("thread-1")).resolves.toEqual({ id: "thread-1", title: "登录修复", timeline: [] });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/resume", { method: "POST" });
+  });
+
+  it("读取会话摘要时调用 conversation-summary 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        summary: {
+          id: "thread-1",
+          title: "摘要预览",
+          preview: "摘要预览",
+          cwd: "C:\\repo",
+          modelProvider: "openai",
+          status: "summary",
+          updatedAt: 1_800_000_000
+        }
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getConversationSummary("thread-1")).resolves.toEqual({
+      id: "thread-1",
+      title: "摘要预览",
+      preview: "摘要预览",
+      cwd: "C:\\repo",
+      modelProvider: "openai",
+      status: "summary",
+      updatedAt: 1_800_000_000
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/conversation-summary?threadId=thread-1", { cache: "no-store" });
   });
 
   it("归档、恢复归档和删除会话时调用对应端点", async () => {
