@@ -9,25 +9,18 @@ import {
   getConfigRequirements,
   getAccountTokenUsage,
   getWindowsSandboxReadiness,
-  installPlugin,
   listApps,
   loginWithApiKey,
   loginWithChatGpt,
-  loginMcpServer,
   logoutAccount,
-  readMcpResource,
   readRemoteControlPairingStatus,
   readSettings,
-  readPlugin,
-  readPluginSkill,
-  refreshMcpServer,
   revokeRemoteControlClient,
   setExperimentalFeatureEnablement,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
   startWindowsSandboxSetup,
   startRemoteControlPairing,
-  uninstallPlugin,
   writeConfigBatch,
   writeSkillConfig
 } from "../lib/client-api";
@@ -36,8 +29,6 @@ import type {
   MobileAppView,
   MobileConfigRequirementsView,
   MobileModelOption,
-  MobileMcpResourceReadView,
-  MobilePluginDetailView,
   MobileRemoteControlPairingView,
   MobileSettingsView,
   MobileWindowsSandboxReadinessView
@@ -130,11 +121,11 @@ function loadedThreadIdsLabel(settings: MobileSettingsView): string {
 
 function mcpServersLabel(settings: MobileSettingsView): string {
   if (!settings.mcpServers.length) {
-    return "无 MCP 服务";
+    return "MCP 预留：无服务";
   }
 
   const toolCount = settings.mcpServers.reduce((total, server) => total + server.toolCount, 0);
-  return `${settings.mcpServers.length} 个服务 / ${toolCount} 个工具`;
+  return `MCP 预留：${settings.mcpServers.length} 个服务 / ${toolCount} 个工具`;
 }
 
 function collaborationModesLabel(settings: MobileSettingsView): string {
@@ -167,11 +158,11 @@ function skillNamesLabel(settings: MobileSettingsView): string {
 function pluginsLabel(settings: MobileSettingsView): string {
   const plugins = settings.plugins ?? [];
   if (!plugins.length) {
-    return "无插件";
+    return "插件预留：无插件";
   }
 
   const installedCount = plugins.filter((plugin) => plugin.installed).length;
-  return `${installedCount} 个已安装 / ${plugins.length} 个插件`;
+  return `插件预留：${installedCount} 个已安装 / ${plugins.length} 个插件`;
 }
 
 function pluginNamesLabel(settings: MobileSettingsView): string {
@@ -223,8 +214,6 @@ export function SettingsPanel({
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
   const [pairing, setPairing] = useState<MobileRemoteControlPairingView | null>(null);
   const [pairingClaimed, setPairingClaimed] = useState<boolean | null>(null);
-  const [pluginDetail, setPluginDetail] = useState<MobilePluginDetailView | null>(null);
-  const [pluginNotice, setPluginNotice] = useState("");
   const [apps, setApps] = useState<MobileAppView[]>([]);
   const [appsNotice, setAppsNotice] = useState("");
   const [configRequirements, setConfigRequirements] = useState<MobileConfigRequirementsView | null>(null);
@@ -234,10 +223,6 @@ export function SettingsPanel({
   const [experimentalFeatureNotice, setExperimentalFeatureNotice] = useState("");
   const [skillRootText, setSkillRootText] = useState("");
   const [skillNotice, setSkillNotice] = useState("");
-  const [pluginSkillContent, setPluginSkillContent] = useState("");
-  const [mcpNotice, setMcpNotice] = useState("");
-  const [mcpAuthorizationUrl, setMcpAuthorizationUrl] = useState("");
-  const [mcpResource, setMcpResource] = useState<MobileMcpResourceReadView | null>(null);
   const [apiKeyText, setApiKeyText] = useState("");
   const [accountNotice, setAccountNotice] = useState("");
   const [accountLoginId, setAccountLoginId] = useState("");
@@ -505,111 +490,6 @@ export function SettingsPanel({
     }
   }
 
-  async function handleRefreshMcpServer(serverName: string) {
-    setRemoteBusy(true);
-    setError("");
-    setMcpNotice("");
-    try {
-      await refreshMcpServer(serverName);
-      setMcpNotice(`${serverName} 已刷新`);
-      await reloadSettings();
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法刷新 MCP 服务");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleLoginMcpServer(serverName: string) {
-    setRemoteBusy(true);
-    setError("");
-    setMcpNotice("");
-    try {
-      const login = await loginMcpServer(serverName);
-      setMcpAuthorizationUrl(login.authorizationUrl);
-      setMcpNotice(`${serverName} 登录已启动`);
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法启动 MCP 登录");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleReadMcpResource(serverName: string, uri: string) {
-    setRemoteBusy(true);
-    setError("");
-    setMcpNotice("");
-    try {
-      const resource = await readMcpResource({ server: serverName, uri });
-      setMcpResource(resource);
-      setMcpNotice(`已读取 ${uri}`);
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法读取 MCP 资源");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleReadPlugin(pluginName: string) {
-    const plugin = settings?.plugins.find((item) => item.name === pluginName);
-    if (!plugin) {
-      return;
-    }
-
-    setRemoteBusy(true);
-    setError("");
-    setPluginNotice("");
-    try {
-      const detail = await readPlugin({
-        marketplaceName: plugin.marketplaceName,
-        marketplacePath: plugin.marketplacePath,
-        pluginName: plugin.name
-      });
-      setPluginDetail(detail);
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法读取插件详情");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleInstallPlugin(pluginName: string) {
-    const plugin = settings?.plugins.find((item) => item.name === pluginName);
-    if (!plugin) {
-      return;
-    }
-
-    setRemoteBusy(true);
-    setError("");
-    try {
-      const result = await installPlugin({
-        marketplaceName: plugin.marketplaceName,
-        marketplacePath: plugin.marketplacePath,
-        pluginName: plugin.name
-      });
-      setPluginNotice(`安装结果：${result.authPolicy}`);
-      await reloadSettings();
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法安装插件");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleUninstallPlugin(pluginId: string) {
-    setRemoteBusy(true);
-    setError("");
-    try {
-      await uninstallPlugin(pluginId);
-      setPluginNotice(`插件已卸载：${pluginId}`);
-      await reloadSettings();
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法卸载插件");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
   async function handleListApps() {
     setRemoteBusy(true);
     setError("");
@@ -736,27 +616,6 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法写入 Skill 配置");
-    } finally {
-      setRemoteBusy(false);
-    }
-  }
-
-  async function handleReadPluginSkill(skillName: string) {
-    if (!pluginDetail?.remotePluginId) {
-      return;
-    }
-
-    setRemoteBusy(true);
-    setError("");
-    try {
-      const skill = await readPluginSkill({
-        remoteMarketplaceName: pluginDetail.marketplaceName,
-        remotePluginId: pluginDetail.remotePluginId,
-        skillName
-      });
-      setPluginSkillContent(skill.contents || "");
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "无法读取插件 Skill");
     } finally {
       setRemoteBusy(false);
     }
@@ -1006,49 +865,7 @@ export function SettingsPanel({
         </div>
       ) : null}
       {settings?.mcpServers.length ? (
-        <div className="mcp-control-panel">
-          {settings.mcpServers.map((server) => (
-            <div className="mcp-server-block" key={server.name}>
-              <div className="plugin-action-row">
-                <span>{server.name}</span>
-                <button type="button" onClick={() => handleRefreshMcpServer(server.name)} disabled={remoteBusy}>
-                  刷新 {server.name}
-                </button>
-                <button type="button" onClick={() => handleLoginMcpServer(server.name)} disabled={remoteBusy}>
-                  登录 {server.name}
-                </button>
-              </div>
-              {server.resources.length ? (
-                <div className="skill-control-panel">
-                  {server.resources.map((resource) => (
-                    <button
-                      type="button"
-                      key={resource.uri}
-                      onClick={() => handleReadMcpResource(server.name, resource.uri)}
-                      disabled={remoteBusy}
-                    >
-                      读取资源 {resource.name}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))}
-          {mcpAuthorizationUrl ? (
-            <p className="settings-note">
-              OAuth URL：<span>{mcpAuthorizationUrl}</span>
-            </p>
-          ) : null}
-          {mcpResource ? (
-            <pre className="settings-code">
-              {mcpResource.contents
-                .map((content) => content.text ?? content.blob ?? "")
-                .filter(Boolean)
-                .join("\n\n")}
-            </pre>
-          ) : null}
-          {mcpNotice ? <p className="settings-note">{mcpNotice}</p> : null}
-        </div>
+        <p className="settings-note">MCP 的完整工具调用和资源工作流本次仅预留接口，不在移动端开放操作入口。</p>
       ) : null}
       {settings?.hooks.length || settings?.hookWarnings.length || settings?.hookErrors.length ? (
         <div className="hook-control-panel">
@@ -1089,63 +906,7 @@ export function SettingsPanel({
         </div>
       ) : null}
       {settings?.plugins.length ? (
-        <div className="plugin-control-panel">
-          {settings.plugins.map((plugin) => {
-            const label = plugin.displayName || plugin.name;
-            return (
-              <div className="plugin-action-row" key={plugin.id}>
-                <span>{label}</span>
-                <button type="button" onClick={() => handleReadPlugin(plugin.name)} disabled={remoteBusy}>
-                  详情 {label}
-                </button>
-                <button type="button" onClick={() => handleInstallPlugin(plugin.name)} disabled={remoteBusy}>
-                  安装 {label}
-                </button>
-                <button type="button" onClick={() => handleUninstallPlugin(plugin.id)} disabled={remoteBusy}>
-                  卸载 {label}
-                </button>
-              </div>
-            );
-          })}
-          {pluginDetail ? (
-            <dl className="settings-list">
-              <div className="settings-row">
-                <dt>插件详情</dt>
-                <dd>{pluginDetail.displayName || pluginDetail.name}</dd>
-              </div>
-              <div className="settings-row">
-                <dt>描述</dt>
-                <dd>{pluginDetail.description || "-"}</dd>
-              </div>
-              <div className="settings-row">
-                <dt>组成</dt>
-                <dd>
-                  Skills {pluginDetail.skillCount} / Hooks {pluginDetail.hookCount} / Apps {pluginDetail.appCount}
-                </dd>
-              </div>
-              <div className="settings-row">
-                <dt>MCP</dt>
-                <dd>{pluginDetail.mcpServers.length ? `MCP ${pluginDetail.mcpServers.join(" / ")}` : "-"}</dd>
-              </div>
-            </dl>
-          ) : null}
-          {pluginDetail?.skills.length ? (
-            <div className="skill-control-panel">
-              {pluginDetail.skills.map((skill) => (
-                <button
-                  type="button"
-                  key={skill.name}
-                  onClick={() => handleReadPluginSkill(skill.name)}
-                  disabled={remoteBusy || !pluginDetail.remotePluginId}
-                >
-                  读取 Skill {skill.name}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {pluginSkillContent ? <pre className="settings-code">{pluginSkillContent}</pre> : null}
-          {pluginNotice ? <p className="settings-note">{pluginNotice}</p> : null}
-        </div>
+        <p className="settings-note">插件、插件市场和共享本次仅预留接口，不在移动端开放详情、安装、卸载或共享入口。</p>
       ) : null}
       {settings ? (
         <div className="app-control-panel">

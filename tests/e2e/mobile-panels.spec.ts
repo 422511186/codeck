@@ -117,13 +117,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("0 个可用")).toBeVisible();
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();
-  await expect(page.getByText("2 个服务 / 3 个工具")).toBeVisible();
-  await page.getByRole("button", { name: "刷新 filesystem" }).click();
-  await expect(page.getByText("filesystem 已刷新")).toBeVisible();
-  await page.getByRole("button", { name: "登录 github" }).click();
-  await expect(page.getByText("https://example.com/mcp/github/oauth")).toBeVisible();
-  await page.getByRole("button", { name: "读取资源 README" }).click();
-  await expect(page.getByText("来自 MCP 资源。")).toBeVisible();
+  await expect(page.getByText("MCP 预留：2 个服务 / 3 个工具")).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新 filesystem" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "登录 github" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "读取资源 README" })).toHaveCount(0);
   await expect(page.getByText("Code / Ask")).toBeVisible();
   await expect(page.getByText("1 个启用 / 2 个 Skills")).toBeVisible();
   await expect(page.getByText("openai-docs / repo-helper")).toBeVisible();
@@ -131,7 +128,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("post-tool-use-format").first()).toBeVisible();
   await expect(page.getByText("npm run format")).toBeVisible();
   await expect(page.getByText("Hook 警告：hook 即将迁移")).toBeVisible();
-  await expect(page.getByText("1 个已安装 / 2 个插件")).toBeVisible();
+  await expect(page.getByText("插件预留：1 个已安装 / 2 个插件")).toBeVisible();
   await expect(page.getByText("浏览器工具 / review-pack")).toBeVisible();
   await page.getByRole("button", { name: "刷新 Apps" }).click();
   await expect(page.getByText("Browser")).toBeVisible();
@@ -263,24 +260,20 @@ test("设置面板可以管理远程控制配对和客户端", async ({ page }) 
   await expect(page.getByText("connected")).toBeVisible();
 });
 
-test("设置面板可以查看、安装和卸载插件", async ({ page }) => {
+test("设置面板将插件和 MCP 标注为预留且不暴露操作", async ({ page }) => {
   await login(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
 
-  await page.getByRole("button", { name: "详情 浏览器工具" }).click();
-  await expect(page.getByText("用于移动端验证网页和截图。")).toBeVisible();
-  await expect(page.getByText("Skills 1 / Hooks 1 / Apps 1")).toBeVisible();
-  await expect(page.getByText("MCP browser")).toBeVisible();
-
-  await page.getByRole("button", { name: "安装 浏览器工具" }).click();
-  await expect(page.getByText("安装结果：ON_USE")).toBeVisible();
-
-  await page.getByRole("button", { name: "卸载 浏览器工具" }).click();
-  await expect(page.getByText("插件已卸载：browser-tools")).toBeVisible();
+  await expect(page.getByText("插件预留：1 个已安装 / 2 个插件")).toBeVisible();
+  await expect(page.getByText("MCP 预留：2 个服务 / 3 个工具")).toBeVisible();
+  await expect(page.getByRole("button", { name: "详情 浏览器工具" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "安装 浏览器工具" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "卸载 浏览器工具" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "读取资源 README" })).toHaveCount(0);
 });
 
-test("设置面板可以管理 Skills 配置和读取插件 Skill", async ({ page }) => {
+test("设置面板可以管理 Skills 配置", async ({ page }) => {
   await login(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
@@ -291,9 +284,5 @@ test("设置面板可以管理 Skills 配置和读取插件 Skill", async ({ pag
 
   await page.getByRole("button", { name: "禁用 openai-docs" }).click();
   await expect(page.getByText("openai-docs 已禁用")).toBeVisible();
-
-  await page.getByRole("button", { name: "详情 浏览器工具" }).click();
-  await page.getByRole("button", { name: "读取 Skill browser:control" }).click();
-  await expect(page.getByText("# browser:control")).toBeVisible();
-  await expect(page.getByText("控制浏览器。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "读取 Skill browser:control" })).toHaveCount(0);
 });

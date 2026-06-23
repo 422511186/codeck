@@ -694,8 +694,22 @@ export function MobileWorkbench() {
     setSending(true);
     setLoadError("");
     try {
-      await unarchiveThread(selectedThread.id);
-      await refreshThreadsAfterRemoval();
+      const restoredThread = await unarchiveThread(selectedThread.id);
+      setShowArchivedThreads(false);
+      const page = await listThreads(threadSearchTerm, { archived: false });
+      setThreads([
+        {
+          id: restoredThread.id,
+          title: restoredThread.title,
+          preview: restoredThread.preview,
+          cwd: restoredThread.cwd,
+          modelProvider: restoredThread.modelProvider,
+          status: restoredThread.status,
+          updatedAt: restoredThread.updatedAt
+        },
+        ...page.threads.filter((thread) => thread.id !== restoredThread.id)
+      ]);
+      setSelectedThread(restoredThread);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法恢复归档会话");
     } finally {

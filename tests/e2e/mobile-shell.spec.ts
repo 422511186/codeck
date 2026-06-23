@@ -91,6 +91,6 @@ test("手机端可以查看归档会话并恢复", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "手机归档恢复" })).toBeVisible();
 
   await page.getByRole("button", { name: "恢复归档" }).click();
-  await page.getByRole("button", { name: "显示活跃" }).click();
+  await expect(page.getByRole("heading", { name: "历史会话" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^手机归档恢复/ })).toBeVisible();
 });

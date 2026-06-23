@@ -16,6 +16,7 @@ npm run build
 
 - `npm run verify` 完成 TypeScript 类型检查和全部单元测试。
 - `npm run test:e2e` 使用 mock app-server 跑完手机视口 Playwright 流程。
+- `tests/e2e/visual-audit.spec.ts` 会保存 Chats、Settings、Files、Terminal、Run 的手机端截图到 `test-results/visual-audit`，用于检查关键页面不是空白、没有错误覆盖、主要控件没有明显遮挡。
 - `npm run build` 完成 Next.js 生产构建。
 
 E2E 默认使用 mock app-server，并在 `playwright.config.ts` 内配置：
@@ -115,6 +116,7 @@ http://<后端机器局域网 IP>:3000
 - Files 面板只能读取 `CODEX_WEB_WORKSPACE_ROOTS` 内路径。
 - Terminal 面板只能在 `CODEX_WEB_WORKSPACE_ROOTS` 内 cwd 执行命令。
 - Settings 面板能显示模型、思考强度、审批策略、沙箱模式、remote-control 状态、账号额度和重置 credit，并能消费可用重置 credit。
+- Settings 面板会把插件/市场/共享和 MCP 标注为预留能力，不显示安装、卸载、OAuth 登录或资源读取按钮。
 - `logs/audit.jsonl` 追加记录敏感动作，且不包含原始 token、secret、password、url。
 
 ### 5. 安全检查

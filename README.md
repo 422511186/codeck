@@ -58,6 +58,7 @@
 - 支持 fork、rollback 后编辑重发、interrupt 当前 turn、steer 运行中的 turn、归档/恢复会话、取消订阅、发送会话 shell command、暂停/恢复 elicitation 计数。
 - 支持会话 metadata 更新、原始 items 注入、Guardian 拦截动作批准、账号 token 用量读取、鉴权状态读取、额度重置 credit 消费和加购提醒。
 - 支持移动端 Files、Diff、Terminal、Settings 面板。
+- Settings 面板会把插件/市场/共享和 MCP 显示为预留能力，不开放安装、卸载、OAuth 登录或资源读取操作入口。
 - 支持 workspace allowlist 和本地 JSONL 审计日志。
 
 关键文件：
@@ -95,6 +96,7 @@ npm run test:e2e
 
 - 类型检查和单元测试通过。
 - 手机视口 E2E 测试通过。
+- 手机端视觉审计会输出关键页面截图到 `test-results/visual-audit`，用于确认 UI 没有空白、错误覆盖或明显遮挡。
 - `npm run dev` 启动后，手机可以访问 Web 页面。
 - 未配置 `CODEX_WEB_ACCESS_TOKEN` 时，控制台会打印临时 token。
 - 登录后能看到移动端工作台、底部导航和连接状态。
