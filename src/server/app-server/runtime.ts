@@ -25,6 +25,7 @@ import type {
   MobileGitDiffView,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
+  MobileRateLimitResetCreditConsumeResult,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
@@ -214,6 +215,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private readonly mockFsWatches = new Map<string, string>();
   private readonly mockFileSearchSessions = new Set<string>();
   private readonly mockElicitationCounts = new Map<string, number>();
+  private readonly consumedRateLimitResetCredits = new Set<string>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -1328,6 +1330,18 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "account/rateLimitResetCredit/consume") {
+      const resetParams = params as { idempotencyKey?: string };
+      if (resetParams.idempotencyKey && this.consumedRateLimitResetCredits.has(resetParams.idempotencyKey)) {
+        return { outcome: "alreadyRedeemed" };
+      }
+      if (resetParams.idempotencyKey) {
+        this.consumedRateLimitResetCredits.add(resetParams.idempotencyKey);
+      }
+      this.rateLimitUsedPercent = 0;
+      return { outcome: "reset" };
+    }
+
     if (method === "account/sendAddCreditsNudgeEmail") {
       return { status: "sent" };
     }
@@ -2370,6 +2384,11 @@ export class AppServerGateway {
   async getAuthStatus(): Promise<MobileAuthStatusView> {
     await this.ensureReady();
     return this.client.getAuthStatus();
+  }
+
+  async consumeRateLimitResetCredit(idempotencyKey: string): Promise<MobileRateLimitResetCreditConsumeResult> {
+    await this.ensureReady();
+    return this.client.consumeRateLimitResetCredit(idempotencyKey);
   }
 
   async sendAddCreditsNudgeEmail(creditType: "credits" | "usage_limit"): Promise<MobileAddCreditsNudgeResultView> {

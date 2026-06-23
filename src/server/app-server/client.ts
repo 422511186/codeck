@@ -30,6 +30,8 @@ import type { ConfigRequirementsReadResponse } from "../../../docs/generated/app
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
 import type { ConfigValueWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigValueWriteParams";
 import type { ConfigWriteResponse } from "../../../docs/generated/app-server-ts/v2/ConfigWriteResponse";
+import type { ConsumeAccountRateLimitResetCreditParams } from "../../../docs/generated/app-server-ts/v2/ConsumeAccountRateLimitResetCreditParams";
+import type { ConsumeAccountRateLimitResetCreditResponse } from "../../../docs/generated/app-server-ts/v2/ConsumeAccountRateLimitResetCreditResponse";
 import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
 import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
 import type { ExperimentalFeatureEnablementSetParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureEnablementSetParams";
@@ -191,6 +193,7 @@ import type {
   MobilePluginSkillContentView,
   MobilePluginView,
   MobileRateLimitView,
+  MobileRateLimitResetCreditConsumeResult,
   MobileRemoteControlClientView,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
@@ -1118,6 +1121,15 @@ export class CodexAppServerClient {
     const params: GetAuthStatusParams = { includeToken: false, refreshToken: false };
     const response = (await this.peer.request("getAuthStatus", params)) as GetAuthStatusResponse;
     return authStatusView(response);
+  }
+
+  async consumeRateLimitResetCredit(idempotencyKey: string): Promise<MobileRateLimitResetCreditConsumeResult> {
+    const params: ConsumeAccountRateLimitResetCreditParams = { idempotencyKey };
+    const response = (await this.peer.request(
+      "account/rateLimitResetCredit/consume",
+      params
+    )) as ConsumeAccountRateLimitResetCreditResponse;
+    return { outcome: response.outcome };
   }
 
   async sendAddCreditsNudgeEmail(

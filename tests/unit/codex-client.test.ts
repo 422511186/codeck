@@ -840,6 +840,10 @@ class FakePeer implements AppServerPeer {
       return { status: "sent" };
     }
 
+    if (method === "account/rateLimitResetCredit/consume") {
+      return { outcome: "reset" };
+    }
+
     if (method === "mcpServerStatus/list") {
       return {
         data: [
@@ -2108,7 +2112,7 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
-  it("能读取账号 token 用量并发送加购提醒", async () => {
+  it("能读取账号 token 用量、消费重置额度 credit 并发送加购提醒", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
@@ -2122,10 +2126,12 @@ describe("CodexAppServerClient", () => {
       },
       dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
     });
+    await expect(client.consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "reset" });
     await expect(client.sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
 
-    expect(peer.calls.slice(-2)).toEqual([
+    expect(peer.calls.slice(-3)).toEqual([
       { method: "account/usage/read", params: undefined },
+      { method: "account/rateLimitResetCredit/consume", params: { idempotencyKey: "reset-key-1" } },
       { method: "account/sendAddCreditsNudgeEmail", params: { creditType: "credits" } }
     ]);
   });

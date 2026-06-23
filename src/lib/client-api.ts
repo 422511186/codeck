@@ -24,6 +24,7 @@ import type {
   MobilePluginDetailView,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
+  MobileRateLimitResetCreditConsumeResult,
   MobileRemoteControlPairingStatusView,
   MobileRemoteControlPairingView,
   MobileRemoteControlStatusView,
@@ -136,6 +137,23 @@ export async function getAuthStatus(): Promise<MobileAuthStatusView> {
 
   const payload = (await response.json()) as { authStatus: MobileAuthStatusView };
   return payload.authStatus;
+}
+
+export async function consumeRateLimitResetCredit(
+  idempotencyKey: string
+): Promise<MobileRateLimitResetCreditConsumeResult> {
+  const response = await fetch("/api/codex/account/rate-limit-reset-credit/consume", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ idempotencyKey })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法消费重置额度 credit");
+  }
+
+  const payload = (await response.json()) as { result: MobileRateLimitResetCreditConsumeResult };
+  return payload.result;
 }
 
 export async function sendAddCreditsNudgeEmail(

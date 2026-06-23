@@ -822,7 +822,7 @@ describe("createAppServerGateway", () => {
     });
   });
 
-  it("mock 模式支持读取账号 token 用量和发送加购提醒", async () => {
+  it("mock 模式支持读取账号 token 用量、消费重置额度 credit 和发送加购提醒", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
 
@@ -836,6 +836,8 @@ describe("createAppServerGateway", () => {
       },
       dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
     });
+    await expect(gateway.consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "reset" });
+    await expect(gateway.consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "alreadyRedeemed" });
     await expect(gateway.sendAddCreditsNudgeEmail("usage_limit")).resolves.toEqual({ status: "sent" });
   });
 

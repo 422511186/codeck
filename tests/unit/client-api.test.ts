@@ -18,6 +18,7 @@ import {
   incrementThreadElicitation,
   installPlugin,
   cleanThreadBackgroundTerminals,
+  consumeRateLimitResetCredit,
   getConfigRequirements,
   getWindowsSandboxReadiness,
   listApps,
@@ -132,7 +133,7 @@ describe("client-api", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/account/logout", { method: "POST" });
   });
 
-  it("读取账号 token 用量、鉴权状态和发送加购提醒时调用 account 端点", async () => {
+  it("读取账号 token 用量、鉴权状态、消费重置额度 credit 和发送加购提醒时调用 account 端点", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -161,6 +162,10 @@ describe("client-api", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({ result: { outcome: "reset" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ result: { status: "sent" } })
       });
     vi.stubGlobal("fetch", fetchMock);
@@ -180,11 +185,17 @@ describe("client-api", () => {
       hasAuthToken: false,
       requiresOpenaiAuth: false
     });
+    await expect(consumeRateLimitResetCredit("reset-key-1")).resolves.toEqual({ outcome: "reset" });
     await expect(sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/account/token-usage", { cache: "no-store" });
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/account/auth-status", { cache: "no-store" });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/account/add-credits-nudge", {
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/account/rate-limit-reset-credit/consume", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "reset-key-1" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/account/add-credits-nudge", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ creditType: "credits" })

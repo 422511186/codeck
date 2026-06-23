@@ -73,6 +73,10 @@ export type MobileAddCreditsNudgeResultView = {
   status: "sent" | "cooldown_active";
 };
 
+export type MobileRateLimitResetCreditConsumeResult = {
+  outcome: "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
+};
+
 export type MobileRateLimitView = {
   limitId: string | null;
   limitName: string | null;
