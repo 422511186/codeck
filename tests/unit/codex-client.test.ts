@@ -729,6 +729,37 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "hooks/list") {
+      return {
+        data: [
+          {
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            hooks: [
+              {
+                key: "post-tool-use-format",
+                eventName: "postToolUse",
+                handlerType: "command",
+                matcher: "Edit",
+                command: "npm run format",
+                timeoutSec: 60n,
+                statusMessage: "格式化文件",
+                sourcePath: "C:\\Users\\huang\\workspace\\demo\\.codex\\hooks.json",
+                source: "project",
+                pluginId: null,
+                displayOrder: 1n,
+                enabled: true,
+                isManaged: false,
+                currentHash: "hash-1",
+                trustStatus: "trusted"
+              }
+            ],
+            warnings: ["hook 即将迁移"],
+            errors: [{ path: "C:\\bad-hook.json", message: "hook JSON 无效" }]
+          }
+        ]
+      };
+    }
+
     if (method === "plugin/list") {
       return {
         marketplaces: [
@@ -1468,6 +1499,24 @@ describe("CodexAppServerClient", () => {
         }
       ],
       skillErrors: [{ cwd: "C:\\Users\\huang\\workspace\\demo", path: "C:\\broken\\SKILL.md", message: "缺少 description" }],
+      hooks: [
+        {
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          key: "post-tool-use-format",
+          eventName: "postToolUse",
+          handlerType: "command",
+          matcher: "Edit",
+          command: "npm run format",
+          source: "project",
+          sourcePath: "C:\\Users\\huang\\workspace\\demo\\.codex\\hooks.json",
+          pluginId: null,
+          enabled: true,
+          trustStatus: "trusted",
+          statusMessage: "格式化文件"
+        }
+      ],
+      hookWarnings: [{ cwd: "C:\\Users\\huang\\workspace\\demo", message: "hook 即将迁移" }],
+      hookErrors: [{ cwd: "C:\\Users\\huang\\workspace\\demo", path: "C:\\bad-hook.json", message: "hook JSON 无效" }],
       plugins: [
         {
           marketplaceName: "个人插件市场",
@@ -1509,6 +1558,7 @@ describe("CodexAppServerClient", () => {
         { method: "modelProvider/capabilities/read", params: {} },
         { method: "collaborationMode/list", params: {} },
         { method: "skills/list", params: { forceReload: false } },
+        { method: "hooks/list", params: {} },
         { method: "plugin/list", params: { cwds: null, marketplaceKinds: null } },
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])

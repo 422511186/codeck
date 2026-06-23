@@ -141,6 +141,32 @@ export type MobileSkillErrorView = {
   message: string;
 };
 
+export type MobileHookView = {
+  cwd: string;
+  key: string;
+  eventName: string;
+  handlerType: string;
+  matcher: string | null;
+  command: string | null;
+  source: string;
+  sourcePath: string;
+  pluginId: string | null;
+  enabled: boolean;
+  trustStatus: string;
+  statusMessage: string | null;
+};
+
+export type MobileHookNoticeView = {
+  cwd: string;
+  message: string;
+};
+
+export type MobileHookErrorView = {
+  cwd: string;
+  path: string;
+  message: string;
+};
+
 export type MobilePluginView = {
   marketplaceName: string;
   marketplacePath: string | null;
@@ -286,6 +312,9 @@ export type MobileSettingsView = {
   permissionProfiles: MobilePermissionProfileOption[];
   skills: MobileSkillView[];
   skillErrors: MobileSkillErrorView[];
+  hooks: MobileHookView[];
+  hookWarnings: MobileHookNoticeView[];
+  hookErrors: MobileHookErrorView[];
   plugins: MobilePluginView[];
   pluginMarketplaceErrors: MobilePluginMarketplaceErrorView[];
 };

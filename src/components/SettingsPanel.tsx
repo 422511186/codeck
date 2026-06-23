@@ -141,6 +141,25 @@ function pluginNamesLabel(settings: MobileSettingsView): string {
   return plugins.map((plugin) => plugin.displayName || plugin.name).join(" / ");
 }
 
+function hooksLabel(settings: MobileSettingsView): string {
+  const hooks = settings.hooks ?? [];
+  if (!hooks.length) {
+    return "无 Hooks";
+  }
+
+  const enabledCount = hooks.filter((hook) => hook.enabled).length;
+  return `${enabledCount} 个启用 / ${hooks.length} 个 Hooks`;
+}
+
+function hookNamesLabel(settings: MobileSettingsView): string {
+  const hooks = settings.hooks ?? [];
+  if (!hooks.length) {
+    return "-";
+  }
+
+  return hooks.map((hook) => hook.key).join(" / ");
+}
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -220,6 +239,8 @@ export function SettingsPanel({
         ["协作模式", collaborationModesLabel(settings)],
         ["Skills", skillsLabel(settings)],
         ["Skill 列表", skillNamesLabel(settings)],
+        ["Hooks", hooksLabel(settings)],
+        ["Hook 列表", hookNamesLabel(settings)],
         ["插件", pluginsLabel(settings)],
         ["插件列表", pluginNamesLabel(settings)]
       ]
@@ -697,6 +718,44 @@ export function SettingsPanel({
             </pre>
           ) : null}
           {mcpNotice ? <p className="settings-note">{mcpNotice}</p> : null}
+        </div>
+      ) : null}
+      {settings?.hooks.length || settings?.hookWarnings.length || settings?.hookErrors.length ? (
+        <div className="hook-control-panel">
+          {settings.hooks.map((hook) => (
+            <dl className="settings-list" key={`${hook.cwd}-${hook.key}`}>
+              <div className="settings-row">
+                <dt>Hook</dt>
+                <dd>{hook.key}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>事件</dt>
+                <dd>{hook.eventName}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>处理器</dt>
+                <dd>{hook.handlerType}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>命令</dt>
+                <dd>{hook.command || "-"}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>状态</dt>
+                <dd>{`${hook.enabled ? "启用" : "禁用"} / ${hook.trustStatus} / ${hook.source}`}</dd>
+              </div>
+            </dl>
+          ))}
+          {settings.hookWarnings.map((warning) => (
+            <p className="settings-note" key={`${warning.cwd}-${warning.message}`}>
+              Hook 警告：{warning.message}
+            </p>
+          ))}
+          {settings.hookErrors.map((error) => (
+            <p className="form-error" key={`${error.cwd}-${error.path}`}>
+              Hook 错误：{error.message}
+            </p>
+          ))}
         </div>
       ) : null}
       {settings?.plugins.length ? (

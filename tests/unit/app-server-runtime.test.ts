@@ -308,6 +308,24 @@ describe("createAppServerGateway", () => {
         }
       ],
       skillErrors: [],
+      hooks: [
+        {
+          cwd: "C:\\Users\\huang\\workspace",
+          key: "post-tool-use-format",
+          eventName: "postToolUse",
+          handlerType: "command",
+          matcher: "Edit",
+          command: "npm run format",
+          source: "project",
+          sourcePath: "C:\\Users\\huang\\workspace\\.codex\\hooks.json",
+          pluginId: null,
+          enabled: true,
+          trustStatus: "trusted",
+          statusMessage: "格式化文件"
+        }
+      ],
+      hookWarnings: [{ cwd: "C:\\Users\\huang\\workspace", message: "hook 即将迁移" }],
+      hookErrors: [],
       plugins: [
         {
           marketplaceName: "个人插件市场",

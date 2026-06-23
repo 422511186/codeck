@@ -20,6 +20,8 @@ import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/Fs
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
+import type { HooksListParams } from "../../../docs/generated/app-server-ts/v2/HooksListParams";
+import type { HooksListResponse } from "../../../docs/generated/app-server-ts/v2/HooksListResponse";
 import type { CollaborationModeListResponse } from "../../../docs/generated/app-server-ts/v2/CollaborationModeListResponse";
 import type { ListMcpServerStatusResponse } from "../../../docs/generated/app-server-ts/v2/ListMcpServerStatusResponse";
 import type { LoginAccountParams } from "../../../docs/generated/app-server-ts/v2/LoginAccountParams";
@@ -109,6 +111,9 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileHookErrorView,
+  MobileHookNoticeView,
+  MobileHookView,
   MobileMcpServerView,
   MobileMcpLoginView,
   MobileModelOption,
@@ -467,6 +472,39 @@ function skillViews(response: SkillsListResponse): MobileSkillView[] {
 }
 
 function skillErrorViews(response: SkillsListResponse): MobileSkillErrorView[] {
+  return response.data.flatMap((entry) =>
+    entry.errors.map((error) => ({
+      cwd: entry.cwd,
+      path: error.path,
+      message: error.message
+    }))
+  );
+}
+
+function hookViews(response: HooksListResponse): MobileHookView[] {
+  return response.data.flatMap((entry) =>
+    entry.hooks.map((hook) => ({
+      cwd: entry.cwd,
+      key: hook.key,
+      eventName: hook.eventName,
+      handlerType: hook.handlerType,
+      matcher: hook.matcher,
+      command: hook.command,
+      source: hook.source,
+      sourcePath: hook.sourcePath,
+      pluginId: hook.pluginId,
+      enabled: hook.enabled,
+      trustStatus: hook.trustStatus,
+      statusMessage: hook.statusMessage
+    }))
+  );
+}
+
+function hookWarningViews(response: HooksListResponse): MobileHookNoticeView[] {
+  return response.data.flatMap((entry) => entry.warnings.map((message) => ({ cwd: entry.cwd, message })));
+}
+
+function hookErrorViews(response: HooksListResponse): MobileHookErrorView[] {
   return response.data.flatMap((entry) =>
     entry.errors.map((error) => ({
       cwd: entry.cwd,
@@ -1003,6 +1041,7 @@ export class CodexAppServerClient {
       providerCapabilitiesResponse,
       collaborationModeResponse,
       skillsResponse,
+      hooksResponse,
       pluginResponse
     ] = await Promise.all([
       this.peer.request("config/read", {}),
@@ -1014,6 +1053,7 @@ export class CodexAppServerClient {
       this.peer.request("modelProvider/capabilities/read", {}),
       this.peer.request("collaborationMode/list", {}),
       this.peer.request("skills/list", { forceReload: false } satisfies SkillsListParams),
+      this.peer.request("hooks/list", {} satisfies HooksListParams),
       this.peer.request("plugin/list", { cwds: null, marketplaceKinds: null } satisfies PluginListParams)
     ]);
     const config = (configResponse as ConfigReadResponse).config;
@@ -1050,6 +1090,9 @@ export class CodexAppServerClient {
       })),
       skills: skillViews(skillsResponse as SkillsListResponse),
       skillErrors: skillErrorViews(skillsResponse as SkillsListResponse),
+      hooks: hookViews(hooksResponse as HooksListResponse),
+      hookWarnings: hookWarningViews(hooksResponse as HooksListResponse),
+      hookErrors: hookErrorViews(hooksResponse as HooksListResponse),
       plugins: pluginViews(pluginResponse as PluginListResponse),
       pluginMarketplaceErrors: pluginMarketplaceErrorViews(pluginResponse as PluginListResponse)
     };

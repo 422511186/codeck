@@ -1053,6 +1053,37 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "hooks/list") {
+      return {
+        data: [
+          {
+            cwd: this.thread.cwd,
+            hooks: [
+              {
+                key: "post-tool-use-format",
+                eventName: "postToolUse",
+                handlerType: "command",
+                matcher: "Edit",
+                command: "npm run format",
+                timeoutSec: 60n,
+                statusMessage: "格式化文件",
+                sourcePath: `${this.thread.cwd}\\.codex\\hooks.json`,
+                source: "project",
+                pluginId: null,
+                displayOrder: 1n,
+                enabled: true,
+                isManaged: false,
+                currentHash: "mock-hook-hash",
+                trustStatus: "trusted"
+              }
+            ],
+            warnings: ["hook 即将迁移"],
+            errors: []
+          }
+        ]
+      };
+    }
+
     if (method === "plugin/list") {
       return {
         marketplaces: [

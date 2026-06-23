@@ -771,6 +771,7 @@ pre {
 }
 
 .plugin-control-panel,
+.hook-control-panel,
 .mcp-control-panel,
 .skill-control-panel {
   display: grid;

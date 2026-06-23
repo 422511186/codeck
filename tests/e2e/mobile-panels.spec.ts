@@ -52,7 +52,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByRole("definition").filter({ hasText: "medium" })).toBeVisible();
   await expect(page.getByText("connected")).toBeVisible();
   await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
-  await expect(page.getByRole("definition").filter({ hasText: "pro" })).toBeVisible();
+  await expect(page.getByText("pro", { exact: true })).toBeVisible();
   await expect(page.getByText("不需要")).toBeVisible();
   await page.getByRole("button", { name: "ChatGPT 登录" }).click();
   await expect(page.getByText("https://auth.openai.com/mock-codex")).toBeVisible();
@@ -78,6 +78,10 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("Code / Ask")).toBeVisible();
   await expect(page.getByText("1 个启用 / 2 个 Skills")).toBeVisible();
   await expect(page.getByText("openai-docs / repo-helper")).toBeVisible();
+  await expect(page.getByText("1 个启用 / 1 个 Hooks")).toBeVisible();
+  await expect(page.getByText("post-tool-use-format").first()).toBeVisible();
+  await expect(page.getByText("npm run format")).toBeVisible();
+  await expect(page.getByText("Hook 警告：hook 即将迁移")).toBeVisible();
   await expect(page.getByText("1 个已安装 / 2 个插件")).toBeVisible();
   await expect(page.getByText("浏览器工具 / review-pack")).toBeVisible();
 
