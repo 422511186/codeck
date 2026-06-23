@@ -284,6 +284,13 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "thread/loaded/list") {
+      return {
+        data: [this.thread.id],
+        nextCursor: null
+      };
+    }
+
     if (method === "thread/read") {
       const readParams = params as { threadId?: string };
       const thread = this.selectThread(readParams.threadId);

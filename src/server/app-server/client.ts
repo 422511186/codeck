@@ -99,6 +99,8 @@ import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadForkResponse } from "../../../docs/generated/app-server-ts/v2/ThreadForkResponse";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadListResponse";
+import type { ThreadLoadedListParams } from "../../../docs/generated/app-server-ts/v2/ThreadLoadedListParams";
+import type { ThreadLoadedListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadLoadedListResponse";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
@@ -1272,7 +1274,8 @@ export class CodexAppServerClient {
       collaborationModeResponse,
       skillsResponse,
       hooksResponse,
-      pluginResponse
+      pluginResponse,
+      loadedThreadsResponse
     ] = await Promise.all([
       this.peer.request("config/read", {}),
       this.peer.request("remoteControl/status/read", {}),
@@ -1284,7 +1287,11 @@ export class CodexAppServerClient {
       this.peer.request("collaborationMode/list", {}),
       this.peer.request("skills/list", { forceReload: false } satisfies SkillsListParams),
       this.peer.request("hooks/list", {} satisfies HooksListParams),
-      this.peer.request("plugin/list", { cwds: null, marketplaceKinds: null } satisfies PluginListParams)
+      this.peer.request("plugin/list", { cwds: null, marketplaceKinds: null } satisfies PluginListParams),
+      this.peer.request("thread/loaded/list", {
+        cursor: undefined,
+        limit: 50
+      } satisfies ThreadLoadedListParams)
     ]);
     const config = (configResponse as ConfigReadResponse).config;
     const remoteControl = remoteControlResponse as RemoteControlStatusReadResponse;
@@ -1303,6 +1310,7 @@ export class CodexAppServerClient {
       reasoningEffort: settingsValue(config.model_reasoning_effort),
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
+      loadedThreadIds: (loadedThreadsResponse as ThreadLoadedListResponse).data,
       remoteControlStatus: remoteControl.status,
       remoteControlServerName: remoteControl.serverName,
       remoteControlInstallationId: remoteControl.installationId,

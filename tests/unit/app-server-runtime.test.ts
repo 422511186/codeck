@@ -242,6 +242,7 @@ describe("createAppServerGateway", () => {
       reasoningEffort: "medium",
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
+      loadedThreadIds: ["mock-thread-1"],
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "mock-installation",

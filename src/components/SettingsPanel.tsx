@@ -97,6 +97,15 @@ function remoteClientsLabel(settings: MobileSettingsView): string {
     .join(" / ");
 }
 
+function loadedThreadsLabel(settings: MobileSettingsView): string {
+  const count = settings.loadedThreadIds.length;
+  return count ? `${count} 个已加载会话` : "无已加载会话";
+}
+
+function loadedThreadIdsLabel(settings: MobileSettingsView): string {
+  return settings.loadedThreadIds.length ? settings.loadedThreadIds.join(" / ") : "-";
+}
+
 function mcpServersLabel(settings: MobileSettingsView): string {
   if (!settings.mcpServers.length) {
     return "无 MCP 服务";
@@ -258,6 +267,8 @@ export function SettingsPanel({
         ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
         ["额度", rateLimitLabel(settings)],
         ["Provider 能力", providerCapabilitiesLabel(settings)],
+        ["已加载会话", loadedThreadsLabel(settings)],
+        ["会话 ID", loadedThreadIdsLabel(settings)],
         ["远程客户端", remoteClientsLabel(settings)],
         ["MCP", mcpServersLabel(settings)],
         ["协作模式", collaborationModesLabel(settings)],

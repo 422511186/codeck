@@ -66,6 +66,8 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
   await expect(page.getByText("pro", { exact: true })).toBeVisible();
   await expect(page.getByText("不需要")).toBeVisible();
+  await expect(page.getByText("1 个已加载会话")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: /^mock-/ })).toBeVisible();
   await page.getByRole("button", { name: "ChatGPT 登录" }).click();
   await expect(page.getByText("https://auth.openai.com/mock-codex")).toBeVisible();
   await page.getByRole("button", { name: "取消登录" }).click();

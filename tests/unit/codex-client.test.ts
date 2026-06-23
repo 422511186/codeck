@@ -47,6 +47,13 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "thread/loaded/list") {
+      return {
+        data: ["thread-1", "thread-2"],
+        nextCursor: null
+      };
+    }
+
     if (method === "thread/read") {
       return {
         thread: {
@@ -1591,6 +1598,7 @@ describe("CodexAppServerClient", () => {
       reasoningEffort: "medium",
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
+      loadedThreadIds: ["thread-1", "thread-2"],
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "install-1",
@@ -1729,6 +1737,7 @@ describe("CodexAppServerClient", () => {
         { method: "skills/list", params: { forceReload: false } },
         { method: "hooks/list", params: {} },
         { method: "plugin/list", params: { cwds: null, marketplaceKinds: null } },
+        { method: "thread/loaded/list", params: { cursor: undefined, limit: 50 } },
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );

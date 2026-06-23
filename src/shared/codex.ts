@@ -383,6 +383,7 @@ export type MobileSettingsView = {
   reasoningEffort: string | null;
   approvalPolicy: string | null;
   sandboxMode: string | null;
+  loadedThreadIds: string[];
   remoteControlStatus: string;
   remoteControlServerName: string;
   remoteControlInstallationId: string;
