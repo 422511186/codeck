@@ -14,6 +14,7 @@ import type { GetConversationSummaryParams } from "../../../docs/generated/app-s
 import type { GetConversationSummaryResponse } from "../../../docs/generated/app-server-ts/GetConversationSummaryResponse";
 import type { GitDiffToRemoteParams } from "../../../docs/generated/app-server-ts/GitDiffToRemoteParams";
 import type { GitDiffToRemoteResponse } from "../../../docs/generated/app-server-ts/GitDiffToRemoteResponse";
+import type { JsonValue } from "../../../docs/generated/app-server-ts/serde_json/JsonValue";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
@@ -62,6 +63,8 @@ import type { LoginAccountResponse } from "../../../docs/generated/app-server-ts
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
+import type { MockExperimentalMethodParams } from "../../../docs/generated/app-server-ts/v2/MockExperimentalMethodParams";
+import type { MockExperimentalMethodResponse } from "../../../docs/generated/app-server-ts/v2/MockExperimentalMethodResponse";
 import type { McpResourceReadParams } from "../../../docs/generated/app-server-ts/v2/McpResourceReadParams";
 import type { McpResourceReadResponse } from "../../../docs/generated/app-server-ts/v2/McpResourceReadResponse";
 import type { McpServerOauthLoginParams } from "../../../docs/generated/app-server-ts/v2/McpServerOauthLoginParams";
@@ -131,6 +134,8 @@ import type { ThreadListResponse } from "../../../docs/generated/app-server-ts/v
 import type { ThreadLoadedListParams } from "../../../docs/generated/app-server-ts/v2/ThreadLoadedListParams";
 import type { ThreadLoadedListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadLoadedListResponse";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
+import type { ThreadMetadataUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadMetadataUpdateParams";
+import type { ThreadMetadataUpdateResponse } from "../../../docs/generated/app-server-ts/v2/ThreadMetadataUpdateResponse";
 import type { ThreadRollbackParams } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackParams";
 import type { ThreadRollbackResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRollbackResponse";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
@@ -149,6 +154,8 @@ import type { ThreadUnarchiveParams } from "../../../docs/generated/app-server-t
 import type { ThreadUnarchiveResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveResponse";
 import type { ThreadUnsubscribeParams } from "../../../docs/generated/app-server-ts/v2/ThreadUnsubscribeParams";
 import type { ThreadUnsubscribeResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnsubscribeResponse";
+import type { ThreadApproveGuardianDeniedActionParams } from "../../../docs/generated/app-server-ts/v2/ThreadApproveGuardianDeniedActionParams";
+import type { ThreadInjectItemsParams } from "../../../docs/generated/app-server-ts/v2/ThreadInjectItemsParams";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -182,10 +189,12 @@ import type {
   MobileHookNoticeView,
   MobileHookView,
   MobileGitDiffView,
+  MobileJsonValue,
   MobileMcpServerView,
   MobileMcpLoginView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
+  MobileMockExperimentalMethodResult,
   MobileMcpResourceReadView,
   MobilePluginMarketplaceErrorView,
   MobilePluginDetailView,
@@ -204,6 +213,7 @@ import type {
   MobileSkillView,
   MobileThreadElicitationResult,
   MobileThreadGoalView,
+  MobileThreadMetadataUpdateInput,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -1043,6 +1053,25 @@ export class CodexAppServerClient {
     await this.peer.request("thread/settings/update", params);
   }
 
+  async updateThreadMetadata(input: MobileThreadMetadataUpdateInput): Promise<MobileThreadDetail> {
+    const params: ThreadMetadataUpdateParams = {
+      threadId: input.threadId,
+      gitInfo: input.gitInfo
+    };
+    const response = (await this.peer.request("thread/metadata/update", params)) as ThreadMetadataUpdateResponse;
+    return threadDetail(response.thread);
+  }
+
+  async injectThreadItems(threadId: string, items: MobileJsonValue[]): Promise<void> {
+    const params: ThreadInjectItemsParams = { threadId, items: items as JsonValue[] };
+    await this.peer.request("thread/inject_items", params);
+  }
+
+  async approveGuardianDeniedAction(threadId: string, event: MobileJsonValue): Promise<void> {
+    const params: ThreadApproveGuardianDeniedActionParams = { threadId, event: event as JsonValue };
+    await this.peer.request("thread/approveGuardianDeniedAction", params);
+  }
+
   async readThreadGoal(threadId: string): Promise<MobileThreadGoalView | null> {
     const params: ThreadGoalGetParams = { threadId };
     const response = (await this.peer.request("thread/goal/get", params)) as ThreadGoalGetResponse;
@@ -1091,6 +1120,12 @@ export class CodexAppServerClient {
 
   async resetMemory(): Promise<void> {
     await this.peer.request("memory/reset", undefined);
+  }
+
+  async mockExperimentalMethod(value?: string | null): Promise<MobileMockExperimentalMethodResult> {
+    const params: MockExperimentalMethodParams = { value: value ?? null };
+    const response = (await this.peer.request("mock/experimentalMethod", params)) as MockExperimentalMethodResponse;
+    return { echoed: response.echoed };
   }
 
   async loginWithChatGpt(): Promise<MobileAccountLoginView> {

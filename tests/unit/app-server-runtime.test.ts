@@ -854,6 +854,28 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持会话 metadata、注入 items、批准 Guardian 动作和 mock 探针", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.updateThreadMetadata({
+        threadId: "mock-thread-1",
+        gitInfo: { sha: "abc123", branch: "main", originUrl: null }
+      })
+    ).resolves.toMatchObject({ id: "mock-thread-1" });
+    await expect(
+      gateway.injectThreadItems("mock-thread-1", [{ type: "message", role: "user", content: "注入上下文" }])
+    ).resolves.toBeUndefined();
+    await expect(gateway.readThread("mock-thread-1")).resolves.toMatchObject({
+      timeline: expect.arrayContaining([expect.objectContaining({ role: "tool", text: "已注入 1 条上下文 item" })])
+    });
+    await expect(
+      gateway.approveGuardianDeniedAction("mock-thread-1", { type: "guardian_assessment", id: "event-1" })
+    ).resolves.toBeUndefined();
+    await expect(gateway.mockExperimentalMethod("hello")).resolves.toEqual({ echoed: "hello" });
+  });
+
   it("mock 模式支持读取会话摘要", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

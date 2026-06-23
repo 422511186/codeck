@@ -77,6 +77,27 @@ export type MobileRateLimitResetCreditConsumeResult = {
   outcome: "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
 };
 
+export type MobileJsonValue =
+  | number
+  | string
+  | boolean
+  | MobileJsonValue[]
+  | { [key: string]: MobileJsonValue | undefined }
+  | null;
+
+export type MobileThreadMetadataUpdateInput = {
+  threadId: string;
+  gitInfo?: {
+    sha?: string | null;
+    branch?: string | null;
+    originUrl?: string | null;
+  } | null;
+};
+
+export type MobileMockExperimentalMethodResult = {
+  echoed: string | null;
+};
+
 export type MobileRateLimitView = {
   limitId: string | null;
   limitName: string | null;

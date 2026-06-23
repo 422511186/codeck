@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveThread,
+  approveGuardianDeniedAction,
   cancelAccountLogin,
   clearThreadGoal,
   compactThread,
@@ -16,6 +17,7 @@ import {
   getConversationSummary,
   gitDiffToRemote,
   incrementThreadElicitation,
+  injectThreadItems,
   installPlugin,
   cleanThreadBackgroundTerminals,
   consumeRateLimitResetCredit,
@@ -40,6 +42,7 @@ import {
   readRemoteControlPairingStatus,
   refreshMcpServer,
   resumeThread,
+  runMockExperimentalMethod,
   resetMemory,
   removePath,
   revokeRemoteControlClient,
@@ -58,6 +61,7 @@ import {
   uninstallPlugin,
   unarchiveThread,
   unsubscribeThread,
+  updateThreadMetadata,
   updateThreadSettings,
   terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
@@ -375,6 +379,53 @@ describe("client-api", () => {
         reasoningEffort: "high",
         permissions: "full-auto"
       })
+    });
+  });
+
+  it("更新会话 metadata、注入 items、批准 Guardian 动作和调用 mock 探针时调用对应端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread: { id: "thread-1", title: "登录修复", updatedAt: 900, timeline: [] } })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ result: { echoed: "hello" } }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateThreadMetadata({
+        threadId: "thread-1",
+        gitInfo: { sha: "abc123", branch: "main", originUrl: null }
+      })
+    ).resolves.toMatchObject({ id: "thread-1", updatedAt: 900 });
+    await expect(
+      injectThreadItems("thread-1", [{ type: "message", role: "user", content: "注入上下文" }])
+    ).resolves.toBeUndefined();
+    await expect(
+      approveGuardianDeniedAction("thread-1", { type: "guardian_assessment", id: "event-1" })
+    ).resolves.toBeUndefined();
+    await expect(runMockExperimentalMethod("hello")).resolves.toEqual({ echoed: "hello" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/metadata", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ gitInfo: { sha: "abc123", branch: "main", originUrl: null } })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/items/inject", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ type: "message", role: "user", content: "注入上下文" }] })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/threads/thread-1/guardian/approve-denied-action", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: { type: "guardian_assessment", id: "event-1" } })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/mock/experimental-method", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value: "hello" })
     });
   });
 

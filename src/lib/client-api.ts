@@ -18,9 +18,11 @@ import type {
   MobileFileSearchResult,
   MobileFileSearchSessionView,
   MobileGitDiffView,
+  MobileJsonValue,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
+  MobileMockExperimentalMethodResult,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
@@ -34,6 +36,7 @@ import type {
   MobileThreadDetail,
   MobileThreadElicitationResult,
   MobileThreadGoalView,
+  MobileThreadMetadataUpdateInput,
   MobileThreadPage,
   MobileThreadSummary,
   MobileThreadUnsubscribeResult,
@@ -436,6 +439,45 @@ export async function updateThreadSettings(input: {
   }
 }
 
+export async function updateThreadMetadata(input: MobileThreadMetadataUpdateInput): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(input.threadId)}/metadata`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ gitInfo: input.gitInfo })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法更新会话 metadata");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
+export async function injectThreadItems(threadId: string, items: MobileJsonValue[]): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/items/inject`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ items })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法注入会话 items");
+  }
+}
+
+export async function approveGuardianDeniedAction(threadId: string, event: MobileJsonValue): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/guardian/approve-denied-action`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ event })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法批准 Guardian 拦截动作");
+  }
+}
+
 export async function setThreadGoal(input: {
   threadId: string;
   objective: string;
@@ -503,6 +545,21 @@ export async function resetMemory(): Promise<void> {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法重置记忆");
   }
+}
+
+export async function runMockExperimentalMethod(value?: string | null): Promise<MobileMockExperimentalMethodResult> {
+  const response = await fetch("/api/codex/mock/experimental-method", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ value: value ?? null })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法调用 mock 探针");
+  }
+
+  const payload = (await response.json()) as { result: MobileMockExperimentalMethodResult };
+  return payload.result;
 }
 
 export async function enableRemoteControl(): Promise<MobileRemoteControlStatusView> {

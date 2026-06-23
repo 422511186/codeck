@@ -484,6 +484,42 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/metadata/update") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "帮我修复登录",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 100,
+          updatedAt: 900,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: { sha: "abc123", branch: "main", originUrl: null },
+          name: "登录修复",
+          turns: []
+        }
+      };
+    }
+
+    if (method === "thread/inject_items" || method === "thread/approveGuardianDeniedAction") {
+      return {};
+    }
+
+    if (method === "mock/experimentalMethod") {
+      const experimentalParams = params as { value?: string | null };
+      return { echoed: experimentalParams.value ?? null };
+    }
+
     if (method === "thread/compact/start") {
       return {};
     }
@@ -2426,5 +2462,43 @@ describe("CodexAppServerClient", () => {
       method: "gitDiffToRemote",
       params: { cwd: "C:\\repo" }
     });
+  });
+
+  it("能更新会话 metadata、注入 items、批准 Guardian 拦截动作并调用 mock 探针", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.updateThreadMetadata({
+        threadId: "thread-1",
+        gitInfo: { sha: "abc123", branch: "main", originUrl: null }
+      })
+    ).resolves.toMatchObject({ id: "thread-1", updatedAt: 900 });
+    await expect(
+      client.injectThreadItems("thread-1", [{ type: "message", role: "user", content: "注入上下文" }])
+    ).resolves.toBeUndefined();
+    await expect(
+      client.approveGuardianDeniedAction("thread-1", { type: "guardian_assessment", id: "event-1" })
+    ).resolves.toBeUndefined();
+    await expect(client.mockExperimentalMethod("hello")).resolves.toEqual({ echoed: "hello" });
+
+    expect(peer.calls.slice(-4)).toEqual([
+      {
+        method: "thread/metadata/update",
+        params: {
+          threadId: "thread-1",
+          gitInfo: { sha: "abc123", branch: "main", originUrl: null }
+        }
+      },
+      {
+        method: "thread/inject_items",
+        params: { threadId: "thread-1", items: [{ type: "message", role: "user", content: "注入上下文" }] }
+      },
+      {
+        method: "thread/approveGuardianDeniedAction",
+        params: { threadId: "thread-1", event: { type: "guardian_assessment", id: "event-1" } }
+      },
+      { method: "mock/experimentalMethod", params: { value: "hello" } }
+    ]);
   });
 });

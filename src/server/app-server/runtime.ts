@@ -23,6 +23,8 @@ import type {
   MobileFileSearchResult,
   MobilePluginDetailView,
   MobileGitDiffView,
+  MobileJsonValue,
+  MobileMockExperimentalMethodResult,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
   MobileRateLimitResetCreditConsumeResult,
@@ -34,6 +36,7 @@ import type {
   MobileTerminalSession,
   MobileThreadElicitationResult,
   MobileThreadGoalView,
+  MobileThreadMetadataUpdateInput,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -510,6 +513,24 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {};
     }
 
+    if (method === "thread/metadata/update") {
+      const metadataParams = params as MobileThreadMetadataUpdateInput;
+      const thread = this.selectThread(metadataParams.threadId);
+      const currentGitInfo = thread.gitInfo ?? { sha: null, branch: null, originUrl: null };
+      this.thread = {
+        ...thread,
+        gitInfo:
+          metadataParams.gitInfo === null
+            ? null
+            : metadataParams.gitInfo
+              ? { ...currentGitInfo, ...metadataParams.gitInfo }
+              : thread.gitInfo,
+        updatedAt: Math.floor(Date.now() / 1000)
+      };
+      this.upsertThread(this.thread);
+      return { thread: this.thread };
+    }
+
     if (method === "thread/goal/get") {
       const goalParams = params as { threadId?: string };
       this.selectThread(goalParams.threadId);
@@ -636,6 +657,11 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {};
     }
 
+    if (method === "mock/experimentalMethod") {
+      const experimentalParams = params as { value?: string | null };
+      return { echoed: experimentalParams.value ?? null };
+    }
+
     if (method === "account/login/start") {
       const loginParams = params as { type?: string };
       if (loginParams.type === "apiKey") {
@@ -705,6 +731,46 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "thread/shellCommand") {
       const shellParams = params as { threadId?: string; command?: string };
       this.selectThread(shellParams.threadId);
+      return {};
+    }
+
+    if (method === "thread/inject_items") {
+      const injectParams = params as { threadId?: string; items?: unknown[] };
+      this.selectThread(injectParams.threadId);
+      const itemId = `mock-inject-${++this.itemCounter}`;
+      const now = Math.floor(Date.now() / 1000);
+      this.thread.turns.push({
+        id: `mock-turn-${++this.turnCounter}`,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: now,
+        completedAt: now,
+        durationMs: 1,
+        items: [
+          {
+            type: "commandExecution",
+            id: itemId,
+            command: `已注入 ${injectParams.items?.length ?? 0} 条上下文 item`,
+            cwd: this.thread.cwd,
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: 0,
+            durationMs: 1
+          }
+        ]
+      });
+      this.thread = { ...this.thread, updatedAt: now };
+      this.upsertThread(this.thread);
+      return {};
+    }
+
+    if (method === "thread/approveGuardianDeniedAction") {
+      const guardianParams = params as { threadId?: string };
+      this.selectThread(guardianParams.threadId);
       return {};
     }
 
@@ -2326,6 +2392,21 @@ export class AppServerGateway {
     await this.client.updateThreadSettings(input);
   }
 
+  async updateThreadMetadata(input: MobileThreadMetadataUpdateInput): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.updateThreadMetadata(input);
+  }
+
+  async injectThreadItems(threadId: string, items: MobileJsonValue[]): Promise<void> {
+    await this.ensureReady();
+    await this.client.injectThreadItems(threadId, items);
+  }
+
+  async approveGuardianDeniedAction(threadId: string, event: MobileJsonValue): Promise<void> {
+    await this.ensureReady();
+    await this.client.approveGuardianDeniedAction(threadId, event);
+  }
+
   async setThreadGoal(input: SetThreadGoalInput): Promise<MobileThreadGoalView> {
     await this.ensureReady();
     return this.client.setThreadGoal(input);
@@ -2354,6 +2435,11 @@ export class AppServerGateway {
   async resetMemory(): Promise<void> {
     await this.ensureReady();
     await this.client.resetMemory();
+  }
+
+  async mockExperimentalMethod(value?: string | null): Promise<MobileMockExperimentalMethodResult> {
+    await this.ensureReady();
+    return this.client.mockExperimentalMethod(value);
   }
 
   async loginWithChatGpt(): Promise<MobileAccountLoginView> {
