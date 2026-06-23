@@ -83,13 +83,14 @@ npm run dev
 
 如果没有配置 `CODEX_WEB_ACCESS_TOKEN`，启动日志会打印临时登录 token。手机访问 `http://<后端机器局域网 IP>:3000` 后输入该 token 登录。
 
-## 第一阶段验收
+## 完整系统验收
 
 运行：
 
 ```bash
 npm run verify
 npm run test:e2e
+npm run build
 ```
 
 期望：
