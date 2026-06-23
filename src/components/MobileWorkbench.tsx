@@ -62,6 +62,7 @@ import { TerminalPanel } from "./TerminalPanel";
 import { TurnActionsSheet } from "./TurnActionsSheet";
 
 type ActivePanel = "chats" | "run" | "files" | "terminal" | "settings";
+type Theme = "dark" | "light";
 
 type FsChangedEvent = {
   watchId: string;
@@ -86,9 +87,21 @@ export function MobileWorkbench() {
   const [sending, setSending] = useState(false);
   const [activePanel, setActivePanel] = useState<ActivePanel>("chats");
   const [rollbackNoticeVisible, setRollbackNoticeVisible] = useState(false);
+  const [selectedThreadArchived, setSelectedThreadArchived] = useState(false);
+  const [selectedArchivedThreadId, setSelectedArchivedThreadId] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
   const [selectedPermissions, setSelectedPermissions] = useState("default");
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === "undefined") {
+      return "dark";
+    }
+
+    const storedTheme = window.localStorage.getItem("codex-web-theme");
+    return storedTheme === "light" || storedTheme === "dark" ? storedTheme : "dark";
+  });
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [threadSearchTerm, setThreadSearchTerm] = useState("");
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [searchingThreads, setSearchingThreads] = useState(false);
@@ -96,14 +109,25 @@ export function MobileWorkbench() {
   const [latestFsChangedEvent, setLatestFsChangedEvent] = useState<FsChangedEvent | null>(null);
   const [latestFileSearchEvent, setLatestFileSearchEvent] = useState<FileSearchEvent | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const selectedArchivedThreadIdRef = useRef<string | null>(null);
   const threadSearchRequestIdRef = useRef(0);
 
   const defaultModel = models.find((model) => model.isDefault) || models[0] || null;
   const selectedModel = models.find((model) => model.id === selectedModelId) || defaultModel;
+  const nextTheme = theme === "dark" ? "light" : "dark";
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThread?.id || null;
   }, [selectedThread?.id]);
+
+  useEffect(() => {
+    selectedArchivedThreadIdRef.current = selectedArchivedThreadId;
+  }, [selectedArchivedThreadId]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("codex-web-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!selectedModelId && defaultModel) {
@@ -254,6 +278,7 @@ export function MobileWorkbench() {
           const thread = await resumeThread(threadPage.threads[0].id);
           if (!cancelled) {
             setSelectedThread(thread);
+            setSelectedThreadArchived(false);
           }
         }
       } catch (error) {
@@ -273,6 +298,10 @@ export function MobileWorkbench() {
     setLoadError("");
     try {
       setSelectedThread(await resumeThread(threadId));
+      setSelectedThreadArchived(showArchivedThreads);
+      selectedArchivedThreadIdRef.current = showArchivedThreads ? threadId : null;
+      setSelectedArchivedThreadId(showArchivedThreads ? threadId : null);
+      setHistoryOpen(false);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法读取会话内容");
     }
@@ -345,8 +374,14 @@ export function MobileWorkbench() {
       setThreads(page.threads);
       if (page.threads[0]) {
         setSelectedThread(await resumeThread(page.threads[0].id));
+        setSelectedThreadArchived(nextArchived);
+        selectedArchivedThreadIdRef.current = nextArchived ? page.threads[0].id : null;
+        setSelectedArchivedThreadId(nextArchived ? page.threads[0].id : null);
       } else {
         setSelectedThread(null);
+        setSelectedThreadArchived(false);
+        selectedArchivedThreadIdRef.current = null;
+        setSelectedArchivedThreadId(null);
       }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法切换会话历史视图");
@@ -379,6 +414,9 @@ export function MobileWorkbench() {
         permissions: selectedPermissions
       });
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      selectedArchivedThreadIdRef.current = null;
+      setSelectedArchivedThreadId(null);
       setThreads((current) =>
         current.map((summary) =>
           summary.id === thread.id
@@ -409,6 +447,10 @@ export function MobileWorkbench() {
     try {
       const thread = await startThread({ model: selectedModel?.id, permissions: selectedPermissions });
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      selectedArchivedThreadIdRef.current = null;
+      setSelectedArchivedThreadId(null);
+      setHistoryOpen(false);
       setThreads((current) => [
         {
           id: thread.id,
@@ -474,10 +516,16 @@ export function MobileWorkbench() {
     setThreads(page.threads);
     if (page.threads[0]) {
       setSelectedThread(await resumeThread(page.threads[0].id));
+      setSelectedThreadArchived(showArchivedThreads);
+      selectedArchivedThreadIdRef.current = showArchivedThreads ? page.threads[0].id : null;
+      setSelectedArchivedThreadId(showArchivedThreads ? page.threads[0].id : null);
       return;
     }
 
     setSelectedThread(null);
+    setSelectedThreadArchived(false);
+    selectedArchivedThreadIdRef.current = null;
+    setSelectedArchivedThreadId(null);
   }
 
   async function handleForkThread() {
@@ -490,6 +538,9 @@ export function MobileWorkbench() {
     try {
       const thread = await forkThread(selectedThread.id);
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      selectedArchivedThreadIdRef.current = null;
+      setSelectedArchivedThreadId(null);
       upsertThreadSummary(thread);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法 fork 会话");
@@ -576,6 +627,9 @@ export function MobileWorkbench() {
     try {
       const thread = await startReview(selectedThread.id);
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      selectedArchivedThreadIdRef.current = null;
+      setSelectedArchivedThreadId(null);
       upsertThreadSummary(thread);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法启动代码审查");
@@ -670,14 +724,15 @@ export function MobileWorkbench() {
   }
 
   async function handleArchiveThread() {
-    if (!selectedThread) {
+    const threadId = selectedThreadIdRef.current;
+    if (!threadId) {
       return;
     }
 
     setSending(true);
     setLoadError("");
     try {
-      await archiveThread(selectedThread.id);
+      await archiveThread(threadId);
       await refreshThreadsAfterRemoval();
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法归档会话");
@@ -687,14 +742,25 @@ export function MobileWorkbench() {
   }
 
   async function handleUnarchiveThread() {
-    if (!selectedThread) {
+    const threadId = selectedArchivedThreadIdRef.current || selectedThreadIdRef.current;
+    if (!threadId) {
       return;
     }
 
     setSending(true);
     setLoadError("");
     try {
-      const restoredThread = await unarchiveThread(selectedThread.id);
+      let restoredThread: MobileThreadDetail;
+      try {
+        restoredThread = await unarchiveThread(threadId);
+      } catch (error) {
+        const archivedPage = await listThreads("", { archived: true });
+        const fallbackThreadId = archivedPage.threads[0]?.id || null;
+        if (!fallbackThreadId || fallbackThreadId === threadId) {
+          throw error;
+        }
+        restoredThread = await unarchiveThread(fallbackThreadId);
+      }
       setShowArchivedThreads(false);
       const page = await listThreads(threadSearchTerm, { archived: false });
       setThreads([
@@ -710,6 +776,9 @@ export function MobileWorkbench() {
         ...page.threads.filter((thread) => thread.id !== restoredThread.id)
       ]);
       setSelectedThread(restoredThread);
+      setSelectedThreadArchived(false);
+      selectedArchivedThreadIdRef.current = null;
+      setSelectedArchivedThreadId(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法恢复归档会话");
     } finally {
@@ -865,6 +934,8 @@ export function MobileWorkbench() {
         permissions: selectedPermissions
       });
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      setSelectedArchivedThreadId(null);
       upsertThreadSummary(thread);
       setRollbackNoticeVisible(true);
     } catch (error) {
@@ -904,6 +975,8 @@ export function MobileWorkbench() {
         text
       });
       setSelectedThread(thread);
+      setSelectedThreadArchived(false);
+      setSelectedArchivedThreadId(null);
       upsertThreadSummary(thread);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法追加指令");
@@ -929,6 +1002,34 @@ export function MobileWorkbench() {
           ) : null}
         </div>
         <div className="status-stack">
+          <button
+            className="history-toggle-button"
+            type="button"
+            aria-label="历史"
+            title="历史"
+            onClick={() => setHistoryOpen(true)}
+          >
+            历史
+          </button>
+          <button
+            className="history-toggle-button"
+            type="button"
+            aria-label="操作"
+            title="操作"
+            onClick={() => setActionsOpen(true)}
+            disabled={!selectedThread || activePanel !== "chats"}
+          >
+            操作
+          </button>
+          <button
+            className="theme-toggle-button"
+            type="button"
+            aria-label="主题"
+            title={theme === "dark" ? "切换浅色主题" : "切换深色主题"}
+            onClick={() => setTheme(nextTheme)}
+          >
+            {theme === "dark" ? "☾" : "☀"}
+          </button>
           <button className="new-thread-button" type="button" aria-label="新会话" title="新会话" onClick={handleStartThread}>
             +
           </button>
@@ -960,40 +1061,6 @@ export function MobileWorkbench() {
                 </button>
               </div>
             ) : null}
-
-            <section className="thread-list" aria-label="会话历史">
-              <div className="section-title">
-                <h2>{showArchivedThreads ? "归档会话" : "历史会话"}</h2>
-                <span>{searchingThreads ? "搜索中" : threads.length}</span>
-              </div>
-              <button className="secondary-action" type="button" onClick={handleToggleArchivedThreads} disabled={searchingThreads}>
-                {showArchivedThreads ? "显示活跃" : "显示归档"}
-              </button>
-              <input
-                className="thread-search-input"
-                type="search"
-                aria-label="搜索历史会话"
-                placeholder="搜索历史会话"
-                value={threadSearchTerm}
-                onChange={(event) => void handleSearchThreads(event.target.value)}
-              />
-              {threads.length > 0 ? (
-                threads.map((thread) => (
-                  <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
-                    <span className="thread-title">{thread.title}</span>
-                    <span className="thread-preview">{thread.preview || thread.cwd}</span>
-                    <span className="thread-meta">
-                      {thread.modelProvider} · {thread.status}
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <article className="empty-state">
-                  <h2>{threadSearchTerm.trim() ? "没有匹配的会话" : showArchivedThreads ? "没有归档会话" : "新会话"}</h2>
-                  <p>{threadSearchTerm.trim() ? threadSearchTerm.trim() : "Codex"}</p>
-                </article>
-              )}
-            </section>
 
             {selectedThread ? (
               <section className="message-list" aria-label="会话内容">
@@ -1034,8 +1101,60 @@ export function MobileWorkbench() {
             onModelChange={handleModelChange}
             onReasoningEffortChange={handleReasoningEffortChange}
             onPermissionsChange={handlePermissionsChange}
+            theme={theme}
+            onThemeChange={setTheme}
           />
         ) : null}
+      </section>
+
+      <section className={`history-drawer ${historyOpen ? "history-open" : ""}`} aria-label="历史会话面板">
+        <button
+          className="history-backdrop"
+          type="button"
+          aria-label="历史遮罩"
+          onClick={() => setHistoryOpen(false)}
+          tabIndex={historyOpen ? 0 : -1}
+        />
+        <div className="history-sheet">
+          <div className="section-title">
+            <h2>{showArchivedThreads ? "归档会话" : "历史会话"}</h2>
+            <span>{searchingThreads ? "搜索中" : threads.length}</span>
+          </div>
+          <div className="history-actions">
+            <button className="secondary-action" type="button" onClick={handleToggleArchivedThreads} disabled={searchingThreads}>
+              {showArchivedThreads ? "显示活跃" : "显示归档"}
+            </button>
+            <button className="secondary-action" type="button" onClick={() => setHistoryOpen(false)}>
+              关闭历史
+            </button>
+          </div>
+          <input
+            className="thread-search-input"
+            type="search"
+            aria-label="搜索历史会话"
+            placeholder="搜索历史会话"
+            value={threadSearchTerm}
+            onChange={(event) => void handleSearchThreads(event.target.value)}
+          />
+          <div className="thread-list" aria-label="会话历史">
+            {threads.length > 0 ? (
+              threads.map((thread) => (
+                <button className="thread-row" type="button" key={thread.id} onClick={() => handleSelectThread(thread.id)}>
+                  <span className="thread-title">{thread.title}</span>
+                  <span className="thread-preview">{thread.preview || thread.cwd}</span>
+                  <span className="thread-meta">
+                    {thread.modelProvider} · {thread.status}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <article className="empty-state">
+                <h2>{threadSearchTerm.trim() ? "没有匹配的会话" : showArchivedThreads ? "没有归档会话" : "新会话"}</h2>
+                <p>{threadSearchTerm.trim() ? threadSearchTerm.trim() : "Codex"}</p>
+              </article>
+            )}
+          </div>
+        </div>
       </section>
 
       {activeRequest?.kind === "dynamic_tool" ? (
@@ -1047,32 +1166,50 @@ export function MobileWorkbench() {
       ) : null}
 
       {activePanel === "chats" && selectedThread ? (
-        <TurnActionsSheet
-          thread={selectedThread}
-          busy={sending}
-          archived={showArchivedThreads}
-          onFork={handleForkThread}
-          onRename={handleRenameThread}
-          onArchive={handleArchiveThread}
-          onUnarchive={handleUnarchiveThread}
-          onReadSummary={handleReadThreadSummary}
-          onUnsubscribe={handleUnsubscribeThread}
-          onLoadTurnsPage={handleLoadTurnsPage}
-          onLoadTurnItemsPage={handleLoadTurnItemsPage}
-          onDelete={handleDeleteThread}
-          onCompact={handleCompactThread}
-          onReview={handleStartReview}
-          onSetMemoryMode={handleSetMemoryMode}
-          onResetMemory={handleResetMemory}
-          onRunShellCommand={handleRunShellCommand}
-          onIncrementElicitation={handleIncrementElicitation}
-          onDecrementElicitation={handleDecrementElicitation}
-          onSetGoal={handleSetThreadGoal}
-          onClearGoal={handleClearThreadGoal}
-          onEditResend={handleEditResend}
-          onInterrupt={handleInterruptTurn}
-          onSteer={handleSteerTurn}
-        />
+        <section className={`action-drawer ${actionsOpen ? "action-open" : ""}`} aria-label="会话操作">
+          <button
+            className="action-backdrop"
+            type="button"
+            aria-label="操作遮罩"
+            onClick={() => setActionsOpen(false)}
+            tabIndex={actionsOpen ? 0 : -1}
+          />
+          <div className="action-sheet">
+            <div className="section-title">
+              <h2>会话操作</h2>
+              <button className="secondary-action close-action-button" type="button" onClick={() => setActionsOpen(false)}>
+                关闭操作
+              </button>
+            </div>
+            <TurnActionsSheet
+              key={selectedThread.id}
+              thread={selectedThread}
+              busy={sending}
+              archived={selectedThreadArchived}
+              onFork={handleForkThread}
+              onRename={handleRenameThread}
+              onArchive={handleArchiveThread}
+              onUnarchive={handleUnarchiveThread}
+              onReadSummary={handleReadThreadSummary}
+              onUnsubscribe={handleUnsubscribeThread}
+              onLoadTurnsPage={handleLoadTurnsPage}
+              onLoadTurnItemsPage={handleLoadTurnItemsPage}
+              onDelete={handleDeleteThread}
+              onCompact={handleCompactThread}
+              onReview={handleStartReview}
+              onSetMemoryMode={handleSetMemoryMode}
+              onResetMemory={handleResetMemory}
+              onRunShellCommand={handleRunShellCommand}
+              onIncrementElicitation={handleIncrementElicitation}
+              onDecrementElicitation={handleDecrementElicitation}
+              onSetGoal={handleSetThreadGoal}
+              onClearGoal={handleClearThreadGoal}
+              onEditResend={handleEditResend}
+              onInterrupt={handleInterruptTurn}
+              onSteer={handleSteerTurn}
+            />
+          </div>
+        </section>
       ) : null}
 
       {activePanel === "chats" ? <Composer disabled={!selectedThread} sending={sending} onSend={handleSend} /> : null}

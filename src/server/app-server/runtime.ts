@@ -705,7 +705,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/archive") {
       const actionParams = params as { threadId?: string };
-      const archivedThread = this.threads.find((item) => item.id === actionParams.threadId);
+      const archivedThread =
+        this.thread.id === actionParams.threadId
+          ? this.thread
+          : this.threads.find((item) => item.id === actionParams.threadId);
       if (archivedThread) {
         this.archivedThreads.set(archivedThread.id, archivedThread);
       }

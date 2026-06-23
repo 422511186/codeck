@@ -606,7 +606,11 @@ class FakePeer implements AppServerPeer {
             displayName: "GPT-5 Codex",
             description: "Codex 默认模型",
             hidden: false,
-            supportedReasoningEfforts: ["low", "medium", "high"],
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "快速" },
+              { reasoningEffort: "medium", description: "平衡" },
+              { reasoningEffort: "high", description: "深入" }
+            ],
             defaultReasoningEffort: "medium",
             inputModalities: ["text", "image"],
             supportsPersonality: true,

@@ -5,7 +5,8 @@ test("手机端可以新建会话并发送第一条消息", async ({ page }) => 
   await page.getByPlaceholder("输入登录 token").fill("sk-e2e-token");
   await page.getByRole("button", { name: "登录" }).click();
 
-  await expect(page.getByText("历史会话")).toBeVisible();
+  await expect(page.getByRole("button", { name: "历史" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "历史会话" })).toBeHidden();
 
   await page.getByRole("button", { name: "新会话" }).click();
   await expect(page.getByRole("heading", { name: "新会话", level: 1 })).toBeVisible();

@@ -379,6 +379,19 @@ function configEditParams(edit: MobileConfigEditInput): ConfigEdit {
   };
 }
 
+function normalizeReasoningEffort(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object" && "reasoningEffort" in value) {
+    const effort = (value as { reasoningEffort?: unknown }).reasoningEffort;
+    return typeof effort === "string" ? effort : null;
+  }
+
+  return null;
+}
+
 function statusLabel(status: ThreadStatus): string {
   if (status.type === "active") {
     return "active";
@@ -1377,7 +1390,10 @@ export class CodexAppServerClient {
         id: model.id,
         label: model.displayName || model.model,
         isDefault: model.isDefault,
-        supportedReasoningEfforts: model.supportedReasoningEfforts.map(String),
+        supportedReasoningEfforts: model.supportedReasoningEfforts.flatMap((effort) => {
+          const normalized = normalizeReasoningEffort(effort);
+          return normalized ? [normalized] : [];
+        }),
         inputModalities: model.inputModalities.map(String)
       }));
   }

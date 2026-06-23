@@ -39,11 +39,13 @@ type SettingsPanelProps = {
   selectedModelId: string;
   selectedReasoningEffort: string;
   selectedPermissions: string;
+  theme: "dark" | "light";
   cwd: string;
   refreshVersion: number;
   onModelChange(modelId: string): void;
   onReasoningEffortChange(reasoningEffort: string): void;
   onPermissionsChange(permissions: string): void;
+  onThemeChange(theme: "dark" | "light"): void;
 };
 
 function accountLabel(settings: MobileSettingsView): string {
@@ -205,11 +207,13 @@ export function SettingsPanel({
   selectedModelId,
   selectedReasoningEffort,
   selectedPermissions,
+  theme,
   cwd,
   refreshVersion,
   onModelChange,
   onReasoningEffortChange,
-  onPermissionsChange
+  onPermissionsChange,
+  onThemeChange
 }: SettingsPanelProps) {
   const [settings, setSettings] = useState<MobileSettingsView | null>(null);
   const [pairing, setPairing] = useState<MobileRemoteControlPairingView | null>(null);
@@ -629,6 +633,13 @@ export function SettingsPanel({
       </div>
       {error ? <p className="form-error">{error}</p> : null}
       <div className="settings-controls">
+        <label>
+          <span>主题</span>
+          <select aria-label="主题" value={theme} onChange={(event) => onThemeChange(event.target.value as "dark" | "light")}>
+            <option value="dark">深色</option>
+            <option value="light">浅色</option>
+          </select>
+        </label>
         <label>
           <span>模型</span>
           <select value={selectedModelId} onChange={(event) => onModelChange(event.target.value)}>
