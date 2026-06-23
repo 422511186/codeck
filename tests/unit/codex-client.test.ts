@@ -212,6 +212,13 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "gitDiffToRemote") {
+      return {
+        sha: "abc123",
+        diff: "diff --git a/README.md b/README.md"
+      };
+    }
+
     if (method === "thread/resume") {
       return {
         thread: {
@@ -2360,6 +2367,21 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.at(-1)).toEqual({
       method: "getConversationSummary",
       params: { conversationId: "thread-1" }
+    });
+  });
+
+  it("能读取工作区相对远端的 Git diff", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.gitDiffToRemote("C:\\repo")).resolves.toEqual({
+      sha: "abc123",
+      diff: "diff --git a/README.md b/README.md"
+    });
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "gitDiffToRemote",
+      params: { cwd: "C:\\repo" }
     });
   });
 });

@@ -12,6 +12,8 @@ import type { GetAuthStatusParams } from "../../../docs/generated/app-server-ts/
 import type { GetAuthStatusResponse } from "../../../docs/generated/app-server-ts/GetAuthStatusResponse";
 import type { GetConversationSummaryParams } from "../../../docs/generated/app-server-ts/GetConversationSummaryParams";
 import type { GetConversationSummaryResponse } from "../../../docs/generated/app-server-ts/GetConversationSummaryResponse";
+import type { GitDiffToRemoteParams } from "../../../docs/generated/app-server-ts/GitDiffToRemoteParams";
+import type { GitDiffToRemoteResponse } from "../../../docs/generated/app-server-ts/GitDiffToRemoteResponse";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
@@ -172,6 +174,7 @@ import type {
   MobileHookErrorView,
   MobileHookNoticeView,
   MobileHookView,
+  MobileGitDiffView,
   MobileMcpServerView,
   MobileMcpLoginView,
   MobileModelOption,
@@ -875,6 +878,15 @@ export class CodexAppServerClient {
       input.conversationId !== undefined ? { conversationId: input.conversationId } : { rolloutPath: input.rolloutPath };
     const response = (await this.peer.request("getConversationSummary", params)) as GetConversationSummaryResponse;
     return conversationSummaryView(response);
+  }
+
+  async gitDiffToRemote(cwd: string): Promise<MobileGitDiffView> {
+    const params: GitDiffToRemoteParams = { cwd };
+    const response = (await this.peer.request("gitDiffToRemote", params)) as GitDiffToRemoteResponse;
+    return {
+      sha: response.sha,
+      diff: response.diff
+    };
   }
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {

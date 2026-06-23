@@ -17,6 +17,7 @@ import type {
   MobileFileMetadata,
   MobileFileSearchResult,
   MobileFileSearchSessionView,
+  MobileGitDiffView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -209,6 +210,17 @@ export async function getConversationSummary(threadId: string): Promise<MobileTh
 
   const payload = (await response.json()) as { summary: MobileThreadSummary };
   return payload.summary;
+}
+
+export async function gitDiffToRemote(cwd: string): Promise<MobileGitDiffView> {
+  const response = await fetch(`/api/codex/git/diff-to-remote?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取远端 Git diff");
+  }
+
+  const payload = (await response.json()) as { diff: MobileGitDiffView };
+  return payload.diff;
 }
 
 export async function startThread(input: { model?: string; permissions?: string } = {}): Promise<MobileThreadDetail> {

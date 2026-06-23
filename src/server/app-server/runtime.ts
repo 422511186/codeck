@@ -22,6 +22,7 @@ import type {
   MobileFileSearchSessionView,
   MobileFileSearchResult,
   MobilePluginDetailView,
+  MobileGitDiffView,
   MobilePluginInstallResultView,
   MobilePluginSkillContentView,
   MobileRemoteControlPairingStatusView,
@@ -345,6 +346,13 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           source: thread.source,
           gitInfo: thread.gitInfo
         }
+      };
+    }
+
+    if (method === "gitDiffToRemote") {
+      return {
+        sha: "mock-remote-sha",
+        diff: "diff --git a/README.md b/README.md\n"
       };
     }
 
@@ -2192,6 +2200,11 @@ export class AppServerGateway {
   async getConversationSummary(input: GetConversationSummaryInput): Promise<MobileThreadSummary> {
     await this.ensureReady();
     return this.client.getConversationSummary(input);
+  }
+
+  async gitDiffToRemote(cwd: string): Promise<MobileGitDiffView> {
+    await this.ensureReady();
+    return this.client.gitDiffToRemote(cwd);
   }
 
   async listModels(): Promise<MobileModelOption[]> {

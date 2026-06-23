@@ -380,6 +380,11 @@ export type MobileCommandResult = {
   stderr: string;
 };
 
+export type MobileGitDiffView = {
+  sha: string;
+  diff: string;
+};
+
 export type MobileTerminalSession = {
   processHandle: string;
   cwd: string;

@@ -784,7 +784,7 @@ export function MobileWorkbench() {
           </>
         ) : null}
 
-        {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
+        {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} cwd={selectedThread.cwd} /> : null}
         {activePanel === "files" && selectedThread ? (
           <FilesPanel
             rootPath={selectedThread.cwd}

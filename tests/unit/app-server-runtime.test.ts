@@ -863,6 +863,16 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持读取远端 Git diff", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.gitDiffToRemote("C:\\Users\\huang\\workspace")).resolves.toEqual({
+      sha: "mock-remote-sha",
+      diff: "diff --git a/README.md b/README.md\n"
+    });
+  });
+
   it("mock 模式支持取消订阅会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

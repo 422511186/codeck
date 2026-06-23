@@ -13,6 +13,7 @@ import {
   getAccountTokenUsage,
   getAuthStatus,
   getConversationSummary,
+  gitDiffToRemote,
   installPlugin,
   cleanThreadBackgroundTerminals,
   getConfigRequirements,
@@ -243,6 +244,21 @@ describe("client-api", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/conversation-summary?threadId=thread-1", { cache: "no-store" });
+  });
+
+  it("读取远端 Git diff 时调用 git diff 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ diff: { sha: "abc123", diff: "diff --git a/README.md b/README.md" } })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(gitDiffToRemote("C:\\repo")).resolves.toEqual({
+      sha: "abc123",
+      diff: "diff --git a/README.md b/README.md"
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/git/diff-to-remote?cwd=C%3A%5Crepo", { cache: "no-store" });
   });
 
   it("归档、恢复归档和删除会话时调用对应端点", async () => {
