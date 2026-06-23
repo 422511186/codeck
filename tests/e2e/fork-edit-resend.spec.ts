@@ -81,3 +81,17 @@ test("手机端可以切换记忆模式并重置记忆", async ({ page }) => {
   await page.getByRole("button", { name: "重置记忆" }).click();
   await expect(page.getByText("记忆已重置")).toBeVisible();
 });
+
+test("手机端可以执行会话命令并控制 elicitation 计数", async ({ page }) => {
+  await login(page);
+
+  await page.getByPlaceholder("会话 shell command").fill("npm test");
+  await page.getByRole("button", { name: "执行会话命令" }).click();
+  await expect(page.getByText("会话命令已发送：npm test")).toBeVisible();
+
+  await page.getByRole("button", { name: "暂停 elicitation" }).click();
+  await expect(page.getByText("Elicitation 已暂停：1")).toBeVisible();
+
+  await page.getByRole("button", { name: "恢复 elicitation" }).click();
+  await expect(page.getByText("Elicitation 已恢复：0")).toBeVisible();
+});

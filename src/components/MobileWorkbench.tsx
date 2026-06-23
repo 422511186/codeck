@@ -20,6 +20,8 @@ import {
   compactThread,
   deleteThread,
   forkThread,
+  decrementThreadElicitation,
+  incrementThreadElicitation,
   interruptTurn,
   listModels,
   listPendingServerRequests,
@@ -31,6 +33,7 @@ import {
   renameThread,
   resolveServerRequest,
   rollbackThread,
+  runThreadShellCommand,
   setThreadGoal,
   setThreadMemoryMode,
   startReview,
@@ -589,6 +592,57 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleRunShellCommand(command: string) {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      await runThreadShellCommand(selectedThread.id, command);
+      appendThreadNotice(selectedThread.id, `thread-shell-${Date.now()}`, `会话命令已发送：${command}`);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法执行会话 shell command");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleIncrementElicitation() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const result = await incrementThreadElicitation(selectedThread.id);
+      appendThreadNotice(selectedThread.id, "elicitation-increment", `Elicitation 已暂停：${result.count}`);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法暂停 elicitation");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleDecrementElicitation() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const result = await decrementThreadElicitation(selectedThread.id);
+      appendThreadNotice(selectedThread.id, "elicitation-decrement", `Elicitation 已恢复：${result.count}`);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法恢复 elicitation");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleArchiveThread() {
     if (!selectedThread) {
       return;
@@ -830,6 +884,9 @@ export function MobileWorkbench() {
           onReview={handleStartReview}
           onSetMemoryMode={handleSetMemoryMode}
           onResetMemory={handleResetMemory}
+          onRunShellCommand={handleRunShellCommand}
+          onIncrementElicitation={handleIncrementElicitation}
+          onDecrementElicitation={handleDecrementElicitation}
           onSetGoal={handleSetThreadGoal}
           onClearGoal={handleClearThreadGoal}
           onEditResend={handleEditResend}

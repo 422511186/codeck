@@ -12,6 +12,9 @@ type TurnActionsSheetProps = {
   onReview(): Promise<void>;
   onSetMemoryMode(mode: "enabled" | "disabled"): Promise<void>;
   onResetMemory(): Promise<void>;
+  onRunShellCommand(command: string): Promise<void>;
+  onIncrementElicitation(): Promise<void>;
+  onDecrementElicitation(): Promise<void>;
   onSetGoal(objective: string, tokenBudget?: number | null): Promise<void>;
   onClearGoal(): Promise<void>;
   onEditResend(text: string): Promise<void>;
@@ -30,6 +33,9 @@ export function TurnActionsSheet({
   onReview,
   onSetMemoryMode,
   onResetMemory,
+  onRunShellCommand,
+  onIncrementElicitation,
+  onDecrementElicitation,
   onSetGoal,
   onClearGoal,
   onEditResend,
@@ -39,6 +45,7 @@ export function TurnActionsSheet({
   const [nameText, setNameText] = useState("");
   const [goalText, setGoalText] = useState("");
   const [goalBudgetText, setGoalBudgetText] = useState("");
+  const [shellCommandText, setShellCommandText] = useState("");
   const [editText, setEditText] = useState("");
   const [steerText, setSteerText] = useState("");
 
@@ -75,6 +82,17 @@ export function TurnActionsSheet({
 
     await onEditResend(text);
     setEditText("");
+  }
+
+  async function submitShellCommand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const command = shellCommandText.trim();
+    if (!command || busy) {
+      return;
+    }
+
+    await onRunShellCommand(command);
+    setShellCommandText("");
   }
 
   async function submitSteer(event: FormEvent<HTMLFormElement>) {
@@ -125,6 +143,14 @@ export function TurnActionsSheet({
           禁用记忆
         </button>
       </div>
+      <div className="turn-actions-row">
+        <button type="button" onClick={onIncrementElicitation} disabled={busy}>
+          暂停 elicitation
+        </button>
+        <button type="button" onClick={onDecrementElicitation} disabled={busy}>
+          恢复 elicitation
+        </button>
+      </div>
       <form className="turn-action-form" onSubmit={submitRename}>
         <input
           value={nameText}
@@ -164,6 +190,17 @@ export function TurnActionsSheet({
         />
         <button type="submit" disabled={busy || !goalText.trim()}>
           设为目标
+        </button>
+      </form>
+      <form className="turn-action-form" onSubmit={submitShellCommand}>
+        <input
+          value={shellCommandText}
+          onChange={(event) => setShellCommandText(event.target.value)}
+          placeholder="会话 shell command"
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !shellCommandText.trim()}>
+          执行会话命令
         </button>
       </form>
       <form className="turn-action-form" onSubmit={submitEdit}>
