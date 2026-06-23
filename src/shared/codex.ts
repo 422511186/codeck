@@ -276,6 +276,17 @@ export type MobileConfigRequirementsView = {
   featureRequirements: Record<string, boolean> | null;
 };
 
+export type MobileConfigEditInput = {
+  keyPath: string;
+  value: string | number | boolean | null | Array<string | number | boolean | null>;
+};
+
+export type MobileConfigWriteResultView = {
+  status: string;
+  version: string;
+  filePath: string;
+};
+
 export type MobileWindowsSandboxReadinessView = {
   status: "ready" | "notConfigured" | "updateRequired";
 };

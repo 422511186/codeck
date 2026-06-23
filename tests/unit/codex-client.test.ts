@@ -645,6 +645,15 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "config/value/write" || method === "config/batchWrite") {
+      return {
+        status: "written",
+        version: "config-version-2",
+        filePath: "C:\\Users\\huang\\.codex\\config.toml",
+        overriddenMetadata: null
+      };
+    }
+
     if (method === "remoteControl/status/read") {
       return {
         status: "connected",
@@ -1865,6 +1874,56 @@ describe("CodexAppServerClient", () => {
         { method: "remoteControl/client/list", params: { environmentId: "env-1", limit: 20, order: "desc" } }
       ])
     );
+  });
+
+  it("能写入单项和批量全局配置", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.writeConfigValue("model", "gpt-5-mini")).resolves.toEqual({
+      status: "written",
+      version: "config-version-2",
+      filePath: "C:\\Users\\huang\\.codex\\config.toml"
+    });
+    await expect(
+      client.writeConfigBatch([
+        { keyPath: "model", value: "gpt-5-mini" },
+        { keyPath: "model_reasoning_effort", value: "high" },
+        { keyPath: "approval_policy", value: "on-request" },
+        { keyPath: "sandbox_mode", value: "read-only" }
+      ])
+    ).resolves.toEqual({
+      status: "written",
+      version: "config-version-2",
+      filePath: "C:\\Users\\huang\\.codex\\config.toml"
+    });
+
+    expect(peer.calls.slice(-2)).toEqual([
+      {
+        method: "config/value/write",
+        params: {
+          keyPath: "model",
+          value: "gpt-5-mini",
+          mergeStrategy: "replace",
+          filePath: null,
+          expectedVersion: null
+        }
+      },
+      {
+        method: "config/batchWrite",
+        params: {
+          edits: [
+            { keyPath: "model", value: "gpt-5-mini", mergeStrategy: "replace" },
+            { keyPath: "model_reasoning_effort", value: "high", mergeStrategy: "replace" },
+            { keyPath: "approval_policy", value: "on-request", mergeStrategy: "replace" },
+            { keyPath: "sandbox_mode", value: "read-only", mergeStrategy: "replace" }
+          ],
+          filePath: null,
+          expectedVersion: null,
+          reloadUserConfig: true
+        }
+      }
+    ]);
   });
 
   it("能设置实验功能启用状态", async () => {

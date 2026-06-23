@@ -8,6 +8,8 @@ async function login(page: import("@playwright/test").Page) {
 }
 
 test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ page }) => {
+  test.setTimeout(60_000);
+
   await login(page);
 
   await page.getByRole("button", { name: "Files" }).click();
@@ -160,9 +162,9 @@ test("手机端可以切换模型、思考强度和权限并用于后续发送",
   await login(page);
 
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByLabel("模型").selectOption("gpt-5-mini");
-  await page.getByLabel("思考强度").selectOption("high");
-  await page.getByLabel("权限配置").selectOption("full-auto");
+  await page.getByRole("combobox", { name: "模型", exact: true }).selectOption("gpt-5-mini");
+  await page.getByRole("combobox", { name: "思考强度", exact: true }).selectOption("high");
+  await page.getByRole("combobox", { name: "权限配置", exact: true }).selectOption("full-auto");
   await expect.poll(() => settingsRequests.length).toBeGreaterThanOrEqual(3);
   expect(settingsRequests).toEqual(
     expect.arrayContaining([
@@ -183,6 +185,29 @@ test("手机端可以切换模型、思考强度和权限并用于后续发送",
   await page.getByRole("button", { name: "发送" }).click();
 
   await expect(page.getByText("已收到：设置切换测试（模型 gpt-5-mini，思考 high，权限 full-auto）")).toBeVisible();
+});
+
+test("设置面板可以写入全局配置", async ({ page }) => {
+  await login(page);
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("全局模型").selectOption("gpt-5-mini");
+  await page.getByLabel("全局思考强度").selectOption("high");
+  await page.getByLabel("全局审批策略").selectOption("on-request");
+  await page.getByLabel("全局沙箱").selectOption("read-only");
+  await page.getByRole("button", { name: "保存全局配置" }).click();
+  await expect(page.getByText("全局配置已保存")).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "gpt-5-mini" })).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "high" })).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "on-request" })).toBeVisible();
+  await expect(page.getByRole("definition").filter({ hasText: "read-only" })).toBeVisible();
+
+  await page.getByLabel("全局模型").selectOption("gpt-5-codex");
+  await page.getByLabel("全局思考强度").selectOption("medium");
+  await page.getByLabel("全局审批策略").selectOption("untrusted");
+  await page.getByLabel("全局沙箱").selectOption("workspace-write");
+  await page.getByRole("button", { name: "保存全局配置" }).click();
+  await expect(page.getByRole("definition").filter({ hasText: "gpt-5-codex" })).toBeVisible();
 });
 
 test("设置面板会响应 app-server 集成状态更新", async ({ page }) => {

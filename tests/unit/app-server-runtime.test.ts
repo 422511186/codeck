@@ -723,6 +723,30 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持写入全局配置并刷新设置", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.writeConfigBatch([
+        { keyPath: "model", value: "gpt-5-mini" },
+        { keyPath: "model_reasoning_effort", value: "high" },
+        { keyPath: "approval_policy", value: "on-request" },
+        { keyPath: "sandbox_mode", value: "read-only" }
+      ])
+    ).resolves.toMatchObject({
+      status: "written",
+      filePath: "C:\\Users\\huang\\.codex\\config.toml"
+    });
+
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      model: "gpt-5-mini",
+      reasoningEffort: "high",
+      approvalPolicy: "on-request",
+      sandboxMode: "read-only"
+    });
+  });
+
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

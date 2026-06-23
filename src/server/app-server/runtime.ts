@@ -2,6 +2,7 @@ import type { AppServerConfig } from "../../config/env";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type {
   MobileCommandResult,
+  MobileConfigEditInput,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -13,6 +14,7 @@ import type {
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
   MobileConfigRequirementsView,
+  MobileConfigWriteResultView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -83,6 +85,8 @@ import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2
 import type { CommandExecResizeParams } from "../../../docs/generated/app-server-ts/v2/CommandExecResizeParams";
 import type { CommandExecTerminateParams } from "../../../docs/generated/app-server-ts/v2/CommandExecTerminateParams";
 import type { CommandExecWriteParams } from "../../../docs/generated/app-server-ts/v2/CommandExecWriteParams";
+import type { ConfigBatchWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigBatchWriteParams";
+import type { ConfigValueWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigValueWriteParams";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
 import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
@@ -139,6 +143,14 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private goals = new Map<string, MobileThreadGoalView>();
   private accountState: "chatgpt" | "apiKey" | "none" = "chatgpt";
   private windowsSandboxStatus: "ready" | "notConfigured" | "updateRequired" = "updateRequired";
+  private mockConfig: Record<string, unknown> = {
+    model: "gpt-5-codex",
+    model_provider: "openai",
+    model_reasoning_effort: "medium",
+    approval_policy: "untrusted",
+    sandbox_mode: "workspace-write"
+  };
+  private mockConfigVersion = 1;
   private experimentalFeatures = [
     {
       name: "appshots",
@@ -1026,16 +1038,24 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "config/read") {
       return {
-        config: {
-          model: "gpt-5-codex",
-          model_provider: "openai",
-          model_reasoning_effort: "medium",
-          approval_policy: "untrusted",
-          sandbox_mode: "workspace-write"
-        },
+        config: this.mockConfig,
         origins: {},
         layers: null
       };
+    }
+
+    if (method === "config/value/write") {
+      const writeParams = params as ConfigValueWriteParams;
+      this.writeMockConfigValue(writeParams.keyPath, writeParams.value);
+      return this.mockConfigWriteResponse();
+    }
+
+    if (method === "config/batchWrite") {
+      const writeParams = params as ConfigBatchWriteParams;
+      for (const edit of writeParams.edits) {
+        this.writeMockConfigValue(edit.keyPath, edit.value);
+      }
+      return this.mockConfigWriteResponse();
     }
 
     if (method === "remoteControl/status/read") {
@@ -1691,6 +1711,28 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     this.touchMockPath(parentPath);
   }
 
+  private writeMockConfigValue(keyPath: string, value: unknown): void {
+    this.mockConfig = {
+      ...this.mockConfig,
+      [keyPath]: value
+    };
+    this.mockConfigVersion += 1;
+  }
+
+  private mockConfigWriteResponse(): {
+    status: string;
+    version: string;
+    filePath: string;
+    overriddenMetadata: null;
+  } {
+    return {
+      status: "written",
+      version: `mock-config-${this.mockConfigVersion}`,
+      filePath: "C:\\Users\\huang\\.codex\\config.toml",
+      overriddenMetadata: null
+    };
+  }
+
   private emitMockFsChanged(paths: string[]): void {
     const normalizedPaths = paths.map((changedPath) => this.normalizeMockPath(changedPath));
     for (const [watchId, watchedPath] of this.mockFsWatches) {
@@ -2158,6 +2200,19 @@ export class AppServerGateway {
   async getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
     await this.ensureReady();
     return this.client.getConfigRequirements();
+  }
+
+  async writeConfigValue(
+    keyPath: string,
+    value: MobileConfigEditInput["value"]
+  ): Promise<MobileConfigWriteResultView> {
+    await this.ensureReady();
+    return this.client.writeConfigValue(keyPath, value);
+  }
+
+  async writeConfigBatch(edits: MobileConfigEditInput[]): Promise<MobileConfigWriteResultView> {
+    await this.ensureReady();
+    return this.client.writeConfigBatch(edits);
   }
 
   async getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {

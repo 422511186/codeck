@@ -14,9 +14,13 @@ import type { CommandExecResizeParams } from "../../../docs/generated/app-server
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
 import type { CommandExecTerminateParams } from "../../../docs/generated/app-server-ts/v2/CommandExecTerminateParams";
 import type { CommandExecWriteParams } from "../../../docs/generated/app-server-ts/v2/CommandExecWriteParams";
+import type { ConfigBatchWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigBatchWriteParams";
+import type { ConfigEdit } from "../../../docs/generated/app-server-ts/v2/ConfigEdit";
 import type { ConfigRequirements } from "../../../docs/generated/app-server-ts/v2/ConfigRequirements";
 import type { ConfigRequirementsReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigRequirementsReadResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
+import type { ConfigValueWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigValueWriteParams";
+import type { ConfigWriteResponse } from "../../../docs/generated/app-server-ts/v2/ConfigWriteResponse";
 import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
 import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
 import type { ExperimentalFeatureEnablementSetParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureEnablementSetParams";
@@ -145,7 +149,9 @@ import type {
   MobileAppView,
   MobileBackgroundTerminalPage,
   MobileCollaborationModeView,
+  MobileConfigEditInput,
   MobileConfigRequirementsView,
+  MobileConfigWriteResultView,
   MobileExperimentalFeatureView,
   MobileFileContent,
   MobileFileEntry,
@@ -302,6 +308,22 @@ export type WindowsSandboxSetupInput = {
   mode: WindowsSandboxSetupMode;
   cwd?: string | null;
 };
+
+function configWriteResultView(response: ConfigWriteResponse): MobileConfigWriteResultView {
+  return {
+    status: String(response.status),
+    version: response.version,
+    filePath: response.filePath
+  };
+}
+
+function configEditParams(edit: MobileConfigEditInput): ConfigEdit {
+  return {
+    keyPath: edit.keyPath,
+    value: edit.value,
+    mergeStrategy: "replace"
+  };
+}
 
 function statusLabel(status: ThreadStatus): string {
   if (status.type === "active") {
@@ -1017,6 +1039,29 @@ export class CodexAppServerClient {
   async getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
     const response = (await this.peer.request("configRequirements/read", undefined)) as ConfigRequirementsReadResponse;
     return configRequirementsView(response.requirements);
+  }
+
+  async writeConfigValue(keyPath: string, value: MobileConfigEditInput["value"]): Promise<MobileConfigWriteResultView> {
+    const params: ConfigValueWriteParams = {
+      keyPath,
+      value,
+      mergeStrategy: "replace",
+      filePath: null,
+      expectedVersion: null
+    };
+    const response = (await this.peer.request("config/value/write", params)) as ConfigWriteResponse;
+    return configWriteResultView(response);
+  }
+
+  async writeConfigBatch(edits: MobileConfigEditInput[]): Promise<MobileConfigWriteResultView> {
+    const params: ConfigBatchWriteParams = {
+      edits: edits.map(configEditParams),
+      filePath: null,
+      expectedVersion: null,
+      reloadUserConfig: true
+    };
+    const response = (await this.peer.request("config/batchWrite", params)) as ConfigWriteResponse;
+    return configWriteResultView(response);
   }
 
   async getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {

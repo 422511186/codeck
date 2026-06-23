@@ -38,6 +38,8 @@ import {
   setExperimentalFeatureEnablement,
   setThreadGoal,
   setThreadMemoryMode,
+  writeConfigBatch,
+  writeConfigValue,
   setSkillsExtraRoots,
   sendAddCreditsNudgeEmail,
   startCommandExecSession,
@@ -808,6 +810,63 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "appshots", enabled: true })
+    });
+  });
+
+  it("写入全局配置时调用 config 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          result: {
+            status: "written",
+            version: "config-version-2",
+            filePath: "C:\\Users\\huang\\.codex\\config.toml"
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          result: {
+            status: "written",
+            version: "config-version-3",
+            filePath: "C:\\Users\\huang\\.codex\\config.toml"
+          }
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(writeConfigValue("model", "gpt-5-mini")).resolves.toEqual({
+      status: "written",
+      version: "config-version-2",
+      filePath: "C:\\Users\\huang\\.codex\\config.toml"
+    });
+    await expect(
+      writeConfigBatch([
+        { keyPath: "model", value: "gpt-5-mini" },
+        { keyPath: "model_reasoning_effort", value: "high" }
+      ])
+    ).resolves.toEqual({
+      status: "written",
+      version: "config-version-3",
+      filePath: "C:\\Users\\huang\\.codex\\config.toml"
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/config/value", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyPath: "model", value: "gpt-5-mini" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/config/batch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        edits: [
+          { keyPath: "model", value: "gpt-5-mini" },
+          { keyPath: "model_reasoning_effort", value: "high" }
+        ]
+      })
     });
   });
 

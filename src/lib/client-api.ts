@@ -8,7 +8,9 @@ import type {
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
   MobileCommandResult,
+  MobileConfigEditInput,
   MobileConfigRequirementsView,
+  MobileConfigWriteResultView,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -518,6 +520,39 @@ export async function getConfigRequirements(): Promise<MobileConfigRequirementsV
 
   const payload = (await response.json()) as { requirements: MobileConfigRequirementsView | null };
   return payload.requirements;
+}
+
+export async function writeConfigValue(
+  keyPath: string,
+  value: MobileConfigEditInput["value"]
+): Promise<MobileConfigWriteResultView> {
+  const response = await fetch("/api/codex/config/value", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keyPath, value })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法写入全局配置");
+  }
+
+  const payload = (await response.json()) as { result: MobileConfigWriteResultView };
+  return payload.result;
+}
+
+export async function writeConfigBatch(edits: MobileConfigEditInput[]): Promise<MobileConfigWriteResultView> {
+  const response = await fetch("/api/codex/config/batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ edits })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法批量写入全局配置");
+  }
+
+  const payload = (await response.json()) as { result: MobileConfigWriteResultView };
+  return payload.result;
 }
 
 export async function getWindowsSandboxReadiness(): Promise<MobileWindowsSandboxReadinessView> {

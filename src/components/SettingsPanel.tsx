@@ -27,6 +27,7 @@ import {
   startWindowsSandboxSetup,
   startRemoteControlPairing,
   uninstallPlugin,
+  writeConfigBatch,
   writeSkillConfig
 } from "../lib/client-api";
 import type {
@@ -194,6 +195,9 @@ function usageNumberLabel(value: number | null | undefined): string {
   return value === null || value === undefined ? "-" : String(value);
 }
 
+const approvalPolicyOptions = ["untrusted", "on-request", "on-failure", "never"];
+const sandboxModeOptions = ["read-only", "workspace-write", "danger-full-access"];
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -229,6 +233,11 @@ export function SettingsPanel({
   const [accountAuthUrl, setAccountAuthUrl] = useState("");
   const [accountUsage, setAccountUsage] = useState<MobileAccountTokenUsageView | null>(null);
   const [accountUsageNotice, setAccountUsageNotice] = useState("");
+  const [globalModelId, setGlobalModelId] = useState("");
+  const [globalReasoningEffort, setGlobalReasoningEffort] = useState("");
+  const [globalApprovalPolicy, setGlobalApprovalPolicy] = useState("");
+  const [globalSandboxMode, setGlobalSandboxMode] = useState("");
+  const [globalConfigNotice, setGlobalConfigNotice] = useState("");
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -264,6 +273,24 @@ export function SettingsPanel({
       cancelled = true;
     };
   }, [refreshVersion]);
+
+  useEffect(() => {
+    if (!settings) {
+      return;
+    }
+
+    setGlobalModelId(settings.model || "");
+    setGlobalReasoningEffort(settings.reasoningEffort || "");
+    setGlobalApprovalPolicy(settings.approvalPolicy || "");
+    setGlobalSandboxMode(settings.sandboxMode || "");
+  }, [settings?.model, settings?.reasoningEffort, settings?.approvalPolicy, settings?.sandboxMode]);
+
+  useEffect(() => {
+    const efforts = models.find((model) => model.id === globalModelId)?.supportedReasoningEfforts || [];
+    if (efforts.length && !efforts.includes(globalReasoningEffort)) {
+      setGlobalReasoningEffort(efforts.includes("medium") ? "medium" : efforts[0]);
+    }
+  }, [models, globalModelId, globalReasoningEffort]);
 
   const rows = settings
     ? [
@@ -581,6 +608,31 @@ export function SettingsPanel({
     }
   }
 
+  async function handleWriteGlobalConfig() {
+    if (!globalModelId || !globalReasoningEffort || !globalApprovalPolicy || !globalSandboxMode) {
+      setError("全局配置不能为空");
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    setGlobalConfigNotice("");
+    try {
+      await writeConfigBatch([
+        { keyPath: "model", value: globalModelId },
+        { keyPath: "model_reasoning_effort", value: globalReasoningEffort },
+        { keyPath: "approval_policy", value: globalApprovalPolicy },
+        { keyPath: "sandbox_mode", value: globalSandboxMode }
+      ]);
+      setGlobalConfigNotice("全局配置已保存");
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法保存全局配置");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
   async function handleReadWindowsSandboxReadiness() {
     setRemoteBusy(true);
     setError("");
@@ -717,6 +769,54 @@ export function SettingsPanel({
           </select>
         </label>
       </div>
+      {settings ? (
+        <div className="settings-controls" aria-label="全局配置">
+          <label>
+            <span>全局模型</span>
+            <select value={globalModelId} onChange={(event) => setGlobalModelId(event.target.value)}>
+              {models.map((model) => (
+                <option value={model.id} key={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>全局思考强度</span>
+            <select value={globalReasoningEffort} onChange={(event) => setGlobalReasoningEffort(event.target.value)}>
+              {(models.find((model) => model.id === globalModelId)?.supportedReasoningEfforts || reasoningOptions).map((effort) => (
+                <option value={effort} key={effort}>
+                  {effort}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>全局审批策略</span>
+            <select value={globalApprovalPolicy} onChange={(event) => setGlobalApprovalPolicy(event.target.value)}>
+              {approvalPolicyOptions.map((policy) => (
+                <option value={policy} key={policy}>
+                  {policy}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>全局沙箱</span>
+            <select value={globalSandboxMode} onChange={(event) => setGlobalSandboxMode(event.target.value)}>
+              {sandboxModeOptions.map((mode) => (
+                <option value={mode} key={mode}>
+                  {mode}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" onClick={handleWriteGlobalConfig} disabled={remoteBusy}>
+            保存全局配置
+          </button>
+          {globalConfigNotice ? <p className="settings-note">{globalConfigNotice}</p> : null}
+        </div>
+      ) : null}
       <dl className="settings-list">
         {rows.map(([label, value]) => (
           <div className="settings-row" key={label}>
