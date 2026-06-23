@@ -852,7 +852,7 @@ describe("createAppServerGateway", () => {
     });
   });
 
-  it("mock 模式支持归档和删除会话后从历史移除", async () => {
+  it("mock 模式支持归档、恢复归档和删除会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
     const newThread = await gateway.startThread({ model: "gpt-5-codex", permissions: "default" });
@@ -860,6 +860,12 @@ describe("createAppServerGateway", () => {
     await gateway.archiveThread(newThread.id);
     await expect(gateway.listThreads()).resolves.toMatchObject({
       threads: expect.not.arrayContaining([expect.objectContaining({ id: newThread.id })])
+    });
+    await expect(gateway.unarchiveThread(newThread.id)).resolves.toMatchObject({
+      id: newThread.id
+    });
+    await expect(gateway.listThreads()).resolves.toMatchObject({
+      threads: expect.arrayContaining([expect.objectContaining({ id: newThread.id })])
     });
 
     await gateway.deleteThread("mock-thread-1");

@@ -134,6 +134,8 @@ import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-ser
 import type { ThreadTurnsItemsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListResponse";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadTurnsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListResponse";
+import type { ThreadUnarchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveParams";
+import type { ThreadUnarchiveResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveResponse";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -921,6 +923,12 @@ export class CodexAppServerClient {
   async archiveThread(threadId: string): Promise<void> {
     const params: ThreadArchiveParams = { threadId };
     await this.peer.request("thread/archive", params);
+  }
+
+  async unarchiveThread(threadId: string): Promise<MobileThreadDetail> {
+    const params: ThreadUnarchiveParams = { threadId };
+    const response = (await this.peer.request("thread/unarchive", params)) as ThreadUnarchiveResponse;
+    return threadDetail(response.thread);
   }
 
   async deleteThread(threadId: string): Promise<void> {

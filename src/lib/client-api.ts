@@ -301,6 +301,17 @@ export async function archiveThread(threadId: string): Promise<void> {
   }
 }
 
+export async function unarchiveThread(threadId: string): Promise<MobileThreadDetail> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/unarchive`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法恢复归档会话");
+  }
+
+  const payload = (await response.json()) as { thread: MobileThreadDetail };
+  return payload.thread;
+}
+
 export async function deleteThread(threadId: string): Promise<void> {
   const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/delete`, { method: "POST" });
   if (!response.ok) {

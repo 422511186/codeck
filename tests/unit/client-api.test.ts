@@ -50,6 +50,7 @@ import {
   startProcessSession,
   startReview,
   uninstallPlugin,
+  unarchiveThread,
   updateThreadSettings,
   terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
@@ -212,18 +213,29 @@ describe("client-api", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/resume", { method: "POST" });
   });
 
-  it("归档和删除会话时调用对应端点", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true })
-    });
+  it("归档、恢复归档和删除会话时调用对应端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread: { id: "thread-1", title: "已恢复" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true })
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(archiveThread("thread-1")).resolves.toBeUndefined();
+    await expect(unarchiveThread("thread-1")).resolves.toEqual({ id: "thread-1", title: "已恢复" });
     await expect(deleteThread("thread-1")).resolves.toBeUndefined();
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/threads/thread-1/archive", { method: "POST" });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/delete", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/threads/thread-1/unarchive", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/threads/thread-1/delete", { method: "POST" });
   });
 
   it("更新会话设置时调用 settings 端点", async () => {

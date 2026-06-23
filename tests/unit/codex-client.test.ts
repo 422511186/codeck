@@ -413,6 +413,33 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "thread/unarchive") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "已恢复的会话",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 100,
+          updatedAt: 800,
+          status: { type: "idle" },
+          path: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          cliVersion: "0.141.0",
+          source: "vscode",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "已恢复",
+          turns: []
+        }
+      };
+    }
+
     if (method === "thread/settings/update") {
       return {};
     }
@@ -1408,15 +1435,20 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("能归档和删除当前会话", async () => {
+  it("能归档、恢复归档和删除当前会话", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
     await expect(client.archiveThread("thread-1")).resolves.toBeUndefined();
+    await expect(client.unarchiveThread("thread-1")).resolves.toMatchObject({
+      id: "thread-1",
+      title: "已恢复"
+    });
     await expect(client.deleteThread("thread-1")).resolves.toBeUndefined();
 
-    expect(peer.calls.slice(-2)).toEqual([
+    expect(peer.calls.slice(-3)).toEqual([
       { method: "thread/archive", params: { threadId: "thread-1" } },
+      { method: "thread/unarchive", params: { threadId: "thread-1" } },
       { method: "thread/delete", params: { threadId: "thread-1" } }
     ]);
   });

@@ -123,6 +123,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private status: AppServerStatus = { state: "idle" };
   private thread: Thread = this.createThread();
   private threads: Thread[] = [this.thread];
+  private readonly archivedThreads = new Map<string, Thread>();
   private turnCounter = 1;
   private itemCounter = 2;
   private requestCounter = 0;
@@ -635,8 +636,33 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
-    if (method === "thread/archive" || method === "thread/delete") {
+    if (method === "thread/archive") {
       const actionParams = params as { threadId?: string };
+      const archivedThread = this.threads.find((item) => item.id === actionParams.threadId);
+      if (archivedThread) {
+        this.archivedThreads.set(archivedThread.id, archivedThread);
+      }
+      this.threads = this.threads.filter((item) => item.id !== actionParams.threadId);
+      this.thread = this.threads[0] || this.createThread();
+      return {};
+    }
+
+    if (method === "thread/unarchive") {
+      const actionParams = params as { threadId?: string };
+      const archivedThread = actionParams.threadId ? this.archivedThreads.get(actionParams.threadId) : null;
+      if (!archivedThread) {
+        throw new Error("找不到已归档会话");
+      }
+
+      this.archivedThreads.delete(archivedThread.id);
+      this.thread = { ...archivedThread, updatedAt: Math.floor(Date.now() / 1000) };
+      this.upsertThread(this.thread);
+      return { thread: this.thread };
+    }
+
+    if (method === "thread/delete") {
+      const actionParams = params as { threadId?: string };
+      this.archivedThreads.delete(actionParams.threadId || "");
       this.threads = this.threads.filter((item) => item.id !== actionParams.threadId);
       this.thread = this.threads[0] || this.createThread();
       return {};
@@ -2177,6 +2203,11 @@ export class AppServerGateway {
   async archiveThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.archiveThread(threadId);
+  }
+
+  async unarchiveThread(threadId: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.client.unarchiveThread(threadId);
   }
 
   async deleteThread(threadId: string): Promise<void> {
