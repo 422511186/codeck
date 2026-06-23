@@ -99,7 +99,7 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByRole("button", { name: "API Key 登录" }).click();
   await expect(page.getByRole("definition").filter({ hasText: "API Key" })).toBeVisible();
   await page.getByRole("button", { name: "退出账号" }).click();
-  await expect(page.getByText("未登录")).toBeVisible();
+  await expect(page.getByText("未登录", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "ChatGPT 登录" }).click();
   await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
   await page.getByRole("button", { name: "读取用量" }).click();
