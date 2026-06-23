@@ -127,3 +127,18 @@ test("手机端可以加载当前会话 turns 分页", async ({ page }) => {
   await expect.poll(() => turnPageRequests.length).toBeGreaterThanOrEqual(1);
   await expect(page.getByText("分页已加载")).toBeVisible();
 });
+
+test("手机端可以加载当前 turn items 分页", async ({ page }) => {
+  const itemPageRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/codex/threads/") && request.url().includes("/items?")) {
+      itemPageRequests.push(request.url());
+    }
+  });
+  await login(page);
+
+  await page.getByRole("button", { name: "加载 items" }).click();
+
+  await expect.poll(() => itemPageRequests.length).toBeGreaterThanOrEqual(1);
+  await expect(page.getByText("Items 分页已加载")).toBeVisible();
+});

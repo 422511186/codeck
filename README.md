@@ -41,7 +41,7 @@
 
 ## 当前状态
 
-项目目前已经完成移动端工作台地基，并持续接入真实 Codex app-server：个人 token 登录、签名 session cookie、移动端工作台、浏览器 WebSocket、app-server JSON-RPC adapter、app-server 连接管理、会话列表/读取/新建/发送 API、会话摘要读取、turns 分页读取、归档会话列表与恢复、模型列表 API、实时事件流、审批/question 请求确认、图片上传后通过 `localImage` 发送、fork/编辑重发/interrupt/steer、会话 shell command、取消订阅、elicitation 暂停/恢复计数、会话 metadata 更新、上下文 items 注入、Guardian 拦截动作批准、账号用量与额度重置 credit 操作，以及 Files、Diff、Terminal、Settings 面板。
+项目目前已经完成移动端工作台地基，并持续接入真实 Codex app-server：个人 token 登录、签名 session cookie、移动端工作台、浏览器 WebSocket、app-server JSON-RPC adapter、app-server 连接管理、会话列表/读取/新建/发送 API、会话摘要读取、turns 和 turn items 分页读取、归档会话列表与恢复、模型列表 API、实时事件流、审批/question 请求确认、图片上传后通过 `localImage` 发送、fork/编辑重发/interrupt/steer、会话 shell command、取消订阅、elicitation 暂停/恢复计数、会话 metadata 更新、上下文 items 注入、Guardian 拦截动作批准、账号用量与额度重置 credit 操作，以及 Files、Diff、Terminal、Settings 面板。
 
 已经完成：
 
@@ -52,7 +52,7 @@
 - 实现个人模式登录，不需要数据库。
 - 加入单元测试和手机视口 Playwright 冒烟测试。
 - 支持 `spawn`、`external`、`mock`、`off` 四种 app-server 运行模式。
-- 移动端登录后可以读取 app-server 会话历史、归档会话、会话摘要、turns 分页、模型列表、实时 timeline。
+- 移动端登录后可以读取 app-server 会话历史、归档会话、会话摘要、turns 和 turn items 分页、模型列表、实时 timeline。
 - 支持发送文本和图片；图片先进入后端暂存目录，再作为 `localImage` 交给 Codex app-server。
 - 支持命令审批、文件审批、权限审批和 question 的移动端确认；MCP 相关能力保留已有基础接口，但不纳入本次完整验收。
 - 支持 fork、rollback 后编辑重发、interrupt 当前 turn、steer 运行中的 turn、归档/恢复会话、取消订阅、发送会话 shell command、暂停/恢复 elicitation 计数。

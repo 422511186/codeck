@@ -12,6 +12,7 @@ type TurnActionsSheetProps = {
   onReadSummary(): Promise<void>;
   onUnsubscribe(): Promise<void>;
   onLoadTurnsPage(): Promise<void>;
+  onLoadTurnItemsPage(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
   onReview(): Promise<void>;
@@ -38,6 +39,7 @@ export function TurnActionsSheet({
   onReadSummary,
   onUnsubscribe,
   onLoadTurnsPage,
+  onLoadTurnItemsPage,
   onDelete,
   onCompact,
   onReview,
@@ -140,6 +142,9 @@ export function TurnActionsSheet({
         </button>
         <button type="button" onClick={onLoadTurnsPage} disabled={busy}>
           加载分页
+        </button>
+        <button type="button" onClick={onLoadTurnItemsPage} disabled={busy || !thread.lastTurnId}>
+          加载 items
         </button>
         <button type="button" onClick={onUnsubscribe} disabled={busy}>
           取消订阅
