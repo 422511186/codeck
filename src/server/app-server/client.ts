@@ -20,6 +20,7 @@ import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/Fs
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
+import type { GetAccountTokenUsageResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountTokenUsageResponse";
 import type { HooksListParams } from "../../../docs/generated/app-server-ts/v2/HooksListParams";
 import type { HooksListResponse } from "../../../docs/generated/app-server-ts/v2/HooksListResponse";
 import type { CollaborationModeListResponse } from "../../../docs/generated/app-server-ts/v2/CollaborationModeListResponse";
@@ -65,6 +66,8 @@ import type { SkillsListResponse } from "../../../docs/generated/app-server-ts/v
 import type { SkillsConfigWriteParams } from "../../../docs/generated/app-server-ts/v2/SkillsConfigWriteParams";
 import type { SkillsConfigWriteResponse } from "../../../docs/generated/app-server-ts/v2/SkillsConfigWriteResponse";
 import type { SkillsExtraRootsSetParams } from "../../../docs/generated/app-server-ts/v2/SkillsExtraRootsSetParams";
+import type { SendAddCreditsNudgeEmailParams } from "../../../docs/generated/app-server-ts/v2/SendAddCreditsNudgeEmailParams";
+import type { SendAddCreditsNudgeEmailResponse } from "../../../docs/generated/app-server-ts/v2/SendAddCreditsNudgeEmailResponse";
 import type { Thread } from "../../../docs/generated/app-server-ts/v2/Thread";
 import type { ThreadArchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadArchiveParams";
 import type { ThreadCompactStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadCompactStartParams";
@@ -107,6 +110,8 @@ import type {
   MobileAccountView,
   MobileAccountLoginCancelView,
   MobileAccountLoginView,
+  MobileAccountTokenUsageView,
+  MobileAddCreditsNudgeResultView,
   MobileCollaborationModeView,
   MobileFileContent,
   MobileFileEntry,
@@ -347,6 +352,27 @@ function settingsValue(value: unknown): string | null {
   }
 
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function nullableNumber(value: bigint | number | null | undefined): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+function accountTokenUsageView(response: GetAccountTokenUsageResponse): MobileAccountTokenUsageView {
+  return {
+    summary: {
+      lifetimeTokens: nullableNumber(response.summary.lifetimeTokens),
+      peakDailyTokens: nullableNumber(response.summary.peakDailyTokens),
+      longestRunningTurnSec: nullableNumber(response.summary.longestRunningTurnSec),
+      currentStreakDays: nullableNumber(response.summary.currentStreakDays),
+      longestStreakDays: nullableNumber(response.summary.longestStreakDays)
+    },
+    dailyUsageBuckets:
+      response.dailyUsageBuckets?.map((bucket) => ({
+        startDate: bucket.startDate,
+        tokens: Number(bucket.tokens)
+      })) ?? null
+  };
 }
 
 function accountView(response: GetAccountResponse): MobileAccountView {
@@ -789,6 +815,21 @@ export class CodexAppServerClient {
 
   async logoutAccount(): Promise<void> {
     await this.peer.request("account/logout", undefined);
+  }
+
+  async getAccountTokenUsage(): Promise<MobileAccountTokenUsageView> {
+    const response = (await this.peer.request("account/tokenUsage/read", undefined)) as GetAccountTokenUsageResponse;
+    return accountTokenUsageView(response);
+  }
+
+  async sendAddCreditsNudgeEmail(
+    creditType: SendAddCreditsNudgeEmailParams["creditType"]
+  ): Promise<MobileAddCreditsNudgeResultView> {
+    const params: SendAddCreditsNudgeEmailParams = { creditType };
+    return (await this.peer.request(
+      "account/addCreditsNudge/sendEmail",
+      params
+    )) as SendAddCreditsNudgeEmailResponse;
   }
 
   async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {

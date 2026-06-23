@@ -65,6 +65,13 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("未登录")).toBeVisible();
   await page.getByRole("button", { name: "ChatGPT 登录" }).click();
   await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
+  await page.getByRole("button", { name: "读取用量" }).click();
+  await expect(page.getByText("123456")).toBeVisible();
+  await expect(page.getByText("2026-06-23")).toBeVisible();
+  await page.getByRole("button", { name: "发送额度提醒" }).click();
+  await expect(page.getByText("提醒结果：sent")).toBeVisible();
+  await page.getByRole("button", { name: "发送用量限制提醒" }).click();
+  await expect(page.getByText("提醒结果：sent")).toBeVisible();
   await expect(page.getByText("Codex 42%")).toBeVisible();
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();

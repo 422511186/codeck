@@ -641,6 +641,23 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (method === "account/tokenUsage/read") {
+      return {
+        summary: {
+          lifetimeTokens: 123456n,
+          peakDailyTokens: 45678n,
+          longestRunningTurnSec: 321n,
+          currentStreakDays: 7n,
+          longestStreakDays: 21n
+        },
+        dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200n }]
+      };
+    }
+
+    if (method === "account/addCreditsNudge/sendEmail") {
+      return { status: "sent" };
+    }
+
     if (method === "mcpServerStatus/list") {
       return {
         data: [
@@ -1584,6 +1601,28 @@ describe("CodexAppServerClient", () => {
         method: "mcp/resource/read",
         params: { server: "filesystem", uri: "file:///README.md", threadId: "thread-1" }
       }
+    ]);
+  });
+
+  it("能读取账号 token 用量并发送加购提醒", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.getAccountTokenUsage()).resolves.toEqual({
+      summary: {
+        lifetimeTokens: 123456,
+        peakDailyTokens: 45678,
+        longestRunningTurnSec: 321,
+        currentStreakDays: 7,
+        longestStreakDays: 21
+      },
+      dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
+    });
+    await expect(client.sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
+
+    expect(peer.calls.slice(-2)).toEqual([
+      { method: "account/tokenUsage/read", params: undefined },
+      { method: "account/addCreditsNudge/sendEmail", params: { creditType: "credits" } }
     ]);
   });
 

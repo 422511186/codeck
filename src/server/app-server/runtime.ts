@@ -7,6 +7,8 @@ import type {
   MobileFileMetadata,
   MobileAccountLoginCancelView,
   MobileAccountLoginView,
+  MobileAccountTokenUsageView,
+  MobileAddCreditsNudgeResultView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -957,6 +959,23 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
+    if (method === "account/tokenUsage/read") {
+      return {
+        summary: {
+          lifetimeTokens: 123456n,
+          peakDailyTokens: 45678n,
+          longestRunningTurnSec: 321n,
+          currentStreakDays: 7n,
+          longestStreakDays: 21n
+        },
+        dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200n }]
+      };
+    }
+
+    if (method === "account/addCreditsNudge/sendEmail") {
+      return { status: "sent" };
+    }
+
     if (method === "mcpServerStatus/list") {
       return {
         data: [
@@ -1789,6 +1808,16 @@ export class AppServerGateway {
   async logoutAccount(): Promise<void> {
     await this.ensureReady();
     await this.client.logoutAccount();
+  }
+
+  async getAccountTokenUsage(): Promise<MobileAccountTokenUsageView> {
+    await this.ensureReady();
+    return this.client.getAccountTokenUsage();
+  }
+
+  async sendAddCreditsNudgeEmail(creditType: "credits" | "usage_limit"): Promise<MobileAddCreditsNudgeResultView> {
+    await this.ensureReady();
+    return this.client.sendAddCreditsNudgeEmail(creditType);
   }
 
   async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {

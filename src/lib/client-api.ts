@@ -2,6 +2,8 @@ import type {
   AppServerStatusView,
   MobileAccountLoginCancelView,
   MobileAccountLoginView,
+  MobileAccountTokenUsageView,
+  MobileAddCreditsNudgeResultView,
   MobileCommandResult,
   MobileFileContent,
   MobileFileEntry,
@@ -97,6 +99,34 @@ export async function logoutAccount(): Promise<void> {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error || "无法退出账号");
   }
+}
+
+export async function getAccountTokenUsage(): Promise<MobileAccountTokenUsageView> {
+  const response = await fetch("/api/codex/account/token-usage", { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取账号 token 用量");
+  }
+
+  const payload = (await response.json()) as { usage: MobileAccountTokenUsageView };
+  return payload.usage;
+}
+
+export async function sendAddCreditsNudgeEmail(
+  creditType: "credits" | "usage_limit"
+): Promise<MobileAddCreditsNudgeResultView> {
+  const response = await fetch("/api/codex/account/add-credits-nudge", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ creditType })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法发送加购提醒");
+  }
+
+  const payload = (await response.json()) as { result: MobileAddCreditsNudgeResultView };
+  return payload.result;
 }
 
 export async function listThreads(searchTerm = ""): Promise<MobileThreadPage> {

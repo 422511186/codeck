@@ -49,6 +49,24 @@ export type MobileAccountLoginCancelView = {
   status: "canceled" | "notFound";
 };
 
+export type MobileAccountTokenUsageView = {
+  summary: {
+    lifetimeTokens: number | null;
+    peakDailyTokens: number | null;
+    longestRunningTurnSec: number | null;
+    currentStreakDays: number | null;
+    longestStreakDays: number | null;
+  };
+  dailyUsageBuckets: Array<{
+    startDate: string;
+    tokens: number;
+  }> | null;
+};
+
+export type MobileAddCreditsNudgeResultView = {
+  status: "sent" | "cooldown_active";
+};
+
 export type MobileRateLimitView = {
   limitId: string | null;
   limitName: string | null;

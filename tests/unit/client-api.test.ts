@@ -10,6 +10,7 @@ import {
   disableRemoteControl,
   enableRemoteControl,
   getMetadata,
+  getAccountTokenUsage,
   installPlugin,
   listThreads,
   loginMcpServer,
@@ -30,6 +31,7 @@ import {
   setThreadGoal,
   setThreadMemoryMode,
   setSkillsExtraRoots,
+  sendAddCreditsNudgeEmail,
   startRemoteControlPairing,
   startProcessSession,
   startReview,
@@ -98,6 +100,49 @@ describe("client-api", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/account/login/login-1/cancel", { method: "POST" });
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/account/logout", { method: "POST" });
+  });
+
+  it("读取账号 token 用量和发送加购提醒时调用 account 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usage: {
+            summary: {
+              lifetimeTokens: 123456,
+              peakDailyTokens: 45678,
+              longestRunningTurnSec: 321,
+              currentStreakDays: 7,
+              longestStreakDays: 21
+            },
+            dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { status: "sent" } })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getAccountTokenUsage()).resolves.toEqual({
+      summary: {
+        lifetimeTokens: 123456,
+        peakDailyTokens: 45678,
+        longestRunningTurnSec: 321,
+        currentStreakDays: 7,
+        longestStreakDays: 21
+      },
+      dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
+    });
+    await expect(sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/account/token-usage", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/account/add-credits-nudge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ creditType: "credits" })
+    });
   });
 
   it("重命名会话时向后端发送新名称", async () => {

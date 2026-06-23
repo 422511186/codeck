@@ -5,6 +5,7 @@ import {
   cancelAccountLogin,
   disableRemoteControl,
   enableRemoteControl,
+  getAccountTokenUsage,
   installPlugin,
   loginWithApiKey,
   loginWithChatGpt,
@@ -18,11 +19,13 @@ import {
   refreshMcpServer,
   revokeRemoteControlClient,
   setSkillsExtraRoots,
+  sendAddCreditsNudgeEmail,
   startRemoteControlPairing,
   uninstallPlugin,
   writeSkillConfig
 } from "../lib/client-api";
 import type {
+  MobileAccountTokenUsageView,
   MobileModelOption,
   MobileMcpResourceReadView,
   MobilePluginDetailView,
@@ -160,6 +163,10 @@ function hookNamesLabel(settings: MobileSettingsView): string {
   return hooks.map((hook) => hook.key).join(" / ");
 }
 
+function usageNumberLabel(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : String(value);
+}
+
 export function SettingsPanel({
   models,
   selectedModelId,
@@ -185,6 +192,8 @@ export function SettingsPanel({
   const [accountNotice, setAccountNotice] = useState("");
   const [accountLoginId, setAccountLoginId] = useState("");
   const [accountAuthUrl, setAccountAuthUrl] = useState("");
+  const [accountUsage, setAccountUsage] = useState<MobileAccountTokenUsageView | null>(null);
+  const [accountUsageNotice, setAccountUsageNotice] = useState("");
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -366,6 +375,34 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法退出账号");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleReadAccountTokenUsage() {
+    setRemoteBusy(true);
+    setError("");
+    setAccountUsageNotice("");
+    try {
+      const usage = await getAccountTokenUsage();
+      setAccountUsage(usage);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法读取账号 token 用量");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleSendAddCreditsNudge(creditType: "credits" | "usage_limit") {
+    setRemoteBusy(true);
+    setError("");
+    setAccountUsageNotice("");
+    try {
+      const result = await sendAddCreditsNudgeEmail(creditType);
+      setAccountUsageNotice(`提醒结果：${result.status}`);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法发送加购提醒");
     } finally {
       setRemoteBusy(false);
     }
@@ -607,6 +644,48 @@ export function SettingsPanel({
             </p>
           ) : null}
           {accountNotice ? <p className="settings-note">{accountNotice}</p> : null}
+          <div className="turn-actions-row">
+            <button type="button" onClick={handleReadAccountTokenUsage} disabled={remoteBusy}>
+              读取用量
+            </button>
+            <button type="button" onClick={() => handleSendAddCreditsNudge("credits")} disabled={remoteBusy}>
+              发送额度提醒
+            </button>
+            <button type="button" onClick={() => handleSendAddCreditsNudge("usage_limit")} disabled={remoteBusy}>
+              发送用量限制提醒
+            </button>
+          </div>
+          {accountUsage ? (
+            <dl className="settings-list">
+              <div className="settings-row">
+                <dt>终身 Tokens</dt>
+                <dd>{usageNumberLabel(accountUsage.summary.lifetimeTokens)}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>单日峰值</dt>
+                <dd>{usageNumberLabel(accountUsage.summary.peakDailyTokens)}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>最长运行</dt>
+                <dd>{usageNumberLabel(accountUsage.summary.longestRunningTurnSec)}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>当前连续</dt>
+                <dd>{usageNumberLabel(accountUsage.summary.currentStreakDays)}</dd>
+              </div>
+              <div className="settings-row">
+                <dt>最长连续</dt>
+                <dd>{usageNumberLabel(accountUsage.summary.longestStreakDays)}</dd>
+              </div>
+              {(accountUsage.dailyUsageBuckets ?? []).slice(0, 5).map((bucket) => (
+                <div className="settings-row" key={bucket.startDate}>
+                  <dt>{bucket.startDate}</dt>
+                  <dd>{bucket.tokens}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {accountUsageNotice ? <p className="settings-note">{accountUsageNotice}</p> : null}
         </div>
       ) : null}
       {settings ? (

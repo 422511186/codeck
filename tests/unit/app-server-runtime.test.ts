@@ -608,6 +608,23 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("mock 模式支持读取账号 token 用量和发送加购提醒", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.getAccountTokenUsage()).resolves.toEqual({
+      summary: {
+        lifetimeTokens: 123456,
+        peakDailyTokens: 45678,
+        longestRunningTurnSec: 321,
+        currentStreakDays: 7,
+        longestStreakDays: 21
+      },
+      dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
+    });
+    await expect(gateway.sendAddCreditsNudgeEmail("usage_limit")).resolves.toEqual({ status: "sent" });
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
