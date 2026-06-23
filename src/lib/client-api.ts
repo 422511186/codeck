@@ -4,6 +4,7 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileAuthStatusView,
   MobileAppPage,
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
@@ -15,6 +16,7 @@ import type {
   MobileFileEntry,
   MobileFileMetadata,
   MobileFileSearchResult,
+  MobileFileSearchSessionView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -119,6 +121,17 @@ export async function getAccountTokenUsage(): Promise<MobileAccountTokenUsageVie
 
   const payload = (await response.json()) as { usage: MobileAccountTokenUsageView };
   return payload.usage;
+}
+
+export async function getAuthStatus(): Promise<MobileAuthStatusView> {
+  const response = await fetch("/api/codex/account/auth-status", { cache: "no-store" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法读取账号鉴权状态");
+  }
+
+  const payload = (await response.json()) as { authStatus: MobileAuthStatusView };
+  return payload.authStatus;
 }
 
 export async function sendAddCreditsNudgeEmail(
@@ -866,6 +879,45 @@ export async function searchFiles(input: { query: string; roots: string[] }): Pr
 
   const payload = (await response.json()) as { results: MobileFileSearchResult[] };
   return payload.results;
+}
+
+export async function startFileSearchSession(roots: string[]): Promise<MobileFileSearchSessionView> {
+  const response = await fetch("/api/codex/fs/search-session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ roots })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法开始会话式文件搜索");
+  }
+
+  const payload = (await response.json()) as { session: MobileFileSearchSessionView };
+  return payload.session;
+}
+
+export async function updateFileSearchSession(sessionId: string, query: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/search-session", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId, query })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法更新会话式文件搜索");
+  }
+}
+
+export async function stopFileSearchSession(sessionId: string): Promise<void> {
+  const response = await fetch("/api/codex/fs/search-session", {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法停止会话式文件搜索");
+  }
 }
 
 export async function execCommand(input: {

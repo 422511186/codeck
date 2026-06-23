@@ -11,12 +11,14 @@ import {
   enableRemoteControl,
   getMetadata,
   getAccountTokenUsage,
+  getAuthStatus,
   installPlugin,
   cleanThreadBackgroundTerminals,
   getConfigRequirements,
   getWindowsSandboxReadiness,
   listApps,
   searchFiles,
+  startFileSearchSession,
   listThreadBackgroundTerminals,
   listThreads,
   loginMcpServer,
@@ -52,11 +54,13 @@ import {
   terminateCommandExecSession,
   terminateThreadBackgroundTerminal,
   unwatchPath,
+  updateFileSearchSession,
   writeSkillConfig,
   writeFile,
   writeCommandExecStdin,
   writeProcessStdin,
   watchPath,
+  stopFileSearchSession,
   resizeProcessSession,
   resizeCommandExecSession,
   killProcessSession
@@ -121,7 +125,7 @@ describe("client-api", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/account/logout", { method: "POST" });
   });
 
-  it("读取账号 token 用量和发送加购提醒时调用 account 端点", async () => {
+  it("读取账号 token 用量、鉴权状态和发送加购提醒时调用 account 端点", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -135,6 +139,16 @@ describe("client-api", () => {
               longestStreakDays: 21
             },
             dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          authStatus: {
+            authMethod: "chatgpt",
+            hasAuthToken: false,
+            requiresOpenaiAuth: false
           }
         })
       })
@@ -154,10 +168,16 @@ describe("client-api", () => {
       },
       dailyUsageBuckets: [{ startDate: "2026-06-23", tokens: 1200 }]
     });
+    await expect(getAuthStatus()).resolves.toEqual({
+      authMethod: "chatgpt",
+      hasAuthToken: false,
+      requiresOpenaiAuth: false
+    });
     await expect(sendAddCreditsNudgeEmail("credits")).resolves.toEqual({ status: "sent" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/account/token-usage", { cache: "no-store" });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/account/add-credits-nudge", {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/account/auth-status", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/account/add-credits-nudge", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ creditType: "credits" })
@@ -382,6 +402,37 @@ describe("client-api", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query: "app", roots: ["C:\\repo"] })
+    });
+  });
+
+  it("管理会话式文件搜索时调用 search-session 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ session: { sessionId: "mobile-file-search-1" } })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startFileSearchSession(["C:\\repo"])).resolves.toEqual({ sessionId: "mobile-file-search-1" });
+    await expect(updateFileSearchSession("mobile-file-search-1", "app")).resolves.toBeUndefined();
+    await expect(stopFileSearchSession("mobile-file-search-1")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/fs/search-session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roots: ["C:\\repo"] })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/fs/search-session", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "mobile-file-search-1", query: "app" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/fs/search-session", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "mobile-file-search-1" })
     });
   });
 

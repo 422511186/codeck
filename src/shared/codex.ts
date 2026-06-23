@@ -63,6 +63,12 @@ export type MobileAccountTokenUsageView = {
   }> | null;
 };
 
+export type MobileAuthStatusView = {
+  authMethod: string | null;
+  hasAuthToken: boolean;
+  requiresOpenaiAuth: boolean | null;
+};
+
 export type MobileAddCreditsNudgeResultView = {
   status: "sent" | "cooldown_active";
 };
@@ -364,6 +370,10 @@ export type MobileFileSearchResult = {
   indices: number[] | null;
 };
 
+export type MobileFileSearchSessionView = {
+  sessionId: string;
+};
+
 export type MobileCommandResult = {
   exitCode: number;
   stdout: string;
@@ -406,6 +416,7 @@ export type MobileSettingsView = {
   sandboxMode: string | null;
   loadedThreadIds: string[];
   experimentalFeatures: MobileExperimentalFeatureView[];
+  authStatus: MobileAuthStatusView;
   remoteControlStatus: string;
   remoteControlServerName: string;
   remoteControlInstallationId: string;

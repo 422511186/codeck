@@ -10,6 +10,7 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileAuthStatusView,
   MobileAppPage,
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
@@ -18,6 +19,7 @@ import type {
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
+  MobileFileSearchSessionView,
   MobileFileSearchResult,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
@@ -205,6 +207,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private readonly mockProcesses = new Set<string>();
   private readonly mockCommandExecs = new Map<string, MockCommandExec>();
   private readonly mockFsWatches = new Map<string, string>();
+  private readonly mockFileSearchSessions = new Set<string>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
 
@@ -616,6 +619,22 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {};
     }
 
+    if (method === "getAuthStatus") {
+      if (this.accountState === "none") {
+        return {
+          authMethod: null,
+          authToken: null,
+          requiresOpenaiAuth: true
+        };
+      }
+
+      return {
+        authMethod: this.accountState === "apiKey" ? "apikey" : "chatgpt",
+        authToken: null,
+        requiresOpenaiAuth: false
+      };
+    }
+
     if (method === "thread/archive" || method === "thread/delete") {
       const actionParams = params as { threadId?: string };
       this.threads = this.threads.filter((item) => item.id !== actionParams.threadId);
@@ -940,6 +959,58 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           indices: query ? [...query].map((_, index) => index) : null
         }));
       return { files };
+    }
+
+    if (method === "fuzzyFileSearch/sessionStart") {
+      const searchParams = params as { sessionId?: string };
+      if (searchParams.sessionId) {
+        this.mockFileSearchSessions.add(searchParams.sessionId);
+      }
+      return {};
+    }
+
+    if (method === "fuzzyFileSearch/sessionUpdate") {
+      const searchParams = params as { sessionId?: string; query?: string };
+      if (searchParams.sessionId && this.mockFileSearchSessions.has(searchParams.sessionId)) {
+        const query = (searchParams.query ?? "").toLowerCase();
+        const files = [...this.mockFs.entries()]
+          .filter(([, node]) => node.type === "file")
+          .filter(([candidatePath]) => candidatePath.startsWith(this.workspaceRoot))
+          .map(([candidatePath]) => {
+            const relativePath = candidatePath.slice(this.workspaceRoot.length).replace(/^\\+/, "");
+            const fileName = relativePath.split("\\").at(-1) ?? relativePath;
+            return { relativePath, fileName };
+          })
+          .filter((candidate) => {
+            const haystack = `${candidate.relativePath}\n${candidate.fileName}`.toLowerCase();
+            return !query || haystack.includes(query);
+          })
+          .map((candidate) => ({
+            root: this.workspaceRoot,
+            path: candidate.relativePath,
+            match_type: "file" as const,
+            file_name: candidate.fileName,
+            score: candidate.fileName.toLowerCase().includes(query) ? 100 : 50,
+            indices: query ? [...query].map((_, index) => index) : null
+          }));
+        this.emitNotification({
+          method: "fuzzyFileSearch/sessionUpdated",
+          params: { sessionId: searchParams.sessionId, query: searchParams.query || "", files }
+        });
+      }
+      return {};
+    }
+
+    if (method === "fuzzyFileSearch/sessionStop") {
+      const searchParams = params as { sessionId?: string };
+      if (searchParams.sessionId) {
+        this.mockFileSearchSessions.delete(searchParams.sessionId);
+        this.emitNotification({
+          method: "fuzzyFileSearch/sessionCompleted",
+          params: { sessionId: searchParams.sessionId }
+        });
+      }
+      return {};
     }
 
     if (method === "command/exec") {
@@ -1938,6 +2009,7 @@ export class AppServerGateway {
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
+  private fileSearchSessionCounter = 0;
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
@@ -2172,6 +2244,11 @@ export class AppServerGateway {
     return this.client.getAccountTokenUsage();
   }
 
+  async getAuthStatus(): Promise<MobileAuthStatusView> {
+    await this.ensureReady();
+    return this.client.getAuthStatus();
+  }
+
   async sendAddCreditsNudgeEmail(creditType: "credits" | "usage_limit"): Promise<MobileAddCreditsNudgeResultView> {
     await this.ensureReady();
     return this.client.sendAddCreditsNudgeEmail(creditType);
@@ -2347,6 +2424,23 @@ export class AppServerGateway {
   async searchFiles(input: SearchFilesInput): Promise<MobileFileSearchResult[]> {
     await this.ensureReady();
     return this.client.searchFiles(input);
+  }
+
+  async startFileSearchSession(roots: string[]): Promise<MobileFileSearchSessionView> {
+    await this.ensureReady();
+    const sessionId = `mobile-file-search-${++this.fileSearchSessionCounter}`;
+    await this.client.startFileSearchSession({ sessionId, roots });
+    return { sessionId };
+  }
+
+  async updateFileSearchSession(sessionId: string, query: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.updateFileSearchSession(sessionId, query);
+  }
+
+  async stopFileSearchSession(sessionId: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.stopFileSearchSession(sessionId);
   }
 
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {

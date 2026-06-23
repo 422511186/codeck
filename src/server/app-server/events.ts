@@ -14,6 +14,16 @@ export type BrowserThreadGoal = {
   updatedAt: number;
 };
 
+export type BrowserFileSearchResult = {
+  root: string;
+  path: string;
+  fullPath: string;
+  fileName: string;
+  matchType: "file" | "directory";
+  score: number;
+  indices: number[] | null;
+};
+
 export type BrowserCodexEvent =
   | {
       kind: "agent_message_delta";
@@ -92,6 +102,16 @@ export type BrowserCodexEvent =
       kind: "fs_changed";
       watchId: string;
       paths: string[];
+    }
+  | {
+      kind: "file_search_session_updated";
+      sessionId: string;
+      query: string;
+      results: BrowserFileSearchResult[];
+    }
+  | {
+      kind: "file_search_session_completed";
+      sessionId: string;
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -151,6 +171,34 @@ function normalizeGoal(value: unknown): BrowserThreadGoal | null {
     timeUsedSeconds: numberOrZero(value.timeUsedSeconds),
     createdAt: numberOrZero(value.createdAt),
     updatedAt: numberOrZero(value.updatedAt)
+  };
+}
+
+function joinSearchPath(root: string, searchPath: string): string {
+  if (/^[A-Za-z]:[\\/]/.test(searchPath) || searchPath.startsWith("\\\\")) {
+    return searchPath;
+  }
+
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${separator}${searchPath.replace(/^[\\/]+/, "")}`;
+}
+
+function normalizeFileSearchResult(value: unknown): BrowserFileSearchResult | null {
+  if (!isRecord(value) || typeof value.root !== "string" || typeof value.path !== "string") {
+    return null;
+  }
+
+  const matchType = value.match_type === "directory" ? "directory" : "file";
+  const fileName = typeof value.file_name === "string" ? value.file_name : value.path.split(/[\\/]/).at(-1) || value.path;
+
+  return {
+    root: value.root,
+    path: value.path,
+    fullPath: joinSearchPath(value.root, value.path),
+    fileName,
+    matchType,
+    score: numberOrZero(value.score),
+    indices: Array.isArray(value.indices) ? value.indices.filter((index): index is number => typeof index === "number") : null
   };
 }
 
@@ -326,6 +374,41 @@ export function normalizeAppServerNotification(
         kind: "fs_changed",
         watchId: params.watchId,
         paths: params.changedPaths.filter((changedPath): changedPath is string => typeof changedPath === "string")
+      }
+    };
+  }
+
+  if (message.method === "fuzzyFileSearch/sessionUpdated") {
+    const params = message.params as { sessionId?: unknown; query?: unknown; files?: unknown } | null | undefined;
+    if (!params || typeof params.sessionId !== "string" || typeof params.query !== "string" || !Array.isArray(params.files)) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "file_search_session_updated",
+        sessionId: params.sessionId,
+        query: params.query,
+        results: params.files.flatMap((file) => {
+          const result = normalizeFileSearchResult(file);
+          return result ? [result] : [];
+        })
+      }
+    };
+  }
+
+  if (message.method === "fuzzyFileSearch/sessionCompleted") {
+    const params = message.params as { sessionId?: unknown } | null | undefined;
+    if (!params || typeof params.sessionId !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "file_search_session_completed",
+        sessionId: params.sessionId
       }
     };
   }

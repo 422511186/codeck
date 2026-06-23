@@ -24,6 +24,18 @@ E2E 默认使用 mock app-server，并在 `playwright.config.ts` 内配置：
 - `CODEX_WEB_WORKSPACE_ROOTS=C:\Users\huang\workspace`
 - `CODEX_WEB_APP_SERVER_MODE=mock`
 
+## 本次验收范围
+
+本次完整验收覆盖移动端远程开发主链路：登录、会话、发送文本/图片、模型与思考强度、审批/question、fork/编辑重发、文件、diff、终端、设置、安全与测试。
+
+以下能力本次只预留或保留已有基础接口，不作为验收必选项：
+
+- 插件、插件市场、插件共享。
+- 实时音频。
+- MCP 的完整工具调用和资源工作流。
+- 环境导入、外部 agent 配置。
+- 反馈上传。
+
 ## 真实 app-server 验收
 
 推荐先在本机局域网内验收，不要直接暴露公网。
@@ -92,7 +104,7 @@ http://<后端机器局域网 IP>:3000
 - 可以切换模型和思考强度，并能正常发送文本。
 - 可以上传图片，发送后 Codex 收到 `localImage`。
 - app-server 实时事件能显示 agent 文本、reasoning、计划、命令输出、文件变更、diff、token 用量。
-- 命令审批、文件审批、权限审批、question、MCP elicitation 能在手机端确认，并回传 response。
+- 命令审批、文件审批、权限审批、question 能在手机端确认，并回传 response。
 - fork 后切换到新会话。
 - 编辑重发会先 rollback，再发送新输入。
 - interrupt 和 steer 对当前 turn 生效。

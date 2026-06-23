@@ -40,7 +40,9 @@ export function applyCodexTimelineEvent(
     event.kind === "settings_invalidated" ||
     event.kind === "thread_goal_updated" ||
     event.kind === "thread_goal_cleared" ||
-    event.kind === "fs_changed"
+    event.kind === "fs_changed" ||
+    event.kind === "file_search_session_updated" ||
+    event.kind === "file_search_session_completed"
   ) {
     return thread;
   }

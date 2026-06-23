@@ -254,6 +254,11 @@ describe("createAppServerGateway", () => {
           defaultEnabled: false
         }
       ],
+      authStatus: {
+        authMethod: "chatgpt",
+        hasAuthToken: false,
+        requiresOpenaiAuth: false
+      },
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "mock-installation",
@@ -791,6 +796,11 @@ describe("createAppServerGateway", () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
 
+    await expect(gateway.getAuthStatus()).resolves.toEqual({
+      authMethod: "chatgpt",
+      hasAuthToken: false,
+      requiresOpenaiAuth: false
+    });
     await expect(gateway.loginWithChatGpt()).resolves.toEqual({
       type: "chatgpt",
       loginId: "mock-login-1",
@@ -802,6 +812,11 @@ describe("createAppServerGateway", () => {
     });
     await expect(gateway.cancelAccountLogin("mock-login-1")).resolves.toEqual({ status: "canceled" });
     await expect(gateway.logoutAccount()).resolves.toBeUndefined();
+    await expect(gateway.getAuthStatus()).resolves.toEqual({
+      authMethod: null,
+      hasAuthToken: false,
+      requiresOpenaiAuth: true
+    });
     await expect(gateway.readSettings()).resolves.toMatchObject({
       account: { type: "none", email: null, planType: null, requiresOpenaiAuth: true }
     });

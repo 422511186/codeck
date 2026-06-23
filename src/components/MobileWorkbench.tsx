@@ -7,7 +7,13 @@ import {
   type BrowserServerRequestEnvelope,
   type PendingServerRequestView
 } from "../server/app-server/pending-requests";
-import type { AppServerStatusView, MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../shared/codex";
+import type {
+  AppServerStatusView,
+  MobileFileSearchResult,
+  MobileModelOption,
+  MobileThreadDetail,
+  MobileThreadSummary
+} from "../shared/codex";
 import {
   archiveThread,
   clearThreadGoal,
@@ -54,6 +60,13 @@ type FsChangedEvent = {
   paths: string[];
 };
 
+type FileSearchEvent = {
+  sessionId: string;
+  query?: string;
+  results?: MobileFileSearchResult[];
+  completed?: boolean;
+};
+
 export function MobileWorkbench() {
   const [connected, setConnected] = useState(false);
   const [appServerStatus, setAppServerStatus] = useState<AppServerStatusView>({ state: "idle" });
@@ -72,6 +85,7 @@ export function MobileWorkbench() {
   const [searchingThreads, setSearchingThreads] = useState(false);
   const [settingsRefreshVersion, setSettingsRefreshVersion] = useState(0);
   const [latestFsChangedEvent, setLatestFsChangedEvent] = useState<FsChangedEvent | null>(null);
+  const [latestFileSearchEvent, setLatestFileSearchEvent] = useState<FileSearchEvent | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
   const threadSearchRequestIdRef = useRef(0);
 
@@ -129,6 +143,19 @@ export function MobileWorkbench() {
             setLatestFsChangedEvent({
               watchId: browserEvent.watchId,
               paths: browserEvent.paths
+            });
+          }
+          if (browserEvent?.kind === "file_search_session_updated") {
+            setLatestFileSearchEvent({
+              sessionId: browserEvent.sessionId,
+              query: browserEvent.query,
+              results: browserEvent.results
+            });
+          }
+          if (browserEvent?.kind === "file_search_session_completed") {
+            setLatestFileSearchEvent({
+              sessionId: browserEvent.sessionId,
+              completed: true
             });
           }
           if (browserEvent?.kind === "thread_goal_updated") {
@@ -759,7 +786,11 @@ export function MobileWorkbench() {
 
         {activePanel === "run" && selectedThread ? <DiffPanel timeline={selectedThread.timeline} /> : null}
         {activePanel === "files" && selectedThread ? (
-          <FilesPanel rootPath={selectedThread.cwd} fsChangedEvent={latestFsChangedEvent} />
+          <FilesPanel
+            rootPath={selectedThread.cwd}
+            fsChangedEvent={latestFsChangedEvent}
+            fileSearchEvent={latestFileSearchEvent}
+          />
         ) : null}
         {activePanel === "terminal" && selectedThread ? (
           <TerminalPanel threadId={selectedThread.id} cwd={selectedThread.cwd} />

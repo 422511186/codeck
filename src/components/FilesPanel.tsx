@@ -9,7 +9,10 @@ import {
   readFile,
   removePath,
   searchFiles,
+  startFileSearchSession,
+  stopFileSearchSession,
   unwatchPath,
+  updateFileSearchSession,
   watchPath,
   writeFile
 } from "../lib/client-api";
@@ -21,9 +24,15 @@ type FilesPanelProps = {
     watchId: string;
     paths: string[];
   } | null;
+  fileSearchEvent?: {
+    sessionId: string;
+    query?: string;
+    results?: MobileFileSearchResult[];
+    completed?: boolean;
+  } | null;
 };
 
-export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps) {
+export function FilesPanel({ rootPath, fsChangedEvent = null, fileSearchEvent = null }: FilesPanelProps) {
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [entries, setEntries] = useState<MobileFileEntry[]>([]);
   const [file, setFile] = useState<MobileFileContent | null>(null);
@@ -35,6 +44,7 @@ export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps)
   const [copyTargetPath, setCopyTargetPath] = useState("");
   const [metadata, setMetadata] = useState<MobileFileMetadata | null>(null);
   const [activeWatch, setActiveWatch] = useState<{ watchId: string; path: string } | null>(null);
+  const [activeSearchSession, setActiveSearchSession] = useState<{ sessionId: string } | null>(null);
   const [lastChangedPaths, setLastChangedPaths] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -103,6 +113,23 @@ export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps)
     setNotice(`监听到变更：${fsChangedEvent.paths[0] || activeWatch.path}`);
     void loadDirectory();
   }, [fsChangedEvent, activeWatch]);
+
+  useEffect(() => {
+    if (!activeSearchSession || fileSearchEvent?.sessionId !== activeSearchSession.sessionId) {
+      return;
+    }
+
+    if (fileSearchEvent.completed) {
+      setActiveSearchSession(null);
+      setNotice("会话式文件搜索已结束");
+      return;
+    }
+
+    if (fileSearchEvent.results) {
+      setSearchResults(fileSearchEvent.results);
+      setNotice(fileSearchEvent.results.length ? `会话搜索找到 ${fileSearchEvent.results.length} 个结果` : "会话搜索没有结果");
+    }
+  }, [fileSearchEvent, activeSearchSession]);
 
   async function handleOpen(entry: MobileFileEntry) {
     setError("");
@@ -251,6 +278,41 @@ export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps)
     }
   }
 
+  async function handleStartSearchSession() {
+    await runFileAction(async () => {
+      if (activeSearchSession) {
+        await stopFileSearchSession(activeSearchSession.sessionId);
+      }
+      const session = await startFileSearchSession([rootPath]);
+      setActiveSearchSession(session);
+      if (searchText.trim()) {
+        await updateFileSearchSession(session.sessionId, searchText.trim());
+      }
+    }, "已开始会话式文件搜索");
+  }
+
+  async function handleUpdateSearchSession() {
+    if (!activeSearchSession) {
+      setError("请先开始会话式文件搜索");
+      return;
+    }
+
+    await runFileAction(async () => {
+      await updateFileSearchSession(activeSearchSession.sessionId, searchText.trim());
+    }, "已更新会话式文件搜索");
+  }
+
+  async function handleStopSearchSession() {
+    if (!activeSearchSession) {
+      return;
+    }
+
+    await runFileAction(async () => {
+      await stopFileSearchSession(activeSearchSession.sessionId);
+      setActiveSearchSession(null);
+    }, "已停止会话式文件搜索");
+  }
+
   async function handleStartWatch() {
     await runFileAction(async () => {
       if (activeWatch) {
@@ -319,6 +381,18 @@ export function FilesPanel({ rootPath, fsChangedEvent = null }: FilesPanelProps)
         <button type="submit" disabled={busy || !searchText.trim()}>
           搜索文件
         </button>
+        <button type="button" onClick={handleStartSearchSession} disabled={busy}>
+          开始会话搜索
+        </button>
+        <button type="button" onClick={handleUpdateSearchSession} disabled={busy || !activeSearchSession}>
+          更新会话搜索
+        </button>
+        <button type="button" onClick={handleStopSearchSession} disabled={busy || !activeSearchSession}>
+          停止会话搜索
+        </button>
+        <span className="file-watch-status">
+          {activeSearchSession ? `会话搜索：${activeSearchSession.sessionId}` : "未开始会话搜索"}
+        </span>
       </form>
       {searchResults.length ? (
         <div className="file-search-results">

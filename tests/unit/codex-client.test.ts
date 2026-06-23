@@ -581,6 +581,14 @@ class FakePeer implements AppServerPeer {
       };
     }
 
+    if (
+      method === "fuzzyFileSearch/sessionStart" ||
+      method === "fuzzyFileSearch/sessionUpdate" ||
+      method === "fuzzyFileSearch/sessionStop"
+    ) {
+      return {};
+    }
+
     if (method === "command/exec") {
       return {
         exitCode: 0,
@@ -719,6 +727,14 @@ class FakePeer implements AppServerPeer {
     if (method === "account/read") {
       return {
         account: { type: "chatgpt", email: "dev@example.com", planType: "pro" },
+        requiresOpenaiAuth: false
+      };
+    }
+
+    if (method === "getAuthStatus") {
+      return {
+        authMethod: "chatgpt",
+        authToken: null,
         requiresOpenaiAuth: false
       };
     }
@@ -1570,6 +1586,23 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("能管理会话式文件搜索", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.startFileSearchSession({ sessionId: "search-1", roots: ["C:\\repo"] })
+    ).resolves.toBeUndefined();
+    await expect(client.updateFileSearchSession("search-1", "app")).resolves.toBeUndefined();
+    await expect(client.stopFileSearchSession("search-1")).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-3)).toEqual([
+      { method: "fuzzyFileSearch/sessionStart", params: { sessionId: "search-1", roots: ["C:\\repo"] } },
+      { method: "fuzzyFileSearch/sessionUpdate", params: { sessionId: "search-1", query: "app" } },
+      { method: "fuzzyFileSearch/sessionStop", params: { sessionId: "search-1" } }
+    ]);
+  });
+
   it("能执行终端命令", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -1731,6 +1764,11 @@ describe("CodexAppServerClient", () => {
           defaultEnabled: false
         }
       ],
+      authStatus: {
+        authMethod: "chatgpt",
+        hasAuthToken: false,
+        requiresOpenaiAuth: false
+      },
       remoteControlStatus: "connected",
       remoteControlServerName: "mock",
       remoteControlInstallationId: "install-1",
@@ -1862,6 +1900,7 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls).toEqual(
       expect.arrayContaining([
         { method: "account/read", params: { refreshToken: false } },
+        { method: "getAuthStatus", params: { includeToken: false, refreshToken: false } },
         { method: "account/rateLimits/read", params: undefined },
         { method: "mcpServerStatus/list", params: { detail: "full", limit: 50 } },
         { method: "modelProvider/capabilities/read", params: {} },
@@ -1980,6 +2019,22 @@ describe("CodexAppServerClient", () => {
       { method: "account/usage/read", params: undefined },
       { method: "account/sendAddCreditsNudgeEmail", params: { creditType: "credits" } }
     ]);
+  });
+
+  it("能读取 Codex 鉴权状态且默认不包含 token", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.getAuthStatus()).resolves.toEqual({
+      authMethod: "chatgpt",
+      hasAuthToken: false,
+      requiresOpenaiAuth: false
+    });
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "getAuthStatus",
+      params: { includeToken: false, refreshToken: false }
+    });
   });
 
   it("能管理远程控制连接、配对和客户端授权", async () => {

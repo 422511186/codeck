@@ -10,6 +10,18 @@
 
 ---
 
+## 本次排除和预留
+
+本计划继续以“完整移动端远程开发系统”为目标，但以下能力本次不实现、不作为完成验收条件：
+
+- 插件、插件市场、插件共享。
+- 实时音频。
+- MCP 的完整工具调用和资源工作流。
+- 环境导入、外部 agent 配置。
+- 反馈上传。
+
+代码中已经存在的基础接口可以保留；后续只需要预留清晰边界，并在文档中标注它们不属于本次验收范围。
+
 ## 完整验收边界
 
 完成状态必须同时满足这些条件：
@@ -19,7 +31,7 @@
 - 会话历史、搜索、读取、resume、turns/items 分页能从 Codex app-server 获取并在移动端切换。
 - 新建会话、发送文本、发送图片、选择模型、选择思考强度、选择权限配置能通过 app-server 执行。
 - 运行中的 turn 能展示 agent 文本增量、reasoning、计划、工具调用、命令输出、文件变更、diff 和 token 用量。
-- 审批、question、MCP elicitation、动态工具调用等 `ServerRequest` 能在移动端弹层确认并回传 response。
+- 审批、question、动态工具调用等 `ServerRequest` 能在移动端弹层确认并回传 response。
 - 支持 fork、rollback/编辑重发、interrupt、steer。
 - Files、Terminal、Settings、Run 面板在手机视口可用。
 - 所有敏感动作写入本地追加审计日志，不引入数据库。
@@ -119,9 +131,9 @@
 - [x] JSON-RPC peer 能区分 server request、notification、response。
 - [x] 命令审批显示为底部 sheet。
 - [x] 文件变更审批、权限审批显示为底部 sheet。
-- [x] `ToolRequestUserInput` 和 MCP elicitation 显示问题、选项。
+- [x] `ToolRequestUserInput` 显示问题、选项。
 - [x] 命令审批的用户选择会回传 JSON-RPC response。
-- [x] question、MCP elicitation、文件审批、权限审批的用户选择会回传 JSON-RPC response。
+- [x] question、文件审批、权限审批的用户选择会回传 JSON-RPC response。
 - [x] `serverRequest/resolved` 后自动关闭对应 sheet。
 - [x] 动态工具调用 `item/tool/call` 能显示、执行并回传 `DynamicToolCallResponse`。
 

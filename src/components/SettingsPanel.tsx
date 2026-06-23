@@ -70,6 +70,11 @@ function accountLabel(settings: MobileSettingsView): string {
   return "Amazon Bedrock";
 }
 
+function authStatusLabel(settings: MobileSettingsView): string {
+  const method = settings.authStatus.authMethod || "未登录";
+  return settings.authStatus.hasAuthToken ? `${method} / 已有 token` : `${method} / 无 token`;
+}
+
 function rateLimitLabel(settings: MobileSettingsView): string {
   if (!settings.rateLimit || settings.rateLimit.usedPercent === null) {
     return "-";
@@ -301,6 +306,7 @@ export function SettingsPanel({
         ["沙箱", settings.sandboxMode],
         ["远程控制", settings.remoteControlStatus],
         ["账号", accountLabel(settings)],
+        ["鉴权方式", authStatusLabel(settings)],
         ["计划", settings.account.planType],
         ["OpenAI 鉴权", settings.account.requiresOpenaiAuth ? "需要" : "不需要"],
         ["额度", rateLimitLabel(settings)],

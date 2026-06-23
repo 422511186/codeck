@@ -5,6 +5,11 @@ import type { InitializeResponse } from "../../../docs/generated/app-server-ts/I
 import type { FuzzyFileSearchParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchParams";
 import type { FuzzyFileSearchResponse } from "../../../docs/generated/app-server-ts/FuzzyFileSearchResponse";
 import type { FuzzyFileSearchResult } from "../../../docs/generated/app-server-ts/FuzzyFileSearchResult";
+import type { FuzzyFileSearchSessionStartParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchSessionStartParams";
+import type { FuzzyFileSearchSessionStopParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchSessionStopParams";
+import type { FuzzyFileSearchSessionUpdateParams } from "../../../docs/generated/app-server-ts/FuzzyFileSearchSessionUpdateParams";
+import type { GetAuthStatusParams } from "../../../docs/generated/app-server-ts/GetAuthStatusParams";
+import type { GetAuthStatusResponse } from "../../../docs/generated/app-server-ts/GetAuthStatusResponse";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
 import type { AppsListParams } from "../../../docs/generated/app-server-ts/v2/AppsListParams";
@@ -145,6 +150,7 @@ import type {
   MobileAccountLoginView,
   MobileAccountTokenUsageView,
   MobileAddCreditsNudgeResultView,
+  MobileAuthStatusView,
   MobileAppPage,
   MobileAppView,
   MobileBackgroundTerminalPage,
@@ -226,6 +232,11 @@ export type SearchFilesInput = {
   query: string;
   roots: string[];
   cancellationToken?: string | null;
+};
+
+export type StartFileSearchSessionInput = {
+  sessionId: string;
+  roots: string[];
 };
 
 export type StartProcessInput = {
@@ -476,6 +487,14 @@ function accountTokenUsageView(response: GetAccountTokenUsageResponse): MobileAc
         startDate: bucket.startDate,
         tokens: Number(bucket.tokens)
       })) ?? null
+  };
+}
+
+function authStatusView(response: GetAuthStatusResponse): MobileAuthStatusView {
+  return {
+    authMethod: response.authMethod,
+    hasAuthToken: Boolean(response.authToken),
+    requiresOpenaiAuth: response.requiresOpenaiAuth
   };
 }
 
@@ -993,6 +1012,12 @@ export class CodexAppServerClient {
     return accountTokenUsageView(response);
   }
 
+  async getAuthStatus(): Promise<MobileAuthStatusView> {
+    const params: GetAuthStatusParams = { includeToken: false, refreshToken: false };
+    const response = (await this.peer.request("getAuthStatus", params)) as GetAuthStatusResponse;
+    return authStatusView(response);
+  }
+
   async sendAddCreditsNudgeEmail(
     creditType: SendAddCreditsNudgeEmailParams["creditType"]
   ): Promise<MobileAddCreditsNudgeResultView> {
@@ -1281,6 +1306,24 @@ export class CodexAppServerClient {
     return response.files.map(fileSearchResult);
   }
 
+  async startFileSearchSession(input: StartFileSearchSessionInput): Promise<void> {
+    const params: FuzzyFileSearchSessionStartParams = {
+      sessionId: input.sessionId,
+      roots: input.roots
+    };
+    await this.peer.request("fuzzyFileSearch/sessionStart", params);
+  }
+
+  async updateFileSearchSession(sessionId: string, query: string): Promise<void> {
+    const params: FuzzyFileSearchSessionUpdateParams = { sessionId, query };
+    await this.peer.request("fuzzyFileSearch/sessionUpdate", params);
+  }
+
+  async stopFileSearchSession(sessionId: string): Promise<void> {
+    const params: FuzzyFileSearchSessionStopParams = { sessionId };
+    await this.peer.request("fuzzyFileSearch/sessionStop", params);
+  }
+
   async execCommand(input: ExecCommandInput): Promise<MobileCommandResult> {
     const params: CommandExecParams = {
       command: input.command,
@@ -1410,6 +1453,7 @@ export class CodexAppServerClient {
       remoteControlResponse,
       permissionProfileResponse,
       accountResponse,
+      authStatusResponse,
       rateLimitsResponse,
       mcpServerStatusResponse,
       providerCapabilitiesResponse,
@@ -1424,6 +1468,7 @@ export class CodexAppServerClient {
       this.peer.request("remoteControl/status/read", {}),
       this.peer.request("permissionProfile/list", {}),
       this.peer.request("account/read", { refreshToken: false }),
+      this.peer.request("getAuthStatus", { includeToken: false, refreshToken: false } satisfies GetAuthStatusParams),
       this.peer.request("account/rateLimits/read", undefined),
       this.peer.request("mcpServerStatus/list", { detail: "full", limit: 50 }),
       this.peer.request("modelProvider/capabilities/read", {}),
@@ -1465,6 +1510,7 @@ export class CodexAppServerClient {
       remoteControlInstallationId: remoteControl.installationId,
       remoteControlEnvironmentId: remoteControl.environmentId,
       account: accountView(accountResponse as GetAccountResponse),
+      authStatus: authStatusView(authStatusResponse as GetAuthStatusResponse),
       rateLimit: rateLimitView(rateLimitsResponse as GetAccountRateLimitsResponse),
       providerCapabilities: providerCapabilitiesView(providerCapabilitiesResponse as ModelProviderCapabilitiesReadResponse),
       remoteControlClients: remoteControlClientViews(remoteControlClientsResponse as RemoteControlClientsListResponse),

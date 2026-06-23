@@ -242,6 +242,56 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把会话式文件搜索结果映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "fuzzyFileSearch/sessionUpdated",
+        params: {
+          sessionId: "search-1",
+          query: "app",
+          files: [
+            {
+              root: "C:\\repo",
+              path: "src\\app.ts",
+              match_type: "file",
+              file_name: "app.ts",
+              score: 99,
+              indices: [0, 1, 2]
+            }
+          ]
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "file_search_session_updated",
+        sessionId: "search-1",
+        query: "app",
+        results: [
+          {
+            root: "C:\\repo",
+            path: "src\\app.ts",
+            fullPath: "C:\\repo\\src\\app.ts",
+            fileName: "app.ts",
+            matchType: "file",
+            score: 99,
+            indices: [0, 1, 2]
+          }
+        ]
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "fuzzyFileSearch/sessionCompleted",
+        params: { sessionId: "search-1" }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "file_search_session_completed", sessionId: "search-1" }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });
