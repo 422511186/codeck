@@ -112,3 +112,18 @@ test("手机端可以取消订阅当前会话", async ({ page }) => {
 
   await expect(page.getByText("取消订阅：unsubscribed")).toBeVisible();
 });
+
+test("手机端可以加载当前会话 turns 分页", async ({ page }) => {
+  const turnPageRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/codex/threads/") && request.url().includes("/turns?")) {
+      turnPageRequests.push(request.url());
+    }
+  });
+  await login(page);
+
+  await page.getByRole("button", { name: "加载分页" }).click();
+
+  await expect.poll(() => turnPageRequests.length).toBeGreaterThanOrEqual(1);
+  await expect(page.getByText("分页已加载")).toBeVisible();
+});

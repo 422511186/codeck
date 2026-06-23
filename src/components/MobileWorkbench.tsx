@@ -26,6 +26,7 @@ import {
   interruptTurn,
   listModels,
   listPendingServerRequests,
+  listThreadTurns,
   listThreads,
   readCodexStatus,
   readThread,
@@ -739,6 +740,42 @@ export function MobileWorkbench() {
     }
   }
 
+  async function handleLoadTurnsPage() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setSending(true);
+    setLoadError("");
+    try {
+      const page = await listThreadTurns({ threadId: selectedThread.id, limit: 10 });
+      setSelectedThread((current) => {
+        if (!current || current.id !== selectedThread.id) {
+          return current;
+        }
+
+        const existingIds = new Set(current.timeline.map((item) => item.id));
+        const nextItems = page.items.filter((item) => !existingIds.has(item.id));
+        return {
+          ...current,
+          timeline: [
+            ...current.timeline,
+            ...nextItems,
+            {
+              id: `turn-page-${Date.now()}`,
+              role: "tool",
+              text: page.nextCursor ? `分页已加载，下一页：${page.nextCursor}` : "分页已加载"
+            }
+          ]
+        };
+      });
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "无法加载 turns 分页");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleDeleteThread() {
     if (!selectedThread) {
       return;
@@ -965,6 +1002,7 @@ export function MobileWorkbench() {
           onUnarchive={handleUnarchiveThread}
           onReadSummary={handleReadThreadSummary}
           onUnsubscribe={handleUnsubscribeThread}
+          onLoadTurnsPage={handleLoadTurnsPage}
           onDelete={handleDeleteThread}
           onCompact={handleCompactThread}
           onReview={handleStartReview}

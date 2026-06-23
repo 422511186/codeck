@@ -11,6 +11,7 @@ type TurnActionsSheetProps = {
   onUnarchive(): Promise<void>;
   onReadSummary(): Promise<void>;
   onUnsubscribe(): Promise<void>;
+  onLoadTurnsPage(): Promise<void>;
   onDelete(): Promise<void>;
   onCompact(): Promise<void>;
   onReview(): Promise<void>;
@@ -36,6 +37,7 @@ export function TurnActionsSheet({
   onUnarchive,
   onReadSummary,
   onUnsubscribe,
+  onLoadTurnsPage,
   onDelete,
   onCompact,
   onReview,
@@ -135,6 +137,9 @@ export function TurnActionsSheet({
       <div className="turn-actions-row">
         <button type="button" onClick={onReadSummary} disabled={busy}>
           读取摘要
+        </button>
+        <button type="button" onClick={onLoadTurnsPage} disabled={busy}>
+          加载分页
         </button>
         <button type="button" onClick={onUnsubscribe} disabled={busy}>
           取消订阅
