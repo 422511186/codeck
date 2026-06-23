@@ -6,6 +6,8 @@ import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/Thr
 import type { CommandExecParams } from "../../../docs/generated/app-server-ts/v2/CommandExecParams";
 import type { CommandExecResponse } from "../../../docs/generated/app-server-ts/v2/CommandExecResponse";
 import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
+import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
+import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
 import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
@@ -20,6 +22,8 @@ import type { GetAccountRateLimitsResponse } from "../../../docs/generated/app-s
 import type { GetAccountResponse } from "../../../docs/generated/app-server-ts/v2/GetAccountResponse";
 import type { CollaborationModeListResponse } from "../../../docs/generated/app-server-ts/v2/CollaborationModeListResponse";
 import type { ListMcpServerStatusResponse } from "../../../docs/generated/app-server-ts/v2/ListMcpServerStatusResponse";
+import type { LoginAccountParams } from "../../../docs/generated/app-server-ts/v2/LoginAccountParams";
+import type { LoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/LoginAccountResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
@@ -99,6 +103,8 @@ import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2
 import type {
   MobileCommandResult,
   MobileAccountView,
+  MobileAccountLoginCancelView,
+  MobileAccountLoginView,
   MobileCollaborationModeView,
   MobileFileContent,
   MobileFileEntry,
@@ -726,6 +732,25 @@ export class CodexAppServerClient {
 
   async resetMemory(): Promise<void> {
     await this.peer.request("memory/reset", undefined);
+  }
+
+  async loginWithChatGpt(): Promise<MobileAccountLoginView> {
+    const params: LoginAccountParams = { type: "chatgpt", codexStreamlinedLogin: true };
+    return (await this.peer.request("account/login/start", params)) as LoginAccountResponse;
+  }
+
+  async loginWithApiKey(apiKey: string): Promise<MobileAccountLoginView> {
+    const params: LoginAccountParams = { type: "apiKey", apiKey };
+    return (await this.peer.request("account/login/start", params)) as LoginAccountResponse;
+  }
+
+  async cancelAccountLogin(loginId: string): Promise<MobileAccountLoginCancelView> {
+    const params: CancelLoginAccountParams = { loginId };
+    return (await this.peer.request("account/login/cancel", params)) as CancelLoginAccountResponse;
+  }
+
+  async logoutAccount(): Promise<void> {
+    await this.peer.request("account/logout", undefined);
   }
 
   async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {

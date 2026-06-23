@@ -1,5 +1,7 @@
 import type {
   AppServerStatusView,
+  MobileAccountLoginCancelView,
+  MobileAccountLoginView,
   MobileCommandResult,
   MobileFileContent,
   MobileFileEntry,
@@ -50,6 +52,51 @@ export async function readCodexStatus(): Promise<AppServerStatusView> {
 
   const payload = (await response.json()) as { appServer: AppServerStatusView };
   return payload.appServer;
+}
+
+export async function loginWithChatGpt(): Promise<MobileAccountLoginView> {
+  const response = await fetch("/api/codex/account/login/chatgpt", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法启动 ChatGPT 登录");
+  }
+
+  const payload = (await response.json()) as { login: MobileAccountLoginView };
+  return payload.login;
+}
+
+export async function loginWithApiKey(apiKey: string): Promise<MobileAccountLoginView> {
+  const response = await fetch("/api/codex/account/login/api-key", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ apiKey })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法使用 API Key 登录");
+  }
+
+  const payload = (await response.json()) as { login: MobileAccountLoginView };
+  return payload.login;
+}
+
+export async function cancelAccountLogin(loginId: string): Promise<MobileAccountLoginCancelView> {
+  const response = await fetch(`/api/codex/account/login/${encodeURIComponent(loginId)}/cancel`, { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法取消账号登录");
+  }
+
+  const payload = (await response.json()) as { result: MobileAccountLoginCancelView };
+  return payload.result;
+}
+
+export async function logoutAccount(): Promise<void> {
+  const response = await fetch("/api/codex/account/logout", { method: "POST" });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法退出账号");
+  }
 }
 
 export async function listThreads(searchTerm = ""): Promise<MobileThreadPage> {

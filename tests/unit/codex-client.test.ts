@@ -417,6 +417,22 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
+    if (method === "account/login/start") {
+      const params = this.calls.at(-1)?.params as { type?: string };
+      if (params.type === "apiKey") {
+        return { type: "apiKey" };
+      }
+      return { type: "chatgpt", loginId: "login-1", authUrl: "https://auth.openai.com/codex" };
+    }
+
+    if (method === "account/login/cancel") {
+      return { status: "canceled" };
+    }
+
+    if (method === "account/logout") {
+      return {};
+    }
+
     if (method === "turn/start") {
       return {
         turn: {
@@ -1037,6 +1053,27 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.slice(-2)).toEqual([
       { method: "thread/memoryMode/set", params: { threadId: "thread-1", mode: "enabled" } },
       { method: "memory/reset", params: undefined }
+    ]);
+  });
+
+  it("能管理 Codex 账号登录状态", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.loginWithChatGpt()).resolves.toEqual({
+      type: "chatgpt",
+      loginId: "login-1",
+      authUrl: "https://auth.openai.com/codex"
+    });
+    await expect(client.loginWithApiKey("sk-test")).resolves.toEqual({ type: "apiKey" });
+    await expect(client.cancelAccountLogin("login-1")).resolves.toEqual({ status: "canceled" });
+    await expect(client.logoutAccount()).resolves.toBeUndefined();
+
+    expect(peer.calls.slice(-4)).toEqual([
+      { method: "account/login/start", params: { type: "chatgpt", codexStreamlinedLogin: true } },
+      { method: "account/login/start", params: { type: "apiKey", apiKey: "sk-test" } },
+      { method: "account/login/cancel", params: { loginId: "login-1" } },
+      { method: "account/logout", params: undefined }
     ]);
   });
 

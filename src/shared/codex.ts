@@ -39,6 +39,16 @@ export type MobileAccountView = {
   requiresOpenaiAuth: boolean;
 };
 
+export type MobileAccountLoginView =
+  | { type: "apiKey" }
+  | { type: "chatgpt"; loginId: string; authUrl: string }
+  | { type: "chatgptDeviceCode"; loginId: string; verificationUrl: string; userCode: string }
+  | { type: "chatgptAuthTokens" };
+
+export type MobileAccountLoginCancelView = {
+  status: "canceled" | "notFound";
+};
+
 export type MobileRateLimitView = {
   limitId: string | null;
   limitName: string | null;

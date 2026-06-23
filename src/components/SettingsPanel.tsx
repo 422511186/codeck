@@ -2,10 +2,14 @@
 
 import { useEffect, useState } from "react";
 import {
+  cancelAccountLogin,
   disableRemoteControl,
   enableRemoteControl,
   installPlugin,
+  loginWithApiKey,
+  loginWithChatGpt,
   loginMcpServer,
+  logoutAccount,
   readMcpResource,
   readRemoteControlPairingStatus,
   readSettings,
@@ -158,6 +162,10 @@ export function SettingsPanel({
   const [mcpNotice, setMcpNotice] = useState("");
   const [mcpAuthorizationUrl, setMcpAuthorizationUrl] = useState("");
   const [mcpResource, setMcpResource] = useState<MobileMcpResourceReadView | null>(null);
+  const [apiKeyText, setApiKeyText] = useState("");
+  const [accountNotice, setAccountNotice] = useState("");
+  const [accountLoginId, setAccountLoginId] = useState("");
+  const [accountAuthUrl, setAccountAuthUrl] = useState("");
   const [error, setError] = useState("");
   const [remoteBusy, setRemoteBusy] = useState(false);
   const selectedModel = models.find((model) => model.id === selectedModelId) || models[0] || null;
@@ -261,6 +269,82 @@ export function SettingsPanel({
       await reloadSettings();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "无法读取配对状态");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleLoginWithChatGpt() {
+    setRemoteBusy(true);
+    setError("");
+    setAccountNotice("");
+    try {
+      const login = await loginWithChatGpt();
+      if (login.type === "chatgpt") {
+        setAccountLoginId(login.loginId);
+        setAccountAuthUrl(login.authUrl);
+        setAccountNotice("ChatGPT 登录已启动");
+      }
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法启动 ChatGPT 登录");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleLoginWithApiKey() {
+    if (!apiKeyText.trim()) {
+      setError("请输入 API Key");
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    setAccountNotice("");
+    try {
+      await loginWithApiKey(apiKeyText.trim());
+      setApiKeyText("");
+      setAccountNotice("API Key 已登录");
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法使用 API Key 登录");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleCancelAccountLogin() {
+    if (!accountLoginId) {
+      return;
+    }
+
+    setRemoteBusy(true);
+    setError("");
+    setAccountNotice("");
+    try {
+      const result = await cancelAccountLogin(accountLoginId);
+      setAccountNotice(`登录已取消：${result.status}`);
+      setAccountLoginId("");
+      setAccountAuthUrl("");
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法取消账号登录");
+    } finally {
+      setRemoteBusy(false);
+    }
+  }
+
+  async function handleLogoutAccount() {
+    setRemoteBusy(true);
+    setError("");
+    setAccountNotice("");
+    try {
+      await logoutAccount();
+      setAccountNotice("账号已退出");
+      await reloadSettings();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "无法退出账号");
     } finally {
       setRemoteBusy(false);
     }
@@ -471,6 +555,39 @@ export function SettingsPanel({
           </div>
         ))}
       </dl>
+      {settings ? (
+        <div className="account-control-panel">
+          <div className="turn-actions-row">
+            <button type="button" onClick={handleLoginWithChatGpt} disabled={remoteBusy}>
+              ChatGPT 登录
+            </button>
+            <button type="button" onClick={handleCancelAccountLogin} disabled={remoteBusy || !accountLoginId}>
+              取消登录
+            </button>
+            <button type="button" onClick={handleLogoutAccount} disabled={remoteBusy}>
+              退出账号
+            </button>
+          </div>
+          <div className="account-api-key-row">
+            <input
+              aria-label="OpenAI API Key"
+              placeholder="OpenAI API Key"
+              value={apiKeyText}
+              onChange={(event) => setApiKeyText(event.target.value)}
+              disabled={remoteBusy}
+            />
+            <button type="button" onClick={handleLoginWithApiKey} disabled={remoteBusy || !apiKeyText.trim()}>
+              API Key 登录
+            </button>
+          </div>
+          {accountAuthUrl ? (
+            <p className="settings-note">
+              登录 URL：<span>{accountAuthUrl}</span>
+            </p>
+          ) : null}
+          {accountNotice ? <p className="settings-note">{accountNotice}</p> : null}
+        </div>
+      ) : null}
       {settings ? (
         <div className="remote-control-panel">
           <div className="turn-actions-row">

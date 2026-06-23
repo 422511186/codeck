@@ -570,6 +570,26 @@ describe("createAppServerGateway", () => {
     await expect(gateway.resetMemory()).resolves.toBeUndefined();
   });
 
+  it("mock 模式支持管理 Codex 账号登录状态", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.loginWithChatGpt()).resolves.toEqual({
+      type: "chatgpt",
+      loginId: "mock-login-1",
+      authUrl: "https://auth.openai.com/mock-codex"
+    });
+    await expect(gateway.loginWithApiKey("sk-test")).resolves.toEqual({ type: "apiKey" });
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      account: { type: "apiKey", requiresOpenaiAuth: false }
+    });
+    await expect(gateway.cancelAccountLogin("mock-login-1")).resolves.toEqual({ status: "canceled" });
+    await expect(gateway.logoutAccount()).resolves.toBeUndefined();
+    await expect(gateway.readSettings()).resolves.toMatchObject({
+      account: { type: "none", email: null, planType: null, requiresOpenaiAuth: true }
+    });
+  });
+
   it("mock 模式支持重命名当前会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

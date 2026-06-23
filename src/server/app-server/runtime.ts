@@ -5,6 +5,8 @@ import type {
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
+  MobileAccountLoginCancelView,
+  MobileAccountLoginView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileModelOption,
@@ -111,6 +113,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   ];
   private remotePairingClaimed = false;
   private goals = new Map<string, MobileThreadGoalView>();
+  private accountState: "chatgpt" | "apiKey" | "none" = "chatgpt";
   private readonly workspaceRoot = "C:\\Users\\huang\\workspace";
   private readonly mockFs = new Map<string, MockFsNode>([
     [
@@ -489,6 +492,26 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     }
 
     if (method === "memory/reset") {
+      return {};
+    }
+
+    if (method === "account/login/start") {
+      const loginParams = params as { type?: string };
+      if (loginParams.type === "apiKey") {
+        this.accountState = "apiKey";
+        return { type: "apiKey" };
+      }
+
+      this.accountState = "chatgpt";
+      return { type: "chatgpt", loginId: "mock-login-1", authUrl: "https://auth.openai.com/mock-codex" };
+    }
+
+    if (method === "account/login/cancel") {
+      return { status: "canceled" };
+    }
+
+    if (method === "account/logout") {
+      this.accountState = "none";
       return {};
     }
 
@@ -898,6 +921,19 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     }
 
     if (method === "account/read") {
+      if (this.accountState === "none") {
+        return {
+          account: null,
+          requiresOpenaiAuth: true
+        };
+      }
+      if (this.accountState === "apiKey") {
+        return {
+          account: { type: "apiKey", email: null, planType: null },
+          requiresOpenaiAuth: false
+        };
+      }
+
       return {
         account: { type: "chatgpt", email: "dev@example.com", planType: "pro" },
         requiresOpenaiAuth: false
@@ -1702,6 +1738,26 @@ export class AppServerGateway {
   async resetMemory(): Promise<void> {
     await this.ensureReady();
     await this.client.resetMemory();
+  }
+
+  async loginWithChatGpt(): Promise<MobileAccountLoginView> {
+    await this.ensureReady();
+    return this.client.loginWithChatGpt();
+  }
+
+  async loginWithApiKey(apiKey: string): Promise<MobileAccountLoginView> {
+    await this.ensureReady();
+    return this.client.loginWithApiKey(apiKey);
+  }
+
+  async cancelAccountLogin(loginId: string): Promise<MobileAccountLoginCancelView> {
+    await this.ensureReady();
+    return this.client.cancelAccountLogin(loginId);
+  }
+
+  async logoutAccount(): Promise<void> {
+    await this.ensureReady();
+    await this.client.logoutAccount();
   }
 
   async readPlugin(input: PluginLookupInput): Promise<MobilePluginDetailView> {

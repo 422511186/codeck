@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveThread,
+  cancelAccountLogin,
   clearThreadGoal,
   compactThread,
   copyPath,
@@ -12,6 +13,9 @@ import {
   installPlugin,
   listThreads,
   loginMcpServer,
+  loginWithApiKey,
+  loginWithChatGpt,
+  logoutAccount,
   renameThread,
   readPlugin,
   readPluginSkill,
@@ -52,6 +56,48 @@ describe("client-api", () => {
     await expect(listThreads("示例")).resolves.toEqual({ threads: [], nextCursor: null });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads?search=%E7%A4%BA%E4%BE%8B", { cache: "no-store" });
+  });
+
+  it("管理 Codex 账号登录状态时调用 account 端点", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          login: {
+            type: "chatgpt",
+            loginId: "login-1",
+            authUrl: "https://auth.openai.com/codex"
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ login: { type: "apiKey" } })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: { status: "canceled" } })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(loginWithChatGpt()).resolves.toEqual({
+      type: "chatgpt",
+      loginId: "login-1",
+      authUrl: "https://auth.openai.com/codex"
+    });
+    await expect(loginWithApiKey("sk-test")).resolves.toEqual({ type: "apiKey" });
+    await expect(cancelAccountLogin("login-1")).resolves.toEqual({ status: "canceled" });
+    await expect(logoutAccount()).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/codex/account/login/chatgpt", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/codex/account/login/api-key", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-test" })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/account/login/login-1/cancel", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/account/logout", { method: "POST" });
   });
 
   it("重命名会话时向后端发送新名称", async () => {

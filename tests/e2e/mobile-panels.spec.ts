@@ -54,6 +54,17 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "pro" })).toBeVisible();
   await expect(page.getByText("不需要")).toBeVisible();
+  await page.getByRole("button", { name: "ChatGPT 登录" }).click();
+  await expect(page.getByText("https://auth.openai.com/mock-codex")).toBeVisible();
+  await page.getByRole("button", { name: "取消登录" }).click();
+  await expect(page.getByText("登录已取消：canceled")).toBeVisible();
+  await page.getByLabel("OpenAI API Key").fill("sk-e2e-account");
+  await page.getByRole("button", { name: "API Key 登录" }).click();
+  await expect(page.getByRole("definition").filter({ hasText: "API Key" })).toBeVisible();
+  await page.getByRole("button", { name: "退出账号" }).click();
+  await expect(page.getByText("未登录")).toBeVisible();
+  await page.getByRole("button", { name: "ChatGPT 登录" }).click();
+  await expect(page.getByText("ChatGPT dev@example.com")).toBeVisible();
   await expect(page.getByText("Codex 42%")).toBeVisible();
   await expect(page.getByText("命名空间工具 / 图像生成")).toBeVisible();
   await expect(page.getByRole("definition").filter({ hasText: "手机浏览器" })).toBeVisible();
