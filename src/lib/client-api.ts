@@ -910,6 +910,18 @@ export async function writeProcessStdin(processHandle: string, text: string): Pr
   }
 }
 
+export async function resizeProcessSession(processHandle: string, cols: number, rows: number): Promise<void> {
+  const response = await fetch(`/api/codex/process/${encodeURIComponent(processHandle)}/resize`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cols, rows })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法调整终端尺寸");
+  }
+}
+
 export async function readProcessSession(processHandle: string): Promise<MobileTerminalSession> {
   const response = await fetch(`/api/codex/process/${encodeURIComponent(processHandle)}`, { cache: "no-store" });
   if (!response.ok) {

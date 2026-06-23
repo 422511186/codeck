@@ -91,6 +91,7 @@ import type { FsReadFileParams } from "../../../docs/generated/app-server-ts/v2/
 import type { FsRemoveParams } from "../../../docs/generated/app-server-ts/v2/FsRemoveParams";
 import type { FsWriteFileParams } from "../../../docs/generated/app-server-ts/v2/FsWriteFileParams";
 import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2/ProcessKillParams";
+import type { ProcessResizePtyParams } from "../../../docs/generated/app-server-ts/v2/ProcessResizePtyParams";
 import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v2/ProcessSpawnParams";
 import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
 import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
@@ -977,6 +978,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         const text = Buffer.from(stdinParams.deltaBase64, "base64").toString("utf8").trimEnd();
         this.emitProcessOutput(stdinParams.processHandle, `stdin: ${text}\n`);
       }
+      return {};
+    }
+
+    if (method === "process/resizePty") {
+      const resizeParams = params as ProcessResizePtyParams;
+      this.emitProcessOutput(resizeParams.processHandle, `PTY ${resizeParams.size.cols}x${resizeParams.size.rows}\n`);
       return {};
     }
 
@@ -2325,6 +2332,11 @@ export class AppServerGateway {
   async writeProcessStdin(processHandle: string, text: string): Promise<void> {
     await this.ensureReady();
     await this.client.writeProcessStdin(processHandle, text);
+  }
+
+  async resizeProcessSession(processHandle: string, cols: number, rows: number): Promise<void> {
+    await this.ensureReady();
+    await this.client.resizeProcessPty(processHandle, cols, rows);
   }
 
   async killProcessSession(processHandle: string): Promise<void> {

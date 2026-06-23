@@ -408,6 +408,11 @@ describe("createAppServerGateway", () => {
       output: expect.stringContaining("stdin: 继续")
     });
 
+    await gateway.resizeProcessSession(session.processHandle, 100, 30);
+    await expect(gateway.readProcessSession(session.processHandle)).resolves.toMatchObject({
+      output: expect.stringContaining("PTY 100x30")
+    });
+
     await gateway.killProcessSession(session.processHandle);
     await expect(gateway.readProcessSession(session.processHandle)).resolves.toMatchObject({
       exitCode: 143,

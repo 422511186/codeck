@@ -48,6 +48,8 @@ test("手机端可以切换文件、终端、设置和 Diff 面板", async ({ pa
   await page.getByPlaceholder("输入 stdin").fill("继续");
   await page.getByRole("button", { name: "发送输入" }).click();
   await expect(page.getByText("stdin: 继续")).toBeVisible();
+  await page.getByRole("button", { name: "调整会话尺寸" }).click();
+  await expect(page.getByText("PTY 100x30")).toBeVisible();
   await page.getByRole("button", { name: "终止会话" }).click();
   await expect(page.getByText("已退出 143")).toBeVisible();
   await page.getByRole("button", { name: "启动 Exec 会话" }).click();

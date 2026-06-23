@@ -53,6 +53,7 @@ import {
   writeFile,
   writeCommandExecStdin,
   writeProcessStdin,
+  resizeProcessSession,
   resizeCommandExecSession,
   killProcessSession
 } from "../../src/lib/client-api";
@@ -396,6 +397,7 @@ describe("client-api", () => {
         })
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -417,6 +419,7 @@ describe("client-api", () => {
       running: true
     });
     await expect(writeProcessStdin("mobile-process-1", "y\n")).resolves.toBeUndefined();
+    await expect(resizeProcessSession("mobile-process-1", 100, 30)).resolves.toBeUndefined();
     await expect(readProcessSession("mobile-process-1")).resolves.toMatchObject({
       output: "测试输出",
       running: true
@@ -433,8 +436,13 @@ describe("client-api", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: "y\n" })
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/process/mobile-process-1", { cache: "no-store" });
-    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/process/mobile-process-1/kill", { method: "POST" });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/codex/process/mobile-process-1/resize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cols: 100, rows: 30 })
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/codex/process/mobile-process-1", { cache: "no-store" });
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/codex/process/mobile-process-1/kill", { method: "POST" });
   });
 
   it("管理 command exec 会话时调用 command-exec 端点", async () => {

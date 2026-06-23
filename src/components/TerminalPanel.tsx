@@ -9,6 +9,7 @@ import {
   readCommandExecSession,
   readProcessSession,
   resizeCommandExecSession,
+  resizeProcessSession,
   startCommandExecSession,
   startProcessSession,
   terminateCommandExecSession,
@@ -173,6 +174,20 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
     }
   }
 
+  async function handleResizeProcessSession() {
+    if (!session) {
+      return;
+    }
+
+    setError("");
+    try {
+      await resizeProcessSession(session.processHandle, 100, 30);
+      setSession(await readProcessSession(session.processHandle));
+    } catch (resizeError) {
+      setError(resizeError instanceof Error ? resizeError.message : "无法调整终端尺寸");
+    }
+  }
+
   async function handleWriteCommandExecStdin() {
     if (!execSession || !execStdinText) {
       return;
@@ -329,6 +344,14 @@ export function TerminalPanel({ threadId, cwd }: TerminalPanelProps) {
           </form>
           <button className="terminal-session-button" type="button" onClick={handleKillSession} disabled={!session.running}>
             终止会话
+          </button>
+          <button
+            className="terminal-session-button"
+            type="button"
+            onClick={handleResizeProcessSession}
+            disabled={!session.running}
+          >
+            调整会话尺寸
           </button>
         </article>
       ) : null}

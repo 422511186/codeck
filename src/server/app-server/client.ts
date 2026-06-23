@@ -60,6 +60,7 @@ import type { PluginSkillReadParams } from "../../../docs/generated/app-server-t
 import type { PluginSkillReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadResponse";
 import type { PluginUninstallParams } from "../../../docs/generated/app-server-ts/v2/PluginUninstallParams";
 import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2/ProcessKillParams";
+import type { ProcessResizePtyParams } from "../../../docs/generated/app-server-ts/v2/ProcessResizePtyParams";
 import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v2/ProcessSpawnParams";
 import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
 import type { RemoteControlClientsListResponse } from "../../../docs/generated/app-server-ts/v2/RemoteControlClientsListResponse";
@@ -1300,6 +1301,14 @@ export class CodexAppServerClient {
       closeStdin: false
     };
     await this.peer.request("process/writeStdin", params);
+  }
+
+  async resizeProcessPty(processHandle: string, cols: number, rows: number): Promise<void> {
+    const params: ProcessResizePtyParams = {
+      processHandle,
+      size: { cols, rows }
+    };
+    await this.peer.request("process/resizePty", params);
   }
 
   async killProcess(processHandle: string): Promise<void> {

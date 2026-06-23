@@ -588,7 +588,12 @@ class FakePeer implements AppServerPeer {
       return {};
     }
 
-    if (method === "process/spawn" || method === "process/writeStdin" || method === "process/kill") {
+    if (
+      method === "process/spawn" ||
+      method === "process/writeStdin" ||
+      method === "process/resizePty" ||
+      method === "process/kill"
+    ) {
       return {};
     }
 
@@ -1606,9 +1611,10 @@ describe("CodexAppServerClient", () => {
       })
     ).resolves.toBeUndefined();
     await expect(client.writeProcessStdin("mobile-process-1", "继续\n")).resolves.toBeUndefined();
+    await expect(client.resizeProcessPty("mobile-process-1", 100, 30)).resolves.toBeUndefined();
     await expect(client.killProcess("mobile-process-1")).resolves.toBeUndefined();
 
-    expect(peer.calls.slice(-3)).toEqual([
+    expect(peer.calls.slice(-4)).toEqual([
       {
         method: "process/spawn",
         params: {
@@ -1630,6 +1636,10 @@ describe("CodexAppServerClient", () => {
           deltaBase64: Buffer.from("继续\n", "utf8").toString("base64"),
           closeStdin: false
         }
+      },
+      {
+        method: "process/resizePty",
+        params: { processHandle: "mobile-process-1", size: { cols: 100, rows: 30 } }
       },
       { method: "process/kill", params: { processHandle: "mobile-process-1" } }
     ]);
