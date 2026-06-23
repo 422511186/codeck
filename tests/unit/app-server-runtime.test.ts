@@ -880,6 +880,13 @@ describe("createAppServerGateway", () => {
     await expect(gateway.unsubscribeThread("mock-thread-1")).resolves.toEqual({ status: "unsubscribed" });
   });
 
+  it("mock 模式支持会话 shell command", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.runThreadShellCommand("mock-thread-1", "npm test")).resolves.toBeUndefined();
+  });
+
   it("mock 模式支持归档、恢复归档和删除会话", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

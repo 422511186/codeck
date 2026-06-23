@@ -131,6 +131,7 @@ import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v
 import type { ThreadSearchResponse } from "../../../docs/generated/app-server-ts/v2/ThreadSearchResponse";
 import type { ThreadSetNameParams } from "../../../docs/generated/app-server-ts/v2/ThreadSetNameParams";
 import type { ThreadSettingsUpdateParams } from "../../../docs/generated/app-server-ts/v2/ThreadSettingsUpdateParams";
+import type { ThreadShellCommandParams } from "../../../docs/generated/app-server-ts/v2/ThreadShellCommandParams";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
@@ -985,6 +986,11 @@ export class CodexAppServerClient {
     const params: ThreadUnsubscribeParams = { threadId };
     const response = (await this.peer.request("thread/unsubscribe", params)) as ThreadUnsubscribeResponse;
     return { status: response.status };
+  }
+
+  async runThreadShellCommand(threadId: string, command: string): Promise<void> {
+    const params: ThreadShellCommandParams = { threadId, command };
+    await this.peer.request("thread/shellCommand", params);
   }
 
   async deleteThread(threadId: string): Promise<void> {

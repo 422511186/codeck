@@ -31,6 +31,7 @@ import {
   readPlugin,
   readPluginSkill,
   readMcpResource,
+  runThreadShellCommand,
   readCommandExecSession,
   readProcessSession,
   readRemoteControlPairingStatus,
@@ -296,6 +297,22 @@ describe("client-api", () => {
     await expect(unsubscribeThread("thread-1")).resolves.toEqual({ status: "unsubscribed" });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/unsubscribe", { method: "POST" });
+  });
+
+  it("执行会话 shell command 时调用 shell-command 端点", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(runThreadShellCommand("thread-1", "npm test")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/codex/threads/thread-1/shell-command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: "npm test" })
+    });
   });
 
   it("更新会话设置时调用 settings 端点", async () => {

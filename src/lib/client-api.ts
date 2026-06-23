@@ -350,6 +350,18 @@ export async function unsubscribeThread(threadId: string): Promise<MobileThreadU
   return payload.result;
 }
 
+export async function runThreadShellCommand(threadId: string, command: string): Promise<void> {
+  const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/shell-command`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ command })
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error || "无法执行会话 shell command");
+  }
+}
+
 export async function deleteThread(threadId: string): Promise<void> {
   const response = await fetch(`/api/codex/threads/${encodeURIComponent(threadId)}/delete`, { method: "POST" });
   if (!response.ok) {

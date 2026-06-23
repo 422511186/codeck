@@ -468,6 +468,10 @@ class FakePeer implements AppServerPeer {
       return { status: "unsubscribed" };
     }
 
+    if (method === "thread/shellCommand") {
+      return {};
+    }
+
     if (method === "thread/settings/update") {
       return {};
     }
@@ -1490,6 +1494,18 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.at(-1)).toEqual({
       method: "thread/unsubscribe",
       params: { threadId: "thread-1" }
+    });
+  });
+
+  it("能在会话上下文执行 shell command", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.runThreadShellCommand("thread-1", "npm test -- --runInBand")).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/shellCommand",
+      params: { threadId: "thread-1", command: "npm test -- --runInBand" }
     });
   });
 

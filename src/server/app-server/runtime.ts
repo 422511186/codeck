@@ -698,6 +698,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return { status: "unsubscribed" };
     }
 
+    if (method === "thread/shellCommand") {
+      const shellParams = params as { threadId?: string; command?: string };
+      this.selectThread(shellParams.threadId);
+      return {};
+    }
+
     if (method === "thread/delete") {
       const actionParams = params as { threadId?: string };
       this.archivedThreads.delete(actionParams.threadId || "");
@@ -2261,6 +2267,11 @@ export class AppServerGateway {
   async unsubscribeThread(threadId: string): Promise<MobileThreadUnsubscribeResult> {
     await this.ensureReady();
     return this.client.unsubscribeThread(threadId);
+  }
+
+  async runThreadShellCommand(threadId: string, command: string): Promise<void> {
+    await this.ensureReady();
+    await this.client.runThreadShellCommand(threadId, command);
   }
 
   async deleteThread(threadId: string): Promise<void> {
