@@ -18,7 +18,7 @@ function readSourceFiles(dir: string): string[] {
       return readSourceFiles(fullPath);
     }
 
-    if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
+    if (fullPath.endsWith(".ts")) {
       return [readFileSync(fullPath, "utf8")];
     }
 

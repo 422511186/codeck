@@ -1204,7 +1204,7 @@ class FakePeer implements AppServerPeer {
 }
 
 describe("CodexAppServerClient", () => {
-  it("初始化时声明移动端 Web 客户端能力", async () => {
+  it("初始化时声明 Web 后端客户端能力", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
@@ -1214,8 +1214,8 @@ describe("CodexAppServerClient", () => {
       method: "initialize",
       params: {
         clientInfo: {
-          name: "codex-mobile-web",
-          title: "Codex 移动端 Web",
+          name: "codex-web-backend",
+          title: "Codex Web 后端",
           version: "0.1.0"
         },
         capabilities: {

@@ -876,8 +876,8 @@ export class CodexAppServerClient {
   async initialize(): Promise<InitializeResponse> {
     const params: InitializeParams = {
       clientInfo: {
-        name: "codex-mobile-web",
-        title: "Codex 移动端 Web",
+        name: "codex-web-backend",
+        title: "Codex Web 后端",
         version: "0.1.0"
       },
       capabilities: {

@@ -1,16 +1,15 @@
 {
-  "name": "codex-mobile-web",
+  "name": "codex-web-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/server/http.ts",
-    "build": "next build",
-    "start": "cross-env NODE_ENV=production tsx src/server/http.ts",
+    "build": "npm run typecheck",
+    "start": "tsx src/server/http.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm run test"
   },
   "dependencies": {
@@ -24,10 +23,8 @@
     "zod": "^4.1.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.57.0",
     "@types/node": "^22.10.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@types/react": "19.2.17",
     "@types/ws": "^8.5.13",
     "cross-env": "^10.0.0",
     "tsx": "^4.20.0",
