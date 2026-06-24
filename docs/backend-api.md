@@ -158,6 +158,13 @@ thread_goal_cleared
 fs_changed
 file_search_session_updated
 file_search_session_completed
+realtime_started
+realtime_transcript_delta
+realtime_transcript_done
+realtime_output_audio_delta
+realtime_error
+realtime_closed
+external_agent_config_import_completed
 ```
 
 `server-request.request.kind` 当前可能值：
@@ -417,6 +424,134 @@ unknown
 }
 ```
 
+## Realtime 会话 API
+
+这些接口用于从手机浏览器控制某个 thread 的 realtime 会话。相关增量事件仍通过 `/ws` 的 `codex-event` 下发。
+
+### `GET /api/codex/realtime/voices`
+
+读取可用 realtime voice。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "voices": {
+    "v1": ["alloy"],
+    "v2": ["cedar"],
+    "defaultV1": "alloy",
+    "defaultV2": "cedar"
+  }
+}
+```
+
+### `POST /api/codex/threads/:threadId/realtime/start`
+
+启动 thread realtime 会话。
+
+请求体：
+
+```json
+{
+  "outputModality": "text",
+  "architecture": "realtimeapi",
+  "model": "gpt-4o-realtime-preview",
+  "includeStartupContext": true,
+  "prompt": "用中文回答",
+  "version": "v2",
+  "voice": "cedar"
+}
+```
+
+`outputModality` 必填，只能是 `text` 或 `audio`。其他字段可省略。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "started": true
+  }
+}
+```
+
+### `POST /api/codex/threads/:threadId/realtime/append-text`
+
+向 realtime 会话追加文本输入。
+
+请求体：
+
+```json
+{
+  "text": "继续解释这个错误",
+  "role": "user"
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "accepted": true
+  }
+}
+```
+
+`role` 只能是 `user` 或 `developer`，与 app-server generated 协议保持一致。
+
+### `POST /api/codex/threads/:threadId/realtime/append-audio`
+
+向 realtime 会话追加音频 chunk。`audio.data` 使用 base64 文本。
+
+请求体：
+
+```json
+{
+  "audio": {
+    "data": "base64-audio",
+    "sampleRate": 24000,
+    "numChannels": 1,
+    "samplesPerChannel": 1200,
+    "itemId": "optional-item-id"
+  }
+}
+```
+
+响应同文本追加，成功时返回 `{ "ok": true, "result": { "accepted": true } }`。
+
+### `POST /api/codex/threads/:threadId/realtime/append-speech`
+
+向 realtime 会话追加要朗读的文本。
+
+请求体：
+
+```json
+{
+  "text": "请朗读这句话"
+}
+```
+
+响应同文本追加，成功时返回 `{ "ok": true, "result": { "accepted": true } }`。
+
+### `POST /api/codex/threads/:threadId/realtime/stop`
+
+停止 thread realtime 会话。
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "stopped": true
+  }
+}
+```
+
 ## Turn 与消息 API
 
 ### `POST /api/codex/turns/start`
@@ -651,6 +786,143 @@ unknown
 | `POST` | `/api/codex/experimental-features/enablement` | 开关实验功能 |
 | `POST` | `/api/codex/memory/reset` | 重置全局 memory |
 
+## 环境、反馈与 external agent config
+
+这些接口会代理到 Codex app-server 的对应协议。新增环境、导入配置和上传反馈都会写入审计日志。
+
+### `POST /api/codex/environment/add`
+
+把一个可执行环境注册给 app-server。
+
+请求体：
+
+```json
+{
+  "environmentId": "env-1",
+  "execServerUrl": "http://127.0.0.1:4242"
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "added": true
+  }
+}
+```
+
+### `POST /api/codex/external-agent-config/detect`
+
+检测可迁移的 external agent config。
+
+请求体：
+
+```json
+{
+  "includeHome": true,
+  "cwds": ["C:/Users/huang/workspace/project"]
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "items": []
+  }
+}
+```
+
+### `POST /api/codex/external-agent-config/import`
+
+导入检测到的 external agent config。
+
+请求体：
+
+```json
+{
+  "migrationItems": [
+    {
+      "itemType": "AGENTS_MD",
+      "description": "导入项目 AGENTS.md",
+      "cwd": "C:/Users/huang/workspace/project",
+      "details": null
+    }
+  ]
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "importId": "import-id"
+  }
+}
+```
+
+导入完成后，`/ws` 会收到 `external_agent_config_import_completed` 事件，事件中包含成功项和失败项摘要。
+
+### `POST /api/codex/feedback/upload`
+
+上传用户反馈。`classification` 必填，其他字段可选。
+
+请求体：
+
+```json
+{
+  "classification": "bug",
+  "reason": "移动端无法继续会话",
+  "threadId": "thread-id",
+  "includeLogs": true,
+  "extraLogFiles": [],
+  "tags": {
+    "surface": "mobile-web"
+  }
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "threadId": "thread-id"
+  }
+}
+```
+
+## Marketplace 与插件分享
+
+Marketplace 写操作和 plugin share 写操作都会写入审计日志。列表接口返回的数据保持 app-server 结果的移动端 JSON 形态，前端应按空列表、错误和分页状态做容错展示。
+
+### Marketplace
+
+| 方法 | 路径 | 关键请求体 | 响应 |
+| --- | --- | --- | --- |
+| `POST` | `/api/codex/marketplace/add` | `{ "source": "https://...", "refName": "main", "sparsePaths": [] }` | `{ "ok": true, "result": { "marketplaceName": "...", "installedRoot": "...", "alreadyAdded": false } }` |
+| `POST` | `/api/codex/marketplace/remove` | `{ "marketplaceName": "personal" }` | `{ "ok": true, "result": { "marketplaceName": "...", "installedRoot": "..." } }` |
+| `POST` | `/api/codex/marketplace/upgrade` | `{ "marketplaceName": "personal" }`，可省略表示升级默认范围 | `{ "ok": true, "result": { "selectedMarketplaces": [], "upgradedRoots": [], "errors": [] } }` |
+
+### 插件安装结果与分享
+
+| 方法 | 路径 | 关键请求体 | 说明 |
+| --- | --- | --- | --- |
+| `POST` | `/api/codex/plugins/installed` | `{ "cwds": [], "installSuggestionPluginNames": [] }` | 查询插件安装结果、marketplace 数据和加载错误 |
+| `POST` | `/api/codex/plugins/share/save` | `{ "pluginPath": "...", "remotePluginId": "...", "discoverability": "PRIVATE", "shareTargets": [] }` | 保存插件分享，返回 `remotePluginId` 和 `shareUrl` |
+| `POST` | `/api/codex/plugins/share/update-targets` | `{ "remotePluginId": "...", "discoverability": "PRIVATE", "shareTargets": [] }` | 更新分享目标和可发现性 |
+| `GET` | `/api/codex/plugins/share/list` | 无 | 列出当前账号可见的 plugin share |
+| `POST` | `/api/codex/plugins/share/checkout` | `{ "remotePluginId": "..." }` | checkout 远程分享插件到本机 marketplace |
+| `POST` | `/api/codex/plugins/share/delete` | `{ "remotePluginId": "..." }` | 删除远程 plugin share |
+
 ## Remote Control
 
 | 方法 | 路径 | 说明 |
@@ -669,6 +941,7 @@ unknown
 | --- | --- | --- |
 | `GET` | `/api/codex/apps` | 列出 app-server apps |
 | `POST` | `/api/codex/mcp/resources/read` | 读取 MCP resource |
+| `POST` | `/api/codex/mcp/tools/call` | 调用已配置 MCP server 的 tool |
 | `POST` | `/api/codex/mcp/servers/:serverName/login` | 发起 MCP server OAuth 登录 |
 | `POST` | `/api/codex/mcp/servers/:serverName/refresh` | 刷新 MCP server |
 | `POST` | `/api/codex/plugins/:pluginName` | 读取插件详情 |
@@ -677,6 +950,37 @@ unknown
 | `POST` | `/api/codex/plugin-skills/:skillName` | 读取插件 skill 内容 |
 | `POST` | `/api/codex/skills/config` | 写入 skill 配置 |
 | `POST` | `/api/codex/skills/extra-roots` | 设置额外 skill roots |
+
+### `POST /api/codex/mcp/tools/call`
+
+受控调用 MCP tool。`threadId`、`server` 和 `tool` 必填，`arguments` 与 `meta` 必须是 JSON 值。
+
+请求体：
+
+```json
+{
+  "threadId": "thread-id",
+  "server": "filesystem",
+  "tool": "read_file",
+  "arguments": {
+    "path": "README.md"
+  }
+}
+```
+
+响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "content": [],
+    "structuredContent": null,
+    "isError": false,
+    "meta": null
+  }
+}
+```
 
 ## Windows Sandbox
 

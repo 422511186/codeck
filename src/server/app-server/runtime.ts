@@ -3,6 +3,10 @@ import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/Thr
 import type {
   MobileCommandResult,
   MobileConfigEditInput,
+  MobileEnvironmentAddResult,
+  MobileExternalAgentConfigDetectResult,
+  MobileExternalAgentConfigImportResult,
+  MobileFeedbackUploadResult,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -18,7 +22,11 @@ import type {
   MobileConfigWriteResultView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
+  MobileMcpToolCallResult,
   MobileModelOption,
+  MobileMarketplaceAddResult,
+  MobileMarketplaceRemoveResult,
+  MobileMarketplaceUpgradeResult,
   MobileFileSearchSessionView,
   MobileFileSearchResult,
   MobilePluginDetailView,
@@ -26,6 +34,12 @@ import type {
   MobileJsonValue,
   MobileMockExperimentalMethodResult,
   MobilePluginInstallResultView,
+  MobilePluginInstalledResult,
+  MobilePluginShareCheckoutResult,
+  MobilePluginShareDeleteResult,
+  MobilePluginShareListResult,
+  MobilePluginShareSaveResult,
+  MobilePluginShareUpdateTargetsResult,
   MobilePluginSkillContentView,
   MobileRateLimitResetCreditConsumeResult,
   MobileRemoteControlPairingStatusView,
@@ -37,6 +51,8 @@ import type {
   MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadMetadataUpdateInput,
+  MobileThreadRealtimeStatusResult,
+  MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -48,13 +64,23 @@ import type {
 import { getRuntimeConfig } from "../runtime";
 import {
   CodexAppServerClient,
+  type AddEnvironmentInput,
+  type AddMarketplaceInput,
+  type AppendThreadRealtimeAudioInput,
+  type AppendThreadRealtimeSpeechInput,
+  type AppendThreadRealtimeTextInput,
   type AppServerPeer,
+  type CallMcpToolInput,
+  type DetectExternalAgentConfigInput,
   type ExecCommandInput,
+  type ImportExternalAgentConfigInput,
   type ListAppsInput,
+  type ListInstalledPluginsInput,
   type ListThreadBackgroundTerminalsInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
   type PluginLookupInput,
+  type SavePluginShareInput,
   type PluginSkillReadInput,
   type GetConversationSummaryInput,
   type ReadMcpResourceInput,
@@ -64,8 +90,11 @@ import {
   type StartCommandExecInput,
   type StartProcessInput,
   type StartThreadInput,
+  type StartThreadRealtimeInput,
   type StartTurnInput,
+  type UpdatePluginShareTargetsInput,
   type UpdateThreadSettingsInput,
+  type UploadFeedbackInput,
   type WindowsSandboxSetupInput,
   type WriteSkillConfigInput
 } from "./client";
@@ -1725,6 +1754,150 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return { effectiveEnabled: Boolean(configParams.enabled) };
     }
 
+    if (method === "environment/add") {
+      return {};
+    }
+
+    if (method === "externalAgentConfig/detect") {
+      return {
+        items: [
+          {
+            itemType: "AGENTS_MD",
+            description: "导入项目 AGENTS.md",
+            cwd: "C:\\Users\\huang\\workspace",
+            details: null
+          }
+        ]
+      };
+    }
+
+    if (method === "externalAgentConfig/import") {
+      return { importId: "mock-import-1" };
+    }
+
+    if (method === "feedback/upload") {
+      const feedbackParams = params as { threadId?: string | null };
+      return { threadId: feedbackParams.threadId ?? this.thread.id };
+    }
+
+    if (method === "marketplace/add") {
+      return {
+        marketplaceName: "mock-marketplace",
+        installedRoot: "C:\\Users\\huang\\.codex\\plugins\\mock-marketplace",
+        alreadyAdded: false
+      };
+    }
+
+    if (method === "marketplace/remove") {
+      const marketplaceParams = params as { marketplaceName?: string };
+      return {
+        marketplaceName: marketplaceParams.marketplaceName ?? "mock-marketplace",
+        installedRoot: "C:\\Users\\huang\\.codex\\plugins\\mock-marketplace"
+      };
+    }
+
+    if (method === "marketplace/upgrade") {
+      return {
+        selectedMarketplaces: ["mock-marketplace"],
+        upgradedRoots: ["C:\\Users\\huang\\.codex\\plugins\\mock-marketplace"],
+        errors: []
+      };
+    }
+
+    if (method === "plugin/installed") {
+      return {
+        marketplaces: [
+          {
+            name: "个人插件市场",
+            path: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            interface: null,
+            plugins: [this.createMockPluginDetail().summary]
+          }
+        ],
+        marketplaceLoadErrors: []
+      };
+    }
+
+    if (method === "plugin/share/save") {
+      return {
+        remotePluginId: "mock-remote-plugin",
+        shareUrl: "https://example.com/plugins/mock-remote-plugin"
+      };
+    }
+
+    if (method === "plugin/share/updateTargets") {
+      const shareParams = params as { discoverability?: string };
+      return {
+        principals: [
+          {
+            principalType: "USER",
+            principalId: "user-1",
+            role: "OWNER",
+            name: "测试用户"
+          }
+        ],
+        discoverability: shareParams.discoverability ?? "PRIVATE"
+      };
+    }
+
+    if (method === "plugin/share/list") {
+      return {
+        data: [
+          {
+            plugin: this.createMockPluginDetail().summary,
+            localPluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools"
+          }
+        ]
+      };
+    }
+
+    if (method === "plugin/share/checkout") {
+      return {
+        remotePluginId: "mock-remote-plugin",
+        pluginId: "browser-tools",
+        pluginName: "browser-tools",
+        pluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools",
+        marketplaceName: "个人插件市场",
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+        remoteVersion: "v1"
+      };
+    }
+
+    if (method === "plugin/share/delete") {
+      return {};
+    }
+
+    if (method === "mcpServer/tool/call") {
+      const toolParams = params as { server?: string; tool?: string; arguments?: unknown };
+      return {
+        content: [{ type: "text", text: `mock tool ${toolParams.server}/${toolParams.tool}` }],
+        structuredContent: { arguments: toolParams.arguments ?? null },
+        isError: false,
+        _meta: { durationMs: 1 }
+      };
+    }
+
+    if (
+      method === "thread/realtime/start" ||
+      method === "thread/realtime/appendAudio" ||
+      method === "thread/realtime/appendText" ||
+      method === "thread/realtime/appendSpeech" ||
+      method === "thread/realtime/stop"
+    ) {
+      return {};
+    }
+
+    if (method === "thread/realtime/listVoices") {
+      return {
+        voices: {
+          v1: ["alloy", "echo"],
+          v2: ["cedar", "marin"],
+          defaultV1: "alloy",
+          defaultV2: "cedar"
+        }
+      };
+    }
+
     throw new Error(`mock app-server 未实现方法: ${method}`);
   }
 
@@ -2832,6 +3005,106 @@ export class AppServerGateway {
   async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
     return this.client.listThreadTurnItems(input);
+  }
+
+  async addEnvironment(input: AddEnvironmentInput): Promise<MobileEnvironmentAddResult> {
+    await this.ensureReady();
+    return this.client.addEnvironment(input);
+  }
+
+  async detectExternalAgentConfig(input: DetectExternalAgentConfigInput = {}): Promise<MobileExternalAgentConfigDetectResult> {
+    await this.ensureReady();
+    return this.client.detectExternalAgentConfig(input);
+  }
+
+  async importExternalAgentConfig(input: ImportExternalAgentConfigInput): Promise<MobileExternalAgentConfigImportResult> {
+    await this.ensureReady();
+    return this.client.importExternalAgentConfig(input);
+  }
+
+  async uploadFeedback(input: UploadFeedbackInput): Promise<MobileFeedbackUploadResult> {
+    await this.ensureReady();
+    return this.client.uploadFeedback(input);
+  }
+
+  async addMarketplace(input: AddMarketplaceInput): Promise<MobileMarketplaceAddResult> {
+    await this.ensureReady();
+    return this.client.addMarketplace(input);
+  }
+
+  async removeMarketplace(marketplaceName: string): Promise<MobileMarketplaceRemoveResult> {
+    await this.ensureReady();
+    return this.client.removeMarketplace(marketplaceName);
+  }
+
+  async upgradeMarketplace(marketplaceName?: string | null): Promise<MobileMarketplaceUpgradeResult> {
+    await this.ensureReady();
+    return this.client.upgradeMarketplace(marketplaceName);
+  }
+
+  async listInstalledPlugins(input: ListInstalledPluginsInput = {}): Promise<MobilePluginInstalledResult> {
+    await this.ensureReady();
+    return this.client.listInstalledPlugins(input);
+  }
+
+  async savePluginShare(input: SavePluginShareInput): Promise<MobilePluginShareSaveResult> {
+    await this.ensureReady();
+    return this.client.savePluginShare(input);
+  }
+
+  async updatePluginShareTargets(input: UpdatePluginShareTargetsInput): Promise<MobilePluginShareUpdateTargetsResult> {
+    await this.ensureReady();
+    return this.client.updatePluginShareTargets(input);
+  }
+
+  async listPluginShares(): Promise<MobilePluginShareListResult> {
+    await this.ensureReady();
+    return this.client.listPluginShares();
+  }
+
+  async checkoutPluginShare(remotePluginId: string): Promise<MobilePluginShareCheckoutResult> {
+    await this.ensureReady();
+    return this.client.checkoutPluginShare(remotePluginId);
+  }
+
+  async deletePluginShare(remotePluginId: string): Promise<MobilePluginShareDeleteResult> {
+    await this.ensureReady();
+    return this.client.deletePluginShare(remotePluginId);
+  }
+
+  async callMcpTool(input: CallMcpToolInput): Promise<MobileMcpToolCallResult> {
+    await this.ensureReady();
+    return this.client.callMcpTool(input);
+  }
+
+  async startThreadRealtime(input: StartThreadRealtimeInput): Promise<MobileThreadRealtimeStatusResult> {
+    await this.ensureReady();
+    return this.client.startThreadRealtime(input);
+  }
+
+  async appendThreadRealtimeAudio(input: AppendThreadRealtimeAudioInput): Promise<MobileThreadRealtimeStatusResult> {
+    await this.ensureReady();
+    return this.client.appendThreadRealtimeAudio(input);
+  }
+
+  async appendThreadRealtimeText(input: AppendThreadRealtimeTextInput): Promise<MobileThreadRealtimeStatusResult> {
+    await this.ensureReady();
+    return this.client.appendThreadRealtimeText(input);
+  }
+
+  async appendThreadRealtimeSpeech(input: AppendThreadRealtimeSpeechInput): Promise<MobileThreadRealtimeStatusResult> {
+    await this.ensureReady();
+    return this.client.appendThreadRealtimeSpeech(input);
+  }
+
+  async stopThreadRealtime(threadId: string): Promise<MobileThreadRealtimeStatusResult> {
+    await this.ensureReady();
+    return this.client.stopThreadRealtime(threadId);
+  }
+
+  async listThreadRealtimeVoices(): Promise<MobileThreadRealtimeVoicesResult> {
+    await this.ensureReady();
+    return this.client.listThreadRealtimeVoices();
   }
 
   close(): void {

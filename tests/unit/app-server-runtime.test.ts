@@ -908,6 +908,72 @@ describe("createAppServerGateway", () => {
     await expect(gateway.unsubscribeThread("mock-thread-1")).resolves.toEqual({ status: "unsubscribed" });
   });
 
+  it("mock 模式支持剩余 app-server 协议", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    await expect(gateway.addEnvironment({ environmentId: "mock-env-2", execServerUrl: "http://127.0.0.1:4567" })).resolves.toEqual({
+      added: true
+    });
+    await expect(gateway.detectExternalAgentConfig({ includeHome: true, cwds: ["C:\\Users\\huang\\workspace"] })).resolves.toMatchObject({
+      items: [expect.objectContaining({ itemType: "AGENTS_MD" })]
+    });
+    await expect(
+      gateway.importExternalAgentConfig({
+        migrationItems: [{ itemType: "AGENTS_MD", description: "导入 AGENTS.md", cwd: "C:\\Users\\huang\\workspace", details: null }]
+      })
+    ).resolves.toEqual({ importId: "mock-import-1" });
+    await expect(gateway.uploadFeedback({ classification: "bug", reason: "移动端反馈" })).resolves.toEqual({
+      threadId: "mock-thread-1"
+    });
+    await expect(gateway.addMarketplace({ source: "https://example.com/plugins.git" })).resolves.toMatchObject({
+      marketplaceName: "mock-marketplace",
+      alreadyAdded: false
+    });
+    await expect(gateway.removeMarketplace("mock-marketplace")).resolves.toMatchObject({
+      marketplaceName: "mock-marketplace"
+    });
+    await expect(gateway.upgradeMarketplace()).resolves.toMatchObject({
+      selectedMarketplaces: ["mock-marketplace"],
+      errors: []
+    });
+    await expect(gateway.listInstalledPlugins()).resolves.toMatchObject({
+      marketplaces: expect.any(Array),
+      marketplaceLoadErrors: []
+    });
+    await expect(gateway.savePluginShare({ pluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools" })).resolves.toMatchObject({
+      remotePluginId: "mock-remote-plugin"
+    });
+    await expect(
+      gateway.updatePluginShareTargets({
+        remotePluginId: "mock-remote-plugin",
+        discoverability: "PRIVATE",
+        shareTargets: [{ principalType: "USER", principalId: "user-1", role: "OWNER" }]
+      })
+    ).resolves.toMatchObject({ discoverability: "PRIVATE" });
+    await expect(gateway.listPluginShares()).resolves.toMatchObject({ data: expect.any(Array) });
+    await expect(gateway.checkoutPluginShare("mock-remote-plugin")).resolves.toMatchObject({ pluginId: "browser-tools" });
+    await expect(gateway.deletePluginShare("mock-remote-plugin")).resolves.toEqual({ deleted: true });
+    await expect(
+      gateway.callMcpTool({ threadId: "mock-thread-1", server: "filesystem", tool: "read_file", arguments: { path: "README.md" } })
+    ).resolves.toMatchObject({ isError: false });
+    await expect(gateway.startThreadRealtime({ threadId: "mock-thread-1", outputModality: "text" })).resolves.toEqual({ started: true });
+    await expect(gateway.appendThreadRealtimeText({ threadId: "mock-thread-1", text: "你好", role: "user" })).resolves.toEqual({
+      accepted: true
+    });
+    await expect(gateway.appendThreadRealtimeSpeech({ threadId: "mock-thread-1", text: "朗读" })).resolves.toEqual({
+      accepted: true
+    });
+    await expect(
+      gateway.appendThreadRealtimeAudio({
+        threadId: "mock-thread-1",
+        audio: { data: "AAAA", sampleRate: 24000, numChannels: 1, samplesPerChannel: null, itemId: null }
+      })
+    ).resolves.toEqual({ accepted: true });
+    await expect(gateway.listThreadRealtimeVoices()).resolves.toMatchObject({ voices: { defaultV1: "alloy" } });
+    await expect(gateway.stopThreadRealtime("mock-thread-1")).resolves.toEqual({ stopped: true });
+  });
+
   it("mock 模式支持会话 shell command", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

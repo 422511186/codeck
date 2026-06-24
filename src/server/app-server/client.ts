@@ -35,9 +35,17 @@ import type { ConsumeAccountRateLimitResetCreditParams } from "../../../docs/gen
 import type { ConsumeAccountRateLimitResetCreditResponse } from "../../../docs/generated/app-server-ts/v2/ConsumeAccountRateLimitResetCreditResponse";
 import type { CancelLoginAccountParams } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountParams";
 import type { CancelLoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/CancelLoginAccountResponse";
+import type { EnvironmentAddParams } from "../../../docs/generated/app-server-ts/v2/EnvironmentAddParams";
+import type { EnvironmentAddResponse } from "../../../docs/generated/app-server-ts/v2/EnvironmentAddResponse";
 import type { ExperimentalFeatureEnablementSetParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureEnablementSetParams";
 import type { ExperimentalFeatureListParams } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureListParams";
 import type { ExperimentalFeatureListResponse } from "../../../docs/generated/app-server-ts/v2/ExperimentalFeatureListResponse";
+import type { ExternalAgentConfigDetectParams } from "../../../docs/generated/app-server-ts/v2/ExternalAgentConfigDetectParams";
+import type { ExternalAgentConfigDetectResponse } from "../../../docs/generated/app-server-ts/v2/ExternalAgentConfigDetectResponse";
+import type { ExternalAgentConfigImportParams } from "../../../docs/generated/app-server-ts/v2/ExternalAgentConfigImportParams";
+import type { ExternalAgentConfigImportResponse } from "../../../docs/generated/app-server-ts/v2/ExternalAgentConfigImportResponse";
+import type { FeedbackUploadParams } from "../../../docs/generated/app-server-ts/v2/FeedbackUploadParams";
+import type { FeedbackUploadResponse } from "../../../docs/generated/app-server-ts/v2/FeedbackUploadResponse";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
 import type { FsGetMetadataParams } from "../../../docs/generated/app-server-ts/v2/FsGetMetadataParams";
@@ -60,6 +68,12 @@ import type { CollaborationModeListResponse } from "../../../docs/generated/app-
 import type { ListMcpServerStatusResponse } from "../../../docs/generated/app-server-ts/v2/ListMcpServerStatusResponse";
 import type { LoginAccountParams } from "../../../docs/generated/app-server-ts/v2/LoginAccountParams";
 import type { LoginAccountResponse } from "../../../docs/generated/app-server-ts/v2/LoginAccountResponse";
+import type { MarketplaceAddParams } from "../../../docs/generated/app-server-ts/v2/MarketplaceAddParams";
+import type { MarketplaceAddResponse } from "../../../docs/generated/app-server-ts/v2/MarketplaceAddResponse";
+import type { MarketplaceRemoveParams } from "../../../docs/generated/app-server-ts/v2/MarketplaceRemoveParams";
+import type { MarketplaceRemoveResponse } from "../../../docs/generated/app-server-ts/v2/MarketplaceRemoveResponse";
+import type { MarketplaceUpgradeParams } from "../../../docs/generated/app-server-ts/v2/MarketplaceUpgradeParams";
+import type { MarketplaceUpgradeResponse } from "../../../docs/generated/app-server-ts/v2/MarketplaceUpgradeResponse";
 import type { ModelListParams } from "../../../docs/generated/app-server-ts/v2/ModelListParams";
 import type { ModelListResponse } from "../../../docs/generated/app-server-ts/v2/ModelListResponse";
 import type { ModelProviderCapabilitiesReadResponse } from "../../../docs/generated/app-server-ts/v2/ModelProviderCapabilitiesReadResponse";
@@ -69,14 +83,28 @@ import type { McpResourceReadParams } from "../../../docs/generated/app-server-t
 import type { McpResourceReadResponse } from "../../../docs/generated/app-server-ts/v2/McpResourceReadResponse";
 import type { McpServerOauthLoginParams } from "../../../docs/generated/app-server-ts/v2/McpServerOauthLoginParams";
 import type { McpServerOauthLoginResponse } from "../../../docs/generated/app-server-ts/v2/McpServerOauthLoginResponse";
+import type { McpServerToolCallParams } from "../../../docs/generated/app-server-ts/v2/McpServerToolCallParams";
+import type { McpServerToolCallResponse } from "../../../docs/generated/app-server-ts/v2/McpServerToolCallResponse";
 import type { PermissionProfileListResponse } from "../../../docs/generated/app-server-ts/v2/PermissionProfileListResponse";
 import type { PluginDetail } from "../../../docs/generated/app-server-ts/v2/PluginDetail";
 import type { PluginInstallParams } from "../../../docs/generated/app-server-ts/v2/PluginInstallParams";
 import type { PluginInstallResponse } from "../../../docs/generated/app-server-ts/v2/PluginInstallResponse";
+import type { PluginInstalledParams } from "../../../docs/generated/app-server-ts/v2/PluginInstalledParams";
+import type { PluginInstalledResponse } from "../../../docs/generated/app-server-ts/v2/PluginInstalledResponse";
 import type { PluginListParams } from "../../../docs/generated/app-server-ts/v2/PluginListParams";
 import type { PluginListResponse } from "../../../docs/generated/app-server-ts/v2/PluginListResponse";
 import type { PluginReadParams } from "../../../docs/generated/app-server-ts/v2/PluginReadParams";
 import type { PluginReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginReadResponse";
+import type { PluginShareCheckoutParams } from "../../../docs/generated/app-server-ts/v2/PluginShareCheckoutParams";
+import type { PluginShareCheckoutResponse } from "../../../docs/generated/app-server-ts/v2/PluginShareCheckoutResponse";
+import type { PluginShareDeleteParams } from "../../../docs/generated/app-server-ts/v2/PluginShareDeleteParams";
+import type { PluginShareDeleteResponse } from "../../../docs/generated/app-server-ts/v2/PluginShareDeleteResponse";
+import type { PluginShareListParams } from "../../../docs/generated/app-server-ts/v2/PluginShareListParams";
+import type { PluginShareListResponse } from "../../../docs/generated/app-server-ts/v2/PluginShareListResponse";
+import type { PluginShareSaveParams } from "../../../docs/generated/app-server-ts/v2/PluginShareSaveParams";
+import type { PluginShareSaveResponse } from "../../../docs/generated/app-server-ts/v2/PluginShareSaveResponse";
+import type { PluginShareUpdateTargetsParams } from "../../../docs/generated/app-server-ts/v2/PluginShareUpdateTargetsParams";
+import type { PluginShareUpdateTargetsResponse } from "../../../docs/generated/app-server-ts/v2/PluginShareUpdateTargetsResponse";
 import type { PluginSkillReadParams } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadParams";
 import type { PluginSkillReadResponse } from "../../../docs/generated/app-server-ts/v2/PluginSkillReadResponse";
 import type { PluginUninstallParams } from "../../../docs/generated/app-server-ts/v2/PluginUninstallParams";
@@ -125,6 +153,18 @@ import type { ThreadGoalSetParams } from "../../../docs/generated/app-server-ts/
 import type { ThreadGoalSetResponse } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
+import type { ThreadRealtimeAppendAudioParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendAudioParams";
+import type { ThreadRealtimeAppendAudioResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendAudioResponse";
+import type { ThreadRealtimeAppendSpeechParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendSpeechParams";
+import type { ThreadRealtimeAppendSpeechResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendSpeechResponse";
+import type { ThreadRealtimeAppendTextParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendTextParams";
+import type { ThreadRealtimeAppendTextResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendTextResponse";
+import type { ThreadRealtimeListVoicesParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeListVoicesParams";
+import type { ThreadRealtimeListVoicesResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeListVoicesResponse";
+import type { ThreadRealtimeStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeStartParams";
+import type { ThreadRealtimeStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeStartResponse";
+import type { ThreadRealtimeStopParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeStopParams";
+import type { ThreadRealtimeStopResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeStopResponse";
 import type { ThreadResumeParams } from "../../../docs/generated/app-server-ts/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "../../../docs/generated/app-server-ts/v2/ThreadResumeResponse";
 import type { ThreadForkParams } from "../../../docs/generated/app-server-ts/v2/ThreadForkParams";
@@ -180,7 +220,15 @@ import type {
   MobileConfigEditInput,
   MobileConfigRequirementsView,
   MobileConfigWriteResultView,
+  MobileEnvironmentAddInput,
+  MobileEnvironmentAddResult,
   MobileExperimentalFeatureView,
+  MobileExternalAgentConfigDetectInput,
+  MobileExternalAgentConfigDetectResult,
+  MobileExternalAgentConfigImportInput,
+  MobileExternalAgentConfigImportResult,
+  MobileFeedbackUploadInput,
+  MobileFeedbackUploadResult,
   MobileFileContent,
   MobileFileEntry,
   MobileFileMetadata,
@@ -194,11 +242,26 @@ import type {
   MobileMcpLoginView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
+  MobileMarketplaceAddInput,
+  MobileMarketplaceAddResult,
+  MobileMarketplaceRemoveResult,
+  MobileMarketplaceUpgradeResult,
   MobileMockExperimentalMethodResult,
+  MobileMcpToolCallInput,
+  MobileMcpToolCallResult,
   MobileMcpResourceReadView,
+  MobilePluginInstalledInput,
+  MobilePluginInstalledResult,
   MobilePluginMarketplaceErrorView,
   MobilePluginDetailView,
   MobilePluginInstallResultView,
+  MobilePluginShareCheckoutResult,
+  MobilePluginShareDeleteResult,
+  MobilePluginShareListResult,
+  MobilePluginShareSaveInput,
+  MobilePluginShareSaveResult,
+  MobilePluginShareUpdateTargetsInput,
+  MobilePluginShareUpdateTargetsResult,
   MobilePluginSkillContentView,
   MobilePluginView,
   MobileRateLimitView,
@@ -214,6 +277,12 @@ import type {
   MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadMetadataUpdateInput,
+  MobileThreadRealtimeAppendAudioInput,
+  MobileThreadRealtimeAppendSpeechInput,
+  MobileThreadRealtimeAppendTextInput,
+  MobileThreadRealtimeStartInput,
+  MobileThreadRealtimeStatusResult,
+  MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
   MobileTimelinePage,
   MobileThreadDetail,
@@ -354,11 +423,62 @@ export type WindowsSandboxSetupInput = {
   cwd?: string | null;
 };
 
+export type AddEnvironmentInput = MobileEnvironmentAddInput;
+export type DetectExternalAgentConfigInput = MobileExternalAgentConfigDetectInput;
+export type ImportExternalAgentConfigInput = MobileExternalAgentConfigImportInput;
+export type UploadFeedbackInput = MobileFeedbackUploadInput;
+export type AddMarketplaceInput = MobileMarketplaceAddInput;
+export type ListInstalledPluginsInput = MobilePluginInstalledInput;
+export type SavePluginShareInput = MobilePluginShareSaveInput;
+export type UpdatePluginShareTargetsInput = MobilePluginShareUpdateTargetsInput;
+export type CallMcpToolInput = MobileMcpToolCallInput;
+export type StartThreadRealtimeInput = MobileThreadRealtimeStartInput;
+export type AppendThreadRealtimeAudioInput = MobileThreadRealtimeAppendAudioInput;
+export type AppendThreadRealtimeTextInput = MobileThreadRealtimeAppendTextInput;
+export type AppendThreadRealtimeSpeechInput = MobileThreadRealtimeAppendSpeechInput;
+
 function configWriteResultView(response: ConfigWriteResponse): MobileConfigWriteResultView {
   return {
     status: String(response.status),
     version: response.version,
     filePath: response.filePath
+  };
+}
+
+function mobileJson(value: unknown): MobileJsonValue {
+  return value as MobileJsonValue;
+}
+
+function mobileJsonArray(value: unknown[]): MobileJsonValue[] {
+  return value.map((item) => mobileJson(item));
+}
+
+function externalAgentConfigDetectView(
+  response: ExternalAgentConfigDetectResponse
+): MobileExternalAgentConfigDetectResult {
+  return {
+    items: response.items.map((item) => ({
+      itemType: item.itemType,
+      description: item.description,
+      cwd: item.cwd,
+      details: item.details ? mobileJson(item.details) : null
+    }))
+  };
+}
+
+function pluginInstalledView(response: PluginInstalledResponse): MobilePluginInstalledResult {
+  return {
+    marketplaces: mobileJsonArray(response.marketplaces),
+    marketplaceLoadErrors: mobileJsonArray(response.marketplaceLoadErrors)
+  };
+}
+
+function mcpToolCallView(response: McpServerToolCallResponse): MobileMcpToolCallResult {
+  return {
+    content: mobileJsonArray(response.content),
+    structuredContent: response.structuredContent === undefined ? undefined : mobileJson(response.structuredContent),
+    isError: Boolean(response.isError),
+    meta: response._meta === undefined ? undefined : mobileJson(response._meta)
   };
 }
 
@@ -1144,6 +1264,223 @@ export class CodexAppServerClient {
     const params: MockExperimentalMethodParams = { value: value ?? null };
     const response = (await this.peer.request("mock/experimentalMethod", params)) as MockExperimentalMethodResponse;
     return { echoed: response.echoed };
+  }
+
+  async addEnvironment(input: AddEnvironmentInput): Promise<MobileEnvironmentAddResult> {
+    const params: EnvironmentAddParams = {
+      environmentId: input.environmentId,
+      execServerUrl: input.execServerUrl
+    };
+    await this.peer.request("environment/add", params);
+    return { added: true };
+  }
+
+  async detectExternalAgentConfig(
+    input: DetectExternalAgentConfigInput = {}
+  ): Promise<MobileExternalAgentConfigDetectResult> {
+    const params: ExternalAgentConfigDetectParams = {
+      includeHome: input.includeHome,
+      cwds: input.cwds
+    };
+    const response = (await this.peer.request("externalAgentConfig/detect", params)) as ExternalAgentConfigDetectResponse;
+    return externalAgentConfigDetectView(response);
+  }
+
+  async importExternalAgentConfig(
+    input: ImportExternalAgentConfigInput
+  ): Promise<MobileExternalAgentConfigImportResult> {
+    const params: ExternalAgentConfigImportParams = {
+      migrationItems: input.migrationItems as ExternalAgentConfigImportParams["migrationItems"]
+    };
+    const response = (await this.peer.request("externalAgentConfig/import", params)) as ExternalAgentConfigImportResponse;
+    return { importId: response.importId };
+  }
+
+  async uploadFeedback(input: UploadFeedbackInput): Promise<MobileFeedbackUploadResult> {
+    const params: FeedbackUploadParams = {
+      classification: input.classification,
+      reason: input.reason ?? null,
+      threadId: input.threadId ?? null,
+      includeLogs: input.includeLogs,
+      extraLogFiles: input.extraLogFiles ?? null,
+      tags: input.tags ?? null
+    };
+    const response = (await this.peer.request("feedback/upload", params)) as FeedbackUploadResponse;
+    return { threadId: response.threadId };
+  }
+
+  async addMarketplace(input: AddMarketplaceInput): Promise<MobileMarketplaceAddResult> {
+    const params: MarketplaceAddParams = {
+      source: input.source,
+      refName: input.refName ?? null,
+      sparsePaths: input.sparsePaths ?? null
+    };
+    const response = (await this.peer.request("marketplace/add", params)) as MarketplaceAddResponse;
+    return {
+      marketplaceName: response.marketplaceName,
+      installedRoot: response.installedRoot,
+      alreadyAdded: response.alreadyAdded
+    };
+  }
+
+  async removeMarketplace(marketplaceName: string): Promise<MobileMarketplaceRemoveResult> {
+    const params: MarketplaceRemoveParams = { marketplaceName };
+    const response = (await this.peer.request("marketplace/remove", params)) as MarketplaceRemoveResponse;
+    return {
+      marketplaceName: response.marketplaceName,
+      installedRoot: response.installedRoot
+    };
+  }
+
+  async upgradeMarketplace(marketplaceName?: string | null): Promise<MobileMarketplaceUpgradeResult> {
+    const params: MarketplaceUpgradeParams = { marketplaceName: marketplaceName ?? null };
+    const response = (await this.peer.request("marketplace/upgrade", params)) as MarketplaceUpgradeResponse;
+    return {
+      selectedMarketplaces: response.selectedMarketplaces,
+      upgradedRoots: response.upgradedRoots,
+      errors: response.errors.map((error) => ({
+        marketplaceName: error.marketplaceName,
+        message: error.message
+      }))
+    };
+  }
+
+  async listInstalledPlugins(input: ListInstalledPluginsInput = {}): Promise<MobilePluginInstalledResult> {
+    const params: PluginInstalledParams = {
+      cwds: input.cwds ?? null,
+      installSuggestionPluginNames: input.installSuggestionPluginNames ?? null
+    };
+    const response = (await this.peer.request("plugin/installed", params)) as PluginInstalledResponse;
+    return pluginInstalledView(response);
+  }
+
+  async savePluginShare(input: SavePluginShareInput): Promise<MobilePluginShareSaveResult> {
+    const params: PluginShareSaveParams = {
+      pluginPath: input.pluginPath,
+      remotePluginId: input.remotePluginId ?? null,
+      discoverability: (input.discoverability ?? null) as PluginShareSaveParams["discoverability"],
+      shareTargets: (input.shareTargets ?? null) as PluginShareSaveParams["shareTargets"]
+    };
+    const response = (await this.peer.request("plugin/share/save", params)) as PluginShareSaveResponse;
+    return {
+      remotePluginId: response.remotePluginId,
+      shareUrl: response.shareUrl
+    };
+  }
+
+  async updatePluginShareTargets(
+    input: UpdatePluginShareTargetsInput
+  ): Promise<MobilePluginShareUpdateTargetsResult> {
+    const params: PluginShareUpdateTargetsParams = {
+      remotePluginId: input.remotePluginId,
+      discoverability: input.discoverability as PluginShareUpdateTargetsParams["discoverability"],
+      shareTargets: input.shareTargets as PluginShareUpdateTargetsParams["shareTargets"]
+    };
+    const response = (await this.peer.request(
+      "plugin/share/updateTargets",
+      params
+    )) as PluginShareUpdateTargetsResponse;
+    return {
+      principals: mobileJsonArray(response.principals),
+      discoverability: response.discoverability
+    };
+  }
+
+  async listPluginShares(): Promise<MobilePluginShareListResult> {
+    const params: PluginShareListParams = {};
+    const response = (await this.peer.request("plugin/share/list", params)) as PluginShareListResponse;
+    return { data: mobileJsonArray(response.data) };
+  }
+
+  async checkoutPluginShare(remotePluginId: string): Promise<MobilePluginShareCheckoutResult> {
+    const params: PluginShareCheckoutParams = { remotePluginId };
+    const response = (await this.peer.request("plugin/share/checkout", params)) as PluginShareCheckoutResponse;
+    return {
+      remotePluginId: response.remotePluginId,
+      pluginId: response.pluginId,
+      pluginName: response.pluginName,
+      pluginPath: response.pluginPath,
+      marketplaceName: response.marketplaceName,
+      marketplacePath: response.marketplacePath,
+      remoteVersion: response.remoteVersion
+    };
+  }
+
+  async deletePluginShare(remotePluginId: string): Promise<MobilePluginShareDeleteResult> {
+    const params: PluginShareDeleteParams = { remotePluginId };
+    await this.peer.request("plugin/share/delete", params) as PluginShareDeleteResponse;
+    return { deleted: true };
+  }
+
+  async callMcpTool(input: CallMcpToolInput): Promise<MobileMcpToolCallResult> {
+    const params: McpServerToolCallParams = {
+      threadId: input.threadId,
+      server: input.server,
+      tool: input.tool,
+      arguments: input.arguments as JsonValue | undefined,
+      _meta: input.meta as JsonValue | undefined
+    };
+    const response = (await this.peer.request("mcpServer/tool/call", params)) as McpServerToolCallResponse;
+    return mcpToolCallView(response);
+  }
+
+  async startThreadRealtime(input: StartThreadRealtimeInput): Promise<MobileThreadRealtimeStatusResult> {
+    const params: ThreadRealtimeStartParams = {
+      threadId: input.threadId,
+      architecture: input.architecture ?? null,
+      codexResponsesAsItems: input.codexResponsesAsItems ?? null,
+      codexResponseItemPrefix: input.codexResponseItemPrefix ?? null,
+      model: input.model ?? null,
+      outputModality: input.outputModality,
+      includeStartupContext: input.includeStartupContext ?? null,
+      prompt: input.prompt ?? null,
+      realtimeSessionId: input.realtimeSessionId ?? null,
+      transport: (input.transport ?? null) as ThreadRealtimeStartParams["transport"],
+      version: input.version ?? null,
+      voice: input.voice ?? null
+    };
+    await this.peer.request("thread/realtime/start", params) as ThreadRealtimeStartResponse;
+    return { started: true };
+  }
+
+  async appendThreadRealtimeAudio(input: AppendThreadRealtimeAudioInput): Promise<MobileThreadRealtimeStatusResult> {
+    const params: ThreadRealtimeAppendAudioParams = {
+      threadId: input.threadId,
+      audio: input.audio
+    };
+    await this.peer.request("thread/realtime/appendAudio", params) as ThreadRealtimeAppendAudioResponse;
+    return { accepted: true };
+  }
+
+  async appendThreadRealtimeText(input: AppendThreadRealtimeTextInput): Promise<MobileThreadRealtimeStatusResult> {
+    const params: ThreadRealtimeAppendTextParams = {
+      threadId: input.threadId,
+      text: input.text,
+      role: input.role
+    };
+    await this.peer.request("thread/realtime/appendText", params) as ThreadRealtimeAppendTextResponse;
+    return { accepted: true };
+  }
+
+  async appendThreadRealtimeSpeech(input: AppendThreadRealtimeSpeechInput): Promise<MobileThreadRealtimeStatusResult> {
+    const params: ThreadRealtimeAppendSpeechParams = {
+      threadId: input.threadId,
+      text: input.text
+    };
+    await this.peer.request("thread/realtime/appendSpeech", params) as ThreadRealtimeAppendSpeechResponse;
+    return { accepted: true };
+  }
+
+  async stopThreadRealtime(threadId: string): Promise<MobileThreadRealtimeStatusResult> {
+    const params: ThreadRealtimeStopParams = { threadId };
+    await this.peer.request("thread/realtime/stop", params) as ThreadRealtimeStopResponse;
+    return { stopped: true };
+  }
+
+  async listThreadRealtimeVoices(): Promise<MobileThreadRealtimeVoicesResult> {
+    const params: ThreadRealtimeListVoicesParams = {};
+    const response = (await this.peer.request("thread/realtime/listVoices", params)) as ThreadRealtimeListVoicesResponse;
+    return { voices: response.voices };
   }
 
   async loginWithChatGpt(): Promise<MobileAccountLoginView> {

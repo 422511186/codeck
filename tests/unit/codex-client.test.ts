@@ -1199,6 +1199,145 @@ class FakePeer implements AppServerPeer {
       return { effectiveEnabled: false };
     }
 
+    if (method === "environment/add") {
+      return {};
+    }
+
+    if (method === "externalAgentConfig/detect") {
+      return {
+        items: [
+          {
+            itemType: "AGENTS_MD",
+            description: "导入 AGENTS.md",
+            cwd: "C:\\repo",
+            details: null
+          }
+        ]
+      };
+    }
+
+    if (method === "externalAgentConfig/import") {
+      return { importId: "import-1" };
+    }
+
+    if (method === "feedback/upload") {
+      return { threadId: "thread-1" };
+    }
+
+    if (method === "marketplace/add") {
+      return {
+        marketplaceName: "team-marketplace",
+        installedRoot: "C:\\Users\\huang\\.codex\\plugins\\team",
+        alreadyAdded: false
+      };
+    }
+
+    if (method === "marketplace/remove") {
+      return {
+        marketplaceName: "team-marketplace",
+        installedRoot: "C:\\Users\\huang\\.codex\\plugins\\team"
+      };
+    }
+
+    if (method === "marketplace/upgrade") {
+      return {
+        selectedMarketplaces: ["team-marketplace"],
+        upgradedRoots: ["C:\\Users\\huang\\.codex\\plugins\\team"],
+        errors: [{ marketplaceName: "broken-marketplace", message: "无法拉取" }]
+      };
+    }
+
+    if (method === "plugin/installed") {
+      return {
+        marketplaces: [
+          {
+            name: "个人插件市场",
+            path: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+            interface: null,
+            plugins: []
+          }
+        ],
+        marketplaceLoadErrors: []
+      };
+    }
+
+    if (method === "plugin/share/save") {
+      return { remotePluginId: "remote-plugin-1", shareUrl: "https://example.com/plugins/remote-plugin-1" };
+    }
+
+    if (method === "plugin/share/updateTargets") {
+      return {
+        discoverability: "PRIVATE",
+        principals: [{ principalType: "USER", principalId: "user-1", role: "OWNER", name: "测试用户" }]
+      };
+    }
+
+    if (method === "plugin/share/list") {
+      return {
+        data: [
+          {
+            plugin: {
+              id: "browser-tools",
+              name: "browser-tools",
+              displayName: "浏览器工具",
+              shortDescription: "控制浏览器",
+              installed: true,
+              enabled: true,
+              availability: "AVAILABLE",
+              sourceType: "local"
+            },
+            localPluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools"
+          }
+        ]
+      };
+    }
+
+    if (method === "plugin/share/checkout") {
+      return {
+        remotePluginId: "remote-plugin-1",
+        pluginId: "browser-tools",
+        pluginName: "browser-tools",
+        pluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools",
+        marketplaceName: "个人插件市场",
+        marketplacePath: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json",
+        remoteVersion: "v1"
+      };
+    }
+
+    if (method === "plugin/share/delete") {
+      return {};
+    }
+
+    if (method === "mcpServer/tool/call") {
+      return {
+        content: [{ type: "text", text: "工具结果" }],
+        structuredContent: { ok: true },
+        isError: false,
+        _meta: { durationMs: 12 }
+      };
+    }
+
+    if (
+      method === "thread/realtime/start" ||
+      method === "thread/realtime/appendAudio" ||
+      method === "thread/realtime/appendText" ||
+      method === "thread/realtime/appendSpeech" ||
+      method === "thread/realtime/stop"
+    ) {
+      return {};
+    }
+
+    if (method === "thread/realtime/listVoices") {
+      return {
+        voices: {
+          v1: ["alloy", "echo"],
+          v2: ["cedar", "marin"],
+          defaultV1: "alloy",
+          defaultV2: "cedar"
+        }
+      };
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
 }
@@ -2504,6 +2643,202 @@ describe("CodexAppServerClient", () => {
         params: { threadId: "thread-1", event: { type: "guardian_assessment", id: "event-1" } }
       },
       { method: "mock/experimentalMethod", params: { value: "hello" } }
+    ]);
+  });
+
+  it("能转发环境、external agent config 和 feedback 协议", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.addEnvironment({ environmentId: "env-1", execServerUrl: "http://127.0.0.1:4242" })).resolves.toEqual({
+      added: true
+    });
+    await expect(client.detectExternalAgentConfig({ includeHome: true, cwds: ["C:\\repo"] })).resolves.toEqual({
+      items: [
+        {
+          itemType: "AGENTS_MD",
+          description: "导入 AGENTS.md",
+          cwd: "C:\\repo",
+          details: null
+        }
+      ]
+    });
+    await expect(
+      client.importExternalAgentConfig({
+        migrationItems: [{ itemType: "AGENTS_MD", description: "导入 AGENTS.md", cwd: "C:\\repo", details: null }]
+      })
+    ).resolves.toEqual({ importId: "import-1" });
+    await expect(
+      client.uploadFeedback({ classification: "bug", reason: "手机端报错", threadId: "thread-1", includeLogs: true })
+    ).resolves.toEqual({ threadId: "thread-1" });
+
+    expect(peer.calls.slice(-4)).toEqual([
+      { method: "environment/add", params: { environmentId: "env-1", execServerUrl: "http://127.0.0.1:4242" } },
+      { method: "externalAgentConfig/detect", params: { includeHome: true, cwds: ["C:\\repo"] } },
+      {
+        method: "externalAgentConfig/import",
+        params: { migrationItems: [{ itemType: "AGENTS_MD", description: "导入 AGENTS.md", cwd: "C:\\repo", details: null }] }
+      },
+      {
+        method: "feedback/upload",
+        params: { classification: "bug", reason: "手机端报错", threadId: "thread-1", includeLogs: true, extraLogFiles: null, tags: null }
+      }
+    ]);
+  });
+
+  it("能转发 marketplace、plugin installed 和 plugin share 协议", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.addMarketplace({ source: "https://example.com/plugins.git", refName: "main" })).resolves.toEqual({
+      marketplaceName: "team-marketplace",
+      installedRoot: "C:\\Users\\huang\\.codex\\plugins\\team",
+      alreadyAdded: false
+    });
+    await expect(client.removeMarketplace("team-marketplace")).resolves.toEqual({
+      marketplaceName: "team-marketplace",
+      installedRoot: "C:\\Users\\huang\\.codex\\plugins\\team"
+    });
+    await expect(client.upgradeMarketplace("team-marketplace")).resolves.toEqual({
+      selectedMarketplaces: ["team-marketplace"],
+      upgradedRoots: ["C:\\Users\\huang\\.codex\\plugins\\team"],
+      errors: [{ marketplaceName: "broken-marketplace", message: "无法拉取" }]
+    });
+    await expect(client.listInstalledPlugins({ cwds: ["C:\\repo"], installSuggestionPluginNames: ["browser-tools"] })).resolves.toEqual({
+      marketplaces: [{ name: "个人插件市场", path: "C:\\Users\\huang\\.codex\\plugins\\marketplace.json", interface: null, plugins: [] }],
+      marketplaceLoadErrors: []
+    });
+    await expect(
+      client.savePluginShare({ pluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools", discoverability: "UNLISTED" })
+    ).resolves.toEqual({ remotePluginId: "remote-plugin-1", shareUrl: "https://example.com/plugins/remote-plugin-1" });
+    await expect(
+      client.updatePluginShareTargets({
+        remotePluginId: "remote-plugin-1",
+        discoverability: "PRIVATE",
+        shareTargets: [{ principalType: "USER", principalId: "user-1", role: "OWNER" }]
+      })
+    ).resolves.toEqual({
+      discoverability: "PRIVATE",
+      principals: [{ principalType: "USER", principalId: "user-1", role: "OWNER", name: "测试用户" }]
+    });
+    await expect(client.listPluginShares()).resolves.toEqual({
+      data: [
+        {
+          plugin: {
+            id: "browser-tools",
+            name: "browser-tools",
+            displayName: "浏览器工具",
+            shortDescription: "控制浏览器",
+            installed: true,
+            enabled: true,
+            availability: "AVAILABLE",
+            sourceType: "local"
+          },
+          localPluginPath: "C:\\Users\\huang\\.codex\\plugins\\browser-tools"
+        }
+      ]
+    });
+    await expect(client.checkoutPluginShare("remote-plugin-1")).resolves.toMatchObject({
+      remotePluginId: "remote-plugin-1",
+      pluginId: "browser-tools"
+    });
+    await expect(client.deletePluginShare("remote-plugin-1")).resolves.toEqual({ deleted: true });
+
+    expect(peer.calls.slice(-9).map((call) => call.method)).toEqual([
+      "marketplace/add",
+      "marketplace/remove",
+      "marketplace/upgrade",
+      "plugin/installed",
+      "plugin/share/save",
+      "plugin/share/updateTargets",
+      "plugin/share/list",
+      "plugin/share/checkout",
+      "plugin/share/delete"
+    ]);
+  });
+
+  it("能转发 MCP tool call 和 thread realtime 协议", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.callMcpTool({
+        threadId: "thread-1",
+        server: "filesystem",
+        tool: "read_file",
+        arguments: { path: "README.md" },
+        meta: { source: "mobile" }
+      })
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "工具结果" }],
+      structuredContent: { ok: true },
+      isError: false,
+      meta: { durationMs: 12 }
+    });
+    await expect(client.startThreadRealtime({ threadId: "thread-1", outputModality: "text", voice: "alloy" })).resolves.toEqual({
+      started: true
+    });
+    await expect(
+      client.appendThreadRealtimeAudio({
+        threadId: "thread-1",
+        audio: { data: "AAAA", sampleRate: 24000, numChannels: 1, samplesPerChannel: null, itemId: null }
+      })
+    ).resolves.toEqual({ accepted: true });
+    await expect(client.appendThreadRealtimeText({ threadId: "thread-1", text: "你好", role: "user" })).resolves.toEqual({
+      accepted: true
+    });
+    await expect(client.appendThreadRealtimeSpeech({ threadId: "thread-1", text: "读出来" })).resolves.toEqual({
+      accepted: true
+    });
+    await expect(client.stopThreadRealtime("thread-1")).resolves.toEqual({ stopped: true });
+    await expect(client.listThreadRealtimeVoices()).resolves.toEqual({
+      voices: {
+        v1: ["alloy", "echo"],
+        v2: ["cedar", "marin"],
+        defaultV1: "alloy",
+        defaultV2: "cedar"
+      }
+    });
+
+    expect(peer.calls.slice(-7)).toEqual([
+      {
+        method: "mcpServer/tool/call",
+        params: {
+          threadId: "thread-1",
+          server: "filesystem",
+          tool: "read_file",
+          arguments: { path: "README.md" },
+          _meta: { source: "mobile" }
+        }
+      },
+      {
+        method: "thread/realtime/start",
+        params: {
+          threadId: "thread-1",
+          outputModality: "text",
+          voice: "alloy",
+          architecture: null,
+          codexResponsesAsItems: null,
+          codexResponseItemPrefix: null,
+          model: null,
+          includeStartupContext: null,
+          prompt: null,
+          realtimeSessionId: null,
+          transport: null,
+          version: null
+        }
+      },
+      {
+        method: "thread/realtime/appendAudio",
+        params: {
+          threadId: "thread-1",
+          audio: { data: "AAAA", sampleRate: 24000, numChannels: 1, samplesPerChannel: null, itemId: null }
+        }
+      },
+      { method: "thread/realtime/appendText", params: { threadId: "thread-1", text: "你好", role: "user" } },
+      { method: "thread/realtime/appendSpeech", params: { threadId: "thread-1", text: "读出来" } },
+      { method: "thread/realtime/stop", params: { threadId: "thread-1" } },
+      { method: "thread/realtime/listVoices", params: {} }
     ]);
   });
 });

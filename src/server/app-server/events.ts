@@ -24,6 +24,14 @@ export type BrowserFileSearchResult = {
   indices: number[] | null;
 };
 
+export type BrowserRealtimeAudioChunk = {
+  data: string;
+  sampleRate: number;
+  numChannels: number;
+  samplesPerChannel: number | null;
+  itemId: string | null;
+};
+
 export type BrowserCodexEvent =
   | {
       kind: "agent_message_delta";
@@ -112,6 +120,44 @@ export type BrowserCodexEvent =
   | {
       kind: "file_search_session_completed";
       sessionId: string;
+    }
+  | {
+      kind: "realtime_started";
+      threadId: string;
+      realtimeSessionId: string | null;
+      version: string;
+    }
+  | {
+      kind: "realtime_transcript_delta";
+      threadId: string;
+      role: string;
+      delta: string;
+    }
+  | {
+      kind: "realtime_transcript_done";
+      threadId: string;
+      role: string;
+      text: string;
+    }
+  | {
+      kind: "realtime_output_audio_delta";
+      threadId: string;
+      audio: BrowserRealtimeAudioChunk;
+    }
+  | {
+      kind: "realtime_error";
+      threadId: string;
+      message: string;
+    }
+  | {
+      kind: "realtime_closed";
+      threadId: string;
+      reason: string | null;
+    }
+  | {
+      kind: "external_agent_config_import_completed";
+      importId: string;
+      itemTypeResults: unknown[];
     };
 
 export type BrowserCodexEventEnvelope = {
@@ -126,7 +172,7 @@ type DeltaParams = {
   delta: string;
 };
 
-type DeltaEventKind = Extract<BrowserCodexEvent, { delta: string }>["kind"];
+type DeltaEventKind = Extract<BrowserCodexEvent, { turnId: string; itemId: string; delta: string }>["kind"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -199,6 +245,25 @@ function normalizeFileSearchResult(value: unknown): BrowserFileSearchResult | nu
     matchType,
     score: numberOrZero(value.score),
     indices: Array.isArray(value.indices) ? value.indices.filter((index): index is number => typeof index === "number") : null
+  };
+}
+
+function normalizeRealtimeAudio(value: unknown): BrowserRealtimeAudioChunk | null {
+  if (
+    !isRecord(value) ||
+    typeof value.data !== "string" ||
+    typeof value.sampleRate !== "number" ||
+    typeof value.numChannels !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    data: value.data,
+    sampleRate: value.sampleRate,
+    numChannels: value.numChannels,
+    samplesPerChannel: typeof value.samplesPerChannel === "number" ? value.samplesPerChannel : null,
+    itemId: typeof value.itemId === "string" ? value.itemId : null
   };
 }
 
@@ -409,6 +474,122 @@ export function normalizeAppServerNotification(
       event: {
         kind: "file_search_session_completed",
         sessionId: params.sessionId
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/started") {
+    const params = message.params as { threadId?: unknown; realtimeSessionId?: unknown; version?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.version !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_started",
+        threadId: params.threadId,
+        realtimeSessionId: typeof params.realtimeSessionId === "string" ? params.realtimeSessionId : null,
+        version: params.version
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/transcript/delta") {
+    const params = message.params as { threadId?: unknown; role?: unknown; delta?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.role !== "string" || typeof params.delta !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_transcript_delta",
+        threadId: params.threadId,
+        role: params.role,
+        delta: params.delta
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/transcript/done") {
+    const params = message.params as { threadId?: unknown; role?: unknown; text?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.role !== "string" || typeof params.text !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_transcript_done",
+        threadId: params.threadId,
+        role: params.role,
+        text: params.text
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/outputAudio/delta") {
+    const params = message.params as { threadId?: unknown; audio?: unknown } | null | undefined;
+    const audio = normalizeRealtimeAudio(params?.audio);
+    if (!params || typeof params.threadId !== "string" || !audio) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_output_audio_delta",
+        threadId: params.threadId,
+        audio
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/error") {
+    const params = message.params as { threadId?: unknown; message?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.message !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_error",
+        threadId: params.threadId,
+        message: params.message
+      }
+    };
+  }
+
+  if (message.method === "thread/realtime/closed") {
+    const params = message.params as { threadId?: unknown; reason?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "realtime_closed",
+        threadId: params.threadId,
+        reason: typeof params.reason === "string" ? params.reason : null
+      }
+    };
+  }
+
+  if (message.method === "externalAgentConfig/import/completed") {
+    const params = message.params as { importId?: unknown; itemTypeResults?: unknown } | null | undefined;
+    if (!params || typeof params.importId !== "string" || !Array.isArray(params.itemTypeResults)) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "external_agent_config_import_completed",
+        importId: params.importId,
+        itemTypeResults: params.itemTypeResults
       }
     };
   }

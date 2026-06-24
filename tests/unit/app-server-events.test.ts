@@ -292,6 +292,76 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 realtime notification 映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/realtime/started",
+        params: { threadId: "thread-1", realtimeSessionId: "rt-1", version: "v2" }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "realtime_started", threadId: "thread-1", realtimeSessionId: "rt-1", version: "v2" }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/realtime/transcript/delta",
+        params: { threadId: "thread-1", role: "user", delta: "你" }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "realtime_transcript_delta", threadId: "thread-1", role: "user", delta: "你" }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/realtime/outputAudio/delta",
+        params: {
+          threadId: "thread-1",
+          audio: { data: "AAAA", sampleRate: 24000, numChannels: 1, samplesPerChannel: null, itemId: null }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "realtime_output_audio_delta",
+        threadId: "thread-1",
+        audio: { data: "AAAA", sampleRate: 24000, numChannels: 1, samplesPerChannel: null, itemId: null }
+      }
+    });
+  });
+
+  it("把 external agent config 导入完成 notification 映射为浏览器事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "externalAgentConfig/import/completed",
+        params: {
+          importId: "import-1",
+          itemTypeResults: [
+            {
+              itemType: "AGENTS_MD",
+              successes: [{ itemType: "AGENTS_MD", cwd: "C:\\repo", source: "AGENTS.md", target: ".codex/AGENTS.md" }],
+              failures: []
+            }
+          ]
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "external_agent_config_import_completed",
+        importId: "import-1",
+        itemTypeResults: [
+          {
+            itemType: "AGENTS_MD",
+            successes: [{ itemType: "AGENTS_MD", cwd: "C:\\repo", source: "AGENTS.md", target: ".codex/AGENTS.md" }],
+            failures: []
+          }
+        ]
+      }
+    });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

@@ -85,6 +85,246 @@ export type MobileJsonValue =
   | { [key: string]: MobileJsonValue | undefined }
   | null;
 
+export type MobileEnvironmentAddInput = {
+  environmentId: string;
+  execServerUrl: string;
+};
+
+export type MobileEnvironmentAddResult = {
+  added: boolean;
+};
+
+export type MobileExternalAgentConfigMigrationItem = {
+  itemType: string;
+  description: string;
+  cwd: string | null;
+  details: MobileJsonValue | null;
+};
+
+export type MobileExternalAgentConfigDetectInput = {
+  includeHome?: boolean;
+  cwds?: string[] | null;
+};
+
+export type MobileExternalAgentConfigDetectResult = {
+  items: MobileExternalAgentConfigMigrationItem[];
+};
+
+export type MobileExternalAgentConfigImportInput = {
+  migrationItems: MobileExternalAgentConfigMigrationItem[];
+};
+
+export type MobileExternalAgentConfigImportResult = {
+  importId: string;
+};
+
+export type MobileExternalAgentConfigImportTypeResult = {
+  itemType: string;
+  successes: Array<{
+    itemType: string;
+    cwd: string | null;
+    source: string | null;
+    target: string | null;
+  }>;
+  failures: Array<{
+    itemType: string;
+    failureStage: string;
+    message: string;
+    cwd: string | null;
+    source: string | null;
+  }>;
+};
+
+export type MobileFeedbackUploadInput = {
+  classification: string;
+  reason?: string | null;
+  threadId?: string | null;
+  includeLogs?: boolean;
+  extraLogFiles?: string[] | null;
+  tags?: Record<string, string> | null;
+};
+
+export type MobileFeedbackUploadResult = {
+  threadId: string;
+};
+
+export type MobileMarketplaceAddInput = {
+  source: string;
+  refName?: string | null;
+  sparsePaths?: string[] | null;
+};
+
+export type MobileMarketplaceAddResult = {
+  marketplaceName: string;
+  installedRoot: string;
+  alreadyAdded: boolean;
+};
+
+export type MobileMarketplaceRemoveResult = {
+  marketplaceName: string;
+  installedRoot: string | null;
+};
+
+export type MobileMarketplaceUpgradeResult = {
+  selectedMarketplaces: string[];
+  upgradedRoots: string[];
+  errors: Array<{
+    marketplaceName: string;
+    message: string;
+  }>;
+};
+
+export type MobilePluginInstalledInput = {
+  cwds?: string[] | null;
+  installSuggestionPluginNames?: string[] | null;
+};
+
+export type MobilePluginInstalledResult = {
+  marketplaces: MobileJsonValue[];
+  marketplaceLoadErrors: MobileJsonValue[];
+};
+
+export type MobilePluginShareTarget = {
+  principalType: string;
+  principalId: string;
+  role: string;
+};
+
+export type MobilePluginShareSaveInput = {
+  pluginPath: string;
+  remotePluginId?: string | null;
+  discoverability?: string | null;
+  shareTargets?: MobilePluginShareTarget[] | null;
+};
+
+export type MobilePluginShareSaveResult = {
+  remotePluginId: string;
+  shareUrl: string;
+};
+
+export type MobilePluginShareUpdateTargetsInput = {
+  remotePluginId: string;
+  discoverability: string;
+  shareTargets: MobilePluginShareTarget[];
+};
+
+export type MobilePluginShareUpdateTargetsResult = {
+  principals: MobileJsonValue[];
+  discoverability: string;
+};
+
+export type MobilePluginShareListResult = {
+  data: MobileJsonValue[];
+};
+
+export type MobilePluginShareCheckoutResult = {
+  remotePluginId: string;
+  pluginId: string;
+  pluginName: string;
+  pluginPath: string;
+  marketplaceName: string;
+  marketplacePath: string;
+  remoteVersion: string | null;
+};
+
+export type MobilePluginShareDeleteResult = {
+  deleted: boolean;
+};
+
+export type MobileMcpToolCallInput = {
+  threadId: string;
+  server: string;
+  tool: string;
+  arguments?: MobileJsonValue;
+  meta?: MobileJsonValue;
+};
+
+export type MobileMcpToolCallResult = {
+  content: MobileJsonValue[];
+  structuredContent?: MobileJsonValue;
+  isError: boolean;
+  meta?: MobileJsonValue;
+};
+
+export type MobileRealtimeOutputModality = "text" | "audio";
+export type MobileRealtimeVoice =
+  | "alloy"
+  | "arbor"
+  | "ash"
+  | "ballad"
+  | "breeze"
+  | "cedar"
+  | "coral"
+  | "cove"
+  | "echo"
+  | "ember"
+  | "juniper"
+  | "maple"
+  | "marin"
+  | "sage"
+  | "shimmer"
+  | "sol"
+  | "spruce"
+  | "vale"
+  | "verse";
+export type MobileRealtimeConversationVersion = "v1" | "v2";
+export type MobileRealtimeConversationArchitecture = "realtimeapi" | "avas";
+export type MobileConversationTextRole = "user" | "developer";
+
+export type MobileThreadRealtimeAudioChunk = {
+  data: string;
+  sampleRate: number;
+  numChannels: number;
+  samplesPerChannel: number | null;
+  itemId: string | null;
+};
+
+export type MobileThreadRealtimeStartInput = {
+  threadId: string;
+  outputModality: MobileRealtimeOutputModality;
+  architecture?: MobileRealtimeConversationArchitecture | null;
+  codexResponsesAsItems?: boolean | null;
+  codexResponseItemPrefix?: string | null;
+  model?: string | null;
+  includeStartupContext?: boolean | null;
+  prompt?: string | null;
+  realtimeSessionId?: string | null;
+  transport?: MobileJsonValue | null;
+  version?: MobileRealtimeConversationVersion | null;
+  voice?: MobileRealtimeVoice | null;
+};
+
+export type MobileThreadRealtimeStatusResult = {
+  started?: boolean;
+  stopped?: boolean;
+  accepted?: boolean;
+};
+
+export type MobileThreadRealtimeAppendAudioInput = {
+  threadId: string;
+  audio: MobileThreadRealtimeAudioChunk;
+};
+
+export type MobileThreadRealtimeAppendTextInput = {
+  threadId: string;
+  text: string;
+  role: MobileConversationTextRole;
+};
+
+export type MobileThreadRealtimeAppendSpeechInput = {
+  threadId: string;
+  text: string;
+};
+
+export type MobileThreadRealtimeVoicesResult = {
+  voices: {
+    v1: MobileRealtimeVoice[];
+    v2: MobileRealtimeVoice[];
+    defaultV1: MobileRealtimeVoice;
+    defaultV2: MobileRealtimeVoice;
+  };
+};
+
 export type MobileThreadMetadataUpdateInput = {
   threadId: string;
   gitInfo?: {
