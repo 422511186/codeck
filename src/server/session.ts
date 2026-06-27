@@ -23,6 +23,15 @@ export function createSessionCookie(accessToken: string, cookieSecret: string): 
   });
 }
 
+export function clearSessionCookie(): string {
+  return serialize(COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0
+  });
+}
+
 export function readSessionCookie(
   cookieHeader: string | null | undefined,
   cookieSecret: string
