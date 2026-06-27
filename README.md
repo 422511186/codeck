@@ -1,32 +1,55 @@
-# Codex Web 后端
+# Codex Web
 
-这是 Codex app-server 协议的 Web 后端代理。当前仓库已移除所有前端页面、React 组件、移动端 UI 原型、视觉审计和浏览器 E2E 测试，只保留后端 API、WebSocket、鉴权、安全边界、审计日志和协议适配层。
+这是 Codex app-server 协议的 Web 后端代理 + 移动端 Web 前端。
 
 ## 产品边界
 
-- 当前范围不包含任何前端界面。
+- **后端**：Node.js / TypeScript 安全代理，桥接外部调用方到后端机器上的 Codex app-server。
+- **前端**：移动端 Web UI（React 19 + Next.js 16 app router），支持项目管理、会话列表、会话聊天、agent 输出渲染、审批、Plan/Build 切换、模型选择、设置。
 - 不重新实现 Codex agent，执行、权限、会话和工具行为仍交给 Codex app-server。
 - 外部调用方不直接连接 app-server，而是通过本项目后端做安全代理。
-- 后续如果重新建设移动端 Web，需要重新创建设计和实现计划。
 
 ## 技术架构
 
 ```text
-外部调用方
-  -> Node.js / TypeScript Web 后端
+移动端浏览器
+  -> Next.js Web 前端 (React 19)
+  -> Node.js / TypeScript Web 后端 (API + WebSocket)
   -> Codex app-server 协议适配层
   -> 后端机器上的 codex app-server
 ```
 
 核心技术选择：
 
-- 后端：Node.js、TypeScript。
+- 后端：Node.js、TypeScript、Next.js 自定义 server。
+- 前端：React 19、Next.js 16 app router、Zustand、react-markdown + mermaid。
 - API 路由：Next.js route handlers，经自定义 Node server 承载。
 - 协议：Codex app-server JSON-RPC/WebSocket。
 - 状态存储：个人模式不使用数据库；配置走环境变量，运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
 - 登录方式：优先使用后端配置的 `CODEX_WEB_ACCESS_TOKEN`；如果没有配置，后端启动时自动生成一个随机长 token 并打印到控制台。
 
-## 当前保留能力
+## 前端能力
+
+- **路由**：
+  - `/login`：token 登录
+  - `/projects`：项目列表（localStorage 管理，按 `cwd` 聚合会话）
+  - `/projects/[projectId]`：项目内会话列表（进行中 / 已归档）
+  - `/threads/[threadId]`：会话页（timeline + 输入 + Plan/Build + 模型切换 + 底部抽屉）
+  - `/settings`：默认模型与模式、账号状态、Token 用量、登出
+- **核心交互**：
+  - 会话 timeline：用户消息 + agent 消息（markdown + mermaid）+ 折叠卡片（命令/diff/推理/MCP/系统消息/错误）
+  - 历史无限滚动 + 自动滚策略 + 「跳到最新」浮动按钮
+  - WS 增量更新 + 断线重连 + 全量回填
+  - 审批卡片：command_approval / file_approval / permissions_approval / question / mcp_elicitation / dynamic_tool
+  - 输入区：单行 + 全屏 ⤢ + 相册单图 + 上传进度/重试 + send/interrupt/resend ↺ + 草稿持久化
+  - Plan/Build segmented + 模型选择器 + 底部抽屉（重命名/归档/压缩/Fork）
+  - Plan 末尾「转 Build 执行」按钮 + 会话名自动生成（首句）
+- **localStorage 命名空间**：`codex-web:`
+  - `codex-web:projects`：项目列表 `{ id, name, path, addedAt, lastUsedAt }[]`
+  - `codex-web:settings`：默认模型与模式 `{ defaultModel, defaultMode }`
+  - `codex-web:drafts`：草稿 `{ [threadId]: string }`
+
+## 后端能力
 
 - 个人 token 登录和签名 session cookie。
 - app-server JSON-RPC adapter 和连接管理。

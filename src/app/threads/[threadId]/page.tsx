@@ -118,6 +118,16 @@ export default function ThreadPage(): JSX.Element {
           model: threadState?.model ?? detail.modelProvider,
           permissions: permissionsForMode(mode)
         });
+        // Auto-name thread after first user message
+        if ((!detail.title || detail.title === "新会话") && text.trim()) {
+          try {
+            const firstLine = text.split("\n")[0].slice(0, 80);
+            const updated = await codex.renameThread(threadId, firstLine);
+            setDetail(updated);
+          } catch {
+            // ignore auto-name failure
+          }
+        }
       } catch (err) {
         setRunning(threadId, false);
         throw err;
@@ -246,6 +256,36 @@ export default function ThreadPage(): JSX.Element {
         />
         {running ? (
           <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>正在生成…</div>
+        ) : null}
+        {mode === "plan" && !running && entries.length > 0 ? (
+          <div style={{ textAlign: "center", padding: 16 }}>
+            <button
+              type="button"
+              onClick={async () => {
+                onToggleMode("build");
+                try {
+                  const lastUserMsg = entries
+                    .slice()
+                    .reverse()
+                    .find((e) => e.body.kind === "user-message");
+                  const text = lastUserMsg ? (lastUserMsg.body as any).text : "请按上面的计划开始执行";
+                  await onSend(text, []);
+                } catch (err) {
+                  console.warn("execute plan failed", err);
+                }
+              }}
+              style={{
+                padding: "10px 20px",
+                borderRadius: 12,
+                border: "none",
+                background: "var(--cw-accent)",
+                color: "#fff",
+                fontSize: 15
+              }}
+            >
+              转 Build 执行
+            </button>
+          </div>
         ) : null}
       </div>
 

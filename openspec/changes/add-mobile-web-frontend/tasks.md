@@ -98,14 +98,14 @@
 
 - [x] 10.1 实现头部 Plan/Build segmented：每会话独立；状态存内存 + 同步到后端会话设置（`POST /api/codex/threads/:threadId/settings`）；切换只影响下一条 turn。
 - [x] 10.2 实现新会话默认 Build；不做发送时二次确认。
-- [ ] 10.3 实现 Plan 末尾「转 Build 执行」按钮：点击 → 切换 Plan/Build + 自动追加重新执行；只显示薄警告标识，不弹确认对话框。
+- [x] 10.3 实现 Plan 末尾「转 Build 执行」按钮：点击 → 切换 Plan/Build + 自动追加重新执行；只显示薄警告标识，不弹确认对话框。
 - [x] 10.4 实现头部模型显示 + 切换：点击进入模型选择器；每次打开切换器时调用 `GET /api/codex/models` 拉最新列表；选择后调用 `threads/:threadId/settings` 更新会话模型。
 - [x] 10.5 实现 ⋮ → 底部抽屉：重命名 / 归档 / 压缩上下文 / Fork。
 - [x] 10.6 实现「重命名」弹窗输入：调用 `POST /api/codex/threads/:threadId/name`。
 - [x] 10.7 实现「归档」：抽屉立刻关闭 + 底部 toast +「撤销」按钮（调用 `unarchive`）；列表立即移除。
 - [x] 10.8 实现「压缩上下文」：弹确认对话框 → 调用 `POST /api/codex/threads/:threadId/compact`；进行中禁用输入框；完成后 timeline 插入系统消息。
 - [x] 10.9 实现「Fork」：点即调用 `POST /api/codex/threads/:threadId/fork`，继承原会话 Plan/Build 和模型；跳转到新会话。
-- [ ] 10.10 实现会话名自动生成：第一条 user 消息发送成功后，用首句调用 `threads/:threadId/name` 写入名字；之前在列表里显示「新会话」占位。
+- [x] 10.10 实现会话名自动生成：第一条 user 消息发送成功后，用首句调用 `threads/:threadId/name` 写入名字；之前在列表里显示「新会话」占位。
 - [ ] 10.11 写组件测试：Plan/Build 切换、模型切换、底部抽屉各项、归档 + 撤销、压缩上下文流程。
 
 ## 11. settings-minimal（设置页）
@@ -125,4 +125,4 @@
 - [ ] 12.4 主题：分别用 `prefers-color-scheme: light` 和 `dark` 模拟，确认颜色 token 在两种主题下都可读、对比度足够。
 - [ ] 12.5 真机回归：在 iOS Safari 和 Android Chrome 上至少各跑一次「全流程端到端」。
 - [x] 12.6 跑 `npm run verify`：TypeScript 类型 + 单元测试通过。
-- [ ] 12.7 更新 `README.md` / `docs/backend-api.md`：把前端入口、路由、localStorage key 命名空间补到文档；标注哪些后端 API 在 v1 前端中未使用，作为未来可扩展点。
+- [x] 12.7 更新 `README.md` / `docs/backend-api.md`：把前端入口、路由、localStorage key 命名空间补到文档；标注哪些后端 API 在 v1 前端中未使用，作为未来可扩展点。
