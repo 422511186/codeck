@@ -28,7 +28,7 @@
 ## 4. project-management（项目页）
 
 - [x] 4.1 设计 localStorage 项目数据形态：`{ id, path, alias, addedAt, lastUsedAt }[]`。在 `src/web/storage/projects.ts` 中实现 CRUD。
-- [ ] 4.2 为项目存储写单元测试：添加去重（path 相同视为同一个项目）、移除、重命名、更新 lastUsedAt、按 lastUsedAt 倒序读取。
+- [x] 4.2 为项目存储写单元测试：添加去重（path 相同视为同一个项目）、移除、重命名、更新 lastUsedAt、按 lastUsedAt 倒序读取。
 - [x] 4.3 实现 `app/(mobile)/projects/page.tsx`：列表（路径 + 时间 + 会话数）、悬浮 + 按钮、长按出菜单（重命名 / 移除）、空状态（插画 + 大按钮）、右上角 ⚙️。
 - [x] 4.4 实现「会话数」获取：调用 `GET /api/codex/threads?cwd=<path>` 或本地聚合（依据后端最终能力，必要时在 design 层补一段约定）。
 - [x] 4.5 实现「添加项目」交互：手输路径，提交时调用 `GET /api/codex/threads?cwd=<path>` 进行 allowlist 校验；成功后写入 localStorage、跳到该项目会话列表。

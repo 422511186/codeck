@@ -15,17 +15,35 @@ function resetRuntimeGlobals(): void {
 async function setupRouteTest(): Promise<string> {
   vi.resetModules();
   resetRuntimeGlobals();
+
+  const tmpDir = await mkdtemp(join(tmpdir(), "codex-web-route-"));
   process.env.CODEX_WEB_ACCESS_TOKEN = "test-secret";
   process.env.CODEX_WEB_APP_SERVER_MODE = "mock";
-  process.env.CODEX_WEB_AUDIT_LOG_PATH = join(await mkdtemp(join(tmpdir(), "codex-web-route-")), "audit.jsonl");
+  process.env.CODEX_WEB_AUDIT_LOG_PATH = join(tmpDir, "audit.jsonl");
+
+  // Force runtime config to re-initialize with test env vars
+  const { createRuntimeConfig } = await import("../../src/config/env");
+  const globalForRuntime = globalThis as typeof globalThis & {
+    __codexWebRuntimeConfig?: unknown;
+  };
+  globalForRuntime.__codexWebRuntimeConfig = createRuntimeConfig(process.env);
+
   const { createSessionCookie } = await import("../../src/server/session");
-  return createSessionCookie("mobile", "test-secret");
+  return createSessionCookie("test-secret", "test-secret");
+}
+
+function extractCookieValue(setCookieString: string): string {
+  // Extract just the cookie value from a Set-Cookie string
+  // Input: "codex_web_session=VALUE; Max-Age=...; Path=/; ..."
+  // Output: "codex_web_session=VALUE"
+  const match = setCookieString.match(/^([^;]+)/);
+  return match ? match[1] : setCookieString;
 }
 
 function jsonRequest(pathname: string, body: unknown, cookie?: string): Request {
   const headers = new Headers({ "content-type": "application/json" });
   if (cookie) {
-    headers.set("cookie", cookie);
+    headers.set("cookie", extractCookieValue(cookie));
   }
 
   return new Request(`http://localhost${pathname}`, {
@@ -38,7 +56,7 @@ function jsonRequest(pathname: string, body: unknown, cookie?: string): Request 
 function getRequest(pathname: string, cookie?: string): Request {
   const headers = new Headers();
   if (cookie) {
-    headers.set("cookie", cookie);
+    headers.set("cookie", extractCookieValue(cookie));
   }
 
   return new Request(`http://localhost${pathname}`, { method: "GET", headers });
@@ -62,7 +80,9 @@ describe("剩余 app-server 协议 route", () => {
     const cookie = await setupRouteTest();
     const { POST } = await import("../../src/app/api/codex/feedback/upload/route");
 
-    const response = await POST(jsonRequest("/api/codex/feedback/upload", { reason: "缺少 classification" }, cookie));
+    const response = await POST(
+      jsonRequest("/api/codex/feedback/upload", { reason: "缺少 classification" }, cookie)
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ ok: false, error: "classification 不能为空" });
