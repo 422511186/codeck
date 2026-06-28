@@ -13,13 +13,21 @@ export async function POST(
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { turnId?: string };
-    if (!body.turnId) {
-      return NextResponse.json({ ok: false, error: "turnId 不能为空" }, { status: 400 });
+    const body = (await request.json().catch(() => ({}))) as { turnId?: string };
+    const gateway = getAppServerGateway();
+    let turnId = typeof body.turnId === "string" ? body.turnId.trim() : "";
+
+    if (!turnId) {
+      const thread = await gateway.readThread(threadId);
+      turnId = thread.lastTurnId ?? "";
     }
 
-    await audit("turn.interrupt", { threadId, turnId: body.turnId });
-    await getAppServerGateway().interruptTurn(threadId, body.turnId);
+    if (!turnId) {
+      return NextResponse.json({ ok: false, error: "暂无可中断的 turn" }, { status: 409 });
+    }
+
+    await audit("turn.interrupt", { threadId, turnId });
+    await gateway.interruptTurn(threadId, turnId);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

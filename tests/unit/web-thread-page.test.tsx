@@ -315,6 +315,78 @@ describe("ThreadPage", () => {
     );
   });
 
+  it("should interrupt the active turn id instead of only toggling local running state", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("中断"));
+
+    expect(mockInterruptTurn).toHaveBeenCalledWith("thread-1", "turn-running");
+    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+  });
+
+  it("should keep running state when interrupt fails", async () => {
+    const user = userEvent.setup();
+    mockInterruptTurn.mockRejectedValueOnce(new ApiError("turnId 不能为空", 400));
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("中断"));
+
+    expect(mockSetRunning).not.toHaveBeenCalledWith("thread-1", false);
+    expect(mockAppendEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ body: { kind: "error", text: "中断失败：turnId 不能为空" } })]
+    );
+  });
+
   it("should load more history when cursor available", async () => {
     mockThreadState.mockReturnValue({
       entries: [

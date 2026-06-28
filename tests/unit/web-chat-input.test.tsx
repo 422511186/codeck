@@ -102,15 +102,111 @@ describe("ChatInput", () => {
     expect(screen.queryByText("重试")).not.toBeInTheDocument();
   });
 
-  it("replaces send with interrupt and disables input while running", async () => {
+  it("shows a running status bar with only the interrupt action while running", async () => {
     const user = userEvent.setup();
     const onInterrupt = vi.fn().mockResolvedValue(undefined);
-    renderInput({ running: true, onInterrupt });
+    renderInput({ running: true, onInterrupt, canResendLast: true });
 
-    expect(screen.getByPlaceholderText("agent 正在运行…")).toBeDisabled();
+    expect(screen.getByText("正在生成…")).toBeInTheDocument();
+    expect(screen.getByLabelText("中断")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("全屏编辑")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
+
     await user.click(screen.getByLabelText("中断"));
 
     expect(onInterrupt).toHaveBeenCalled();
+  });
+
+  it("sends with Enter from the inline composer and clears the draft", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    await user.type(composer, "hello from keyboard");
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    expect(onSend).toHaveBeenCalledWith("hello from keyboard", []);
+    await waitFor(() => expect(composer).toHaveValue(""));
+    expect(localStorage.getItem("codex-web:drafts")).toBe("{}");
+  });
+
+  it("does not send with Enter when the inline composer cannot send", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { container, rerender, props } = renderInput({ onSend });
+
+    const blankComposer = screen.getByPlaceholderText("输入消息");
+    fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["image"], "image.png", { type: "image/png" })] }
+    });
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalled());
+    await waitFor(() => expect(container.querySelector("img")).toBeInTheDocument());
+
+    fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+
+    rerender(<ChatInput {...props} running />);
+    expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps Enter as newline inside the fullscreen editor", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    await user.click(screen.getByLabelText("全屏编辑"));
+    const editors = screen.getAllByRole("textbox");
+    const fullscreenEditor = editors[editors.length - 1];
+
+    await user.type(fullscreenEditor, "line one");
+    fireEvent.keyDown(fullscreenEditor, { key: "Enter", code: "Enter" });
+    fireEvent.change(fullscreenEditor, { target: { value: "line one\nline two" } });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(fullscreenEditor).toHaveValue("line one\nline two");
+  });
+
+  it("keeps the image entry visible in the idle composer and replaces the selected image", async () => {
+    const { container } = renderInput();
+
+    expect(screen.getByLabelText("添加图片")).toBeInTheDocument();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    fireEvent.change(input, {
+      target: { files: [new File(["image-one"], "one.png", { type: "image/png" })] }
+    });
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
+
+    fireEvent.change(input, {
+      target: { files: [new File(["image-two"], "two.png", { type: "image/png" })] }
+    });
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
+  });
+
+  it("resends the last user message only from the idle composer", async () => {
+    const user = userEvent.setup();
+    const onResendLast = vi.fn().mockResolvedValue("previous message");
+    const { rerender, props } = renderInput({ canResendLast: true, onResendLast });
+
+    await user.click(screen.getByLabelText("重发上一条"));
+
+    expect(onResendLast).toHaveBeenCalled();
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("previous message");
+
+    rerender(<ChatInput {...props} running />);
+
+    expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
   });
 
   it("sends fullscreen editor text instead of the stale inline value", async () => {

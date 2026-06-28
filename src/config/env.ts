@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
+import nextEnv from "@next/env";
 
 export type RuntimeConfig = {
   accessToken: string;
@@ -31,6 +32,10 @@ export type AppServerConfig =
   | {
       mode: "off";
     };
+
+export function loadRuntimeEnvConfig(projectDir = process.cwd(), dev = process.env.NODE_ENV !== "production"): void {
+  nextEnv.loadEnvConfig(projectDir, dev);
+}
 
 function generateAccessToken(): string {
   return `sk-${randomBytes(32).toString("base64url")}`;

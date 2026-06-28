@@ -299,13 +299,18 @@ export default function ThreadPage(): JSX.Element {
 
   const onInterrupt = useCallback(async () => {
     try {
-      await codex.interruptTurn(threadId);
-    } catch {
-      // surface via toast handled by caller
-    } finally {
+      await codex.interruptTurn(threadId, detail?.lastTurnId ?? undefined);
       setRunning(threadId, false);
+    } catch (err) {
+      appendEntries(threadId, [
+        {
+          id: `interrupt-error-${Date.now()}`,
+          createdAt: Date.now(),
+          body: { kind: "error", text: `中断失败：${errorMessage(err)}` }
+        }
+      ]);
     }
-  }, [threadId, setRunning]);
+  }, [threadId, detail?.lastTurnId, appendEntries, setRunning]);
 
   const openModelPicker = useCallback(async () => {
     setShowModelPicker(true);
@@ -908,7 +913,7 @@ const scrollStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
   padding: "12px",
-  paddingBottom: "calc(112px + var(--safe-bottom))",
+  paddingBottom: "calc(144px + var(--safe-bottom))",
   display: "flex",
   flexDirection: "column",
   gap: 10
@@ -917,7 +922,7 @@ const scrollStyle: React.CSSProperties = {
 const jumpBtn: React.CSSProperties = {
   position: "absolute",
   right: 16,
-  bottom: 96,
+  bottom: "calc(128px + var(--safe-bottom))",
   background: "var(--cw-card)",
   border: "1px solid var(--cw-border)",
   color: "var(--cw-fg)",
@@ -977,7 +982,7 @@ const toastStyle: React.CSSProperties = {
   position: "fixed",
   left: "50%",
   transform: "translateX(-50%)",
-  bottom: 92,
+  bottom: "calc(128px + var(--safe-bottom))",
   background: "var(--cw-card)",
   border: "1px solid var(--cw-border)",
   borderRadius: 10,

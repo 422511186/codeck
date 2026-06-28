@@ -1,9 +1,12 @@
 import { createServer } from "node:http";
 import next from "next";
+import { loadRuntimeEnvConfig } from "../config/env";
 import { getAppServerGateway } from "./app-server/runtime";
 import { isCookieHeaderAuthenticated } from "./auth";
 import { getRuntimeConfig } from "./runtime";
 import { attachBrowserWebSocket } from "./ws";
+
+loadRuntimeEnvConfig();
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });

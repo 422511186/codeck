@@ -1,5 +1,12 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { createRuntimeConfig } from "../../src/config/env";
+import { createRuntimeConfig, loadRuntimeEnvConfig } from "../../src/config/env";
+
+const execFileAsync = promisify(execFile);
 
 describe("createRuntimeConfig", () => {
   it("优先使用显式配置的登录 token", () => {
@@ -69,5 +76,40 @@ describe("createRuntimeConfig", () => {
     }
     expect(config.appServer.codexBin).toBe("codex");
     expect(config.appServer.host).toBe("127.0.0.1");
+  });
+
+  it("从项目 .env 加载运行时配置", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "codex-web-env-"));
+    const previousPort = process.env.CODEX_WEB_BIND_PORT;
+    delete process.env.CODEX_WEB_BIND_PORT;
+
+    try {
+      await writeFile(join(dir, ".env"), "CODEX_WEB_BIND_PORT=3999\n", "utf8");
+
+      loadRuntimeEnvConfig(dir, false);
+
+      expect(process.env.CODEX_WEB_BIND_PORT).toBe("3999");
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.CODEX_WEB_BIND_PORT;
+      } else {
+        process.env.CODEX_WEB_BIND_PORT = previousPort;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("可通过 tsx 运行时导入 env 模块", async () => {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"),
+        "-e",
+        "import('./src/config/env.ts').then((mod) => console.log(typeof mod.loadRuntimeEnvConfig))"
+      ],
+      { cwd: process.cwd() }
+    );
+
+    expect(stdout.trim()).toBe("function");
   });
 });

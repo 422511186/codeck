@@ -92,23 +92,33 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
   }
 
+  function onInlineKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (canSend) {
+      void send();
+    }
+  }
+
+  if (props.running) {
+    return (
+      <div style={barStyle}>
+        <div style={runningRowStyle}>
+          <div style={runningStatusStyle} role="status" aria-live="polite">
+            <span style={pulseDotStyle} aria-hidden="true" />
+            <span>正在生成…</span>
+          </div>
+          <button type="button" onClick={() => props.onInterrupt()} style={interruptBtn} aria-label="中断">
+            <StopIcon />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
-      <div
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          padding: "8px 10px calc(8px + var(--safe-bottom))",
-          background: "var(--cw-bg)",
-          borderTop: "1px solid var(--cw-border)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-          zIndex: 20
-        }}
-      >
+      <div style={barStyle}>
         {image ? <ImageThumb image={image} onRemove={() => setImage(null)} onRetry={retryImage} /> : null}
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
@@ -129,7 +139,8 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={props.running ? "agent 正在运行…" : "输入消息"}
+            onKeyDown={onInlineKeyDown}
+            placeholder="输入消息"
             rows={1}
             style={textareaStyle}
             disabled={disabled}
@@ -148,21 +159,15 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
               <RefreshIcon />
             </button>
           ) : null}
-          {props.running ? (
-            <button type="button" onClick={() => props.onInterrupt()} style={interruptBtn} aria-label="中断">
-              <StopIcon />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => send()}
-              disabled={!canSend}
-              style={{ ...sendBtn, opacity: canSend ? 1 : 0.4 }}
-              aria-label="发送"
-            >
-              <SendIcon />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => send()}
+            disabled={!canSend}
+            style={{ ...sendBtn, opacity: canSend ? 1 : 0.4 }}
+            aria-label="发送"
+          >
+            <SendIcon />
+          </button>
         </div>
       </div>
 
@@ -295,6 +300,45 @@ function FullscreenEditor({
     </div>
   );
 }
+
+const barStyle: React.CSSProperties = {
+  position: "fixed",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  padding: "8px 10px calc(8px + var(--safe-bottom))",
+  background: "var(--cw-bg)",
+  borderTop: "1px solid var(--cw-border)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  zIndex: 20
+};
+
+const runningStatusStyle: React.CSSProperties = {
+  minHeight: 40,
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  paddingLeft: 12,
+  color: "var(--cw-fg-muted)",
+  fontSize: 14
+};
+
+const runningRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12
+};
+
+const pulseDotStyle: React.CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: 4,
+  background: "var(--cw-accent)",
+  boxShadow: "0 0 0 4px color-mix(in srgb, var(--cw-accent) 16%, transparent)"
+};
 
 const iconBtn: React.CSSProperties = {
   width: 36,
