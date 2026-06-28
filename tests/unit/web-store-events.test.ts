@@ -140,4 +140,29 @@ describe("web store codex events", () => {
       })
     ]);
   });
+
+  it("normalizes pending server requests restored from the HTTP API", () => {
+    useStore.getState().setPendingRequests([
+      {
+        requestId: "req-question",
+        threadId: "thread-1",
+        kind: "question",
+        title: "需要你回答",
+        description: "请选择模式",
+        options: [{ value: "fast", label: "快速" }],
+        params: {
+          questions: [{ id: "mode", question: "请选择模式" }]
+        }
+      }
+    ]);
+
+    expect(useStore.getState().threads["thread-1"]?.pendingApprovals).toEqual([
+      expect.objectContaining({
+        requestId: "req-question",
+        request: {
+          questions: [{ id: "mode", question: "请选择模式" }]
+        }
+      })
+    ]);
+  });
 });

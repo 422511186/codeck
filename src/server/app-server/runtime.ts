@@ -103,6 +103,7 @@ import {
 import type { AppServerNotificationMessage, BrowserCodexEventEnvelope } from "./events";
 import { normalizeAppServerNotification } from "./events";
 import {
+  buildPendingServerRequestResponse,
   normalizePendingServerRequest,
   type AppServerServerRequestMessage,
   type BrowserServerRequestEvent,
@@ -2411,10 +2412,20 @@ export class AppServerGateway {
     return [...this.pendingServerRequests.values()];
   }
 
-  async resolveServerRequest(requestId: number, response: unknown): Promise<void> {
-    if (!this.pendingServerRequests.has(requestId)) {
+  async resolveServerRequest(
+    requestId: number,
+    value: string,
+    options?: { response?: unknown }
+  ): Promise<void> {
+    const request = this.pendingServerRequests.get(requestId);
+    if (!request) {
       throw new Error("找不到待处理请求");
     }
+
+    const response =
+      options && Object.prototype.hasOwnProperty.call(options, "response")
+        ? options.response
+        : buildPendingServerRequestResponse(request, value);
 
     await this.peer.respondToServerRequest(requestId, response);
     this.pendingServerRequests.delete(requestId);

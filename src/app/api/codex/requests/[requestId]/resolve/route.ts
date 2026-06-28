@@ -18,9 +18,18 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "requestId 无效" }, { status: 400 });
     }
 
-    const body = (await request.json()) as { response?: unknown };
-    await audit("request.resolve", { requestId: id, response: body.response });
-    await getAppServerGateway().resolveServerRequest(id, body.response);
+    const body = (await request.json()) as { value?: unknown; response?: unknown };
+    const hasRawResponse = Object.prototype.hasOwnProperty.call(body, "response");
+    if (!hasRawResponse && typeof body.value !== "string") {
+      return NextResponse.json({ ok: false, error: "value 无效" }, { status: 400 });
+    }
+
+    await audit("request.resolve", hasRawResponse ? { requestId: id, mode: "raw" } : { requestId: id, value: body.value });
+    await getAppServerGateway().resolveServerRequest(
+      id,
+      typeof body.value === "string" ? body.value : "",
+      hasRawResponse ? { response: body.response } : undefined
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

@@ -194,19 +194,21 @@ export const useStore = create<State & Actions>((set, get) => ({
     }),
   addApproval: (threadId, req) =>
     set((state) => {
+      const normalizedReq = normalizePendingRequest(req);
       const prev = state.threads[threadId] ?? emptyThread();
-      if (prev.pendingApprovals.some((r) => r.requestId === req.requestId)) return state;
+      if (prev.pendingApprovals.some((r) => r.requestId === normalizedReq.requestId)) return state;
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, pendingApprovals: [...prev.pendingApprovals, req] }
+          [threadId]: { ...prev, pendingApprovals: [...prev.pendingApprovals, normalizedReq] }
         }
       };
     }),
   setPendingRequests: (reqs) =>
     set((state) => {
       const byThread = new Map<string, PendingServerRequest[]>();
-      for (const r of reqs) {
+      for (const raw of reqs) {
+        const r = normalizePendingRequest(raw);
         const tid = r.threadId ?? "_global";
         const list = byThread.get(tid) ?? [];
         list.push(r);
@@ -382,7 +384,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return;
     }
     if (event.type === "server-request") {
-      const req = event.request as PendingServerRequest;
+      const req = normalizePendingRequest(event.request as PendingServerRequest);
       const tid = req.threadId ?? "_global";
       get().ensureThread(tid);
       get().addApproval(tid, req);
@@ -398,3 +400,11 @@ export const useStore = create<State & Actions>((set, get) => ({
 }));
 
 export const useAppStore = useStore;
+
+function normalizePendingRequest(req: PendingServerRequest): PendingServerRequest {
+  return {
+    ...req,
+    requestId: String(req.requestId),
+    request: req.request ?? (typeof req.params === "object" && req.params !== null ? (req.params as Record<string, unknown>) : {})
+  };
+}

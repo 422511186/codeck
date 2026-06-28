@@ -5,7 +5,6 @@ import { isValidElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import "highlight.js/styles/github-dark.css";
 
 type Props = { text: string };
 
@@ -72,12 +71,14 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
           position: "absolute",
           top: 6,
           right: 6,
-          padding: "2px 8px",
-          fontSize: 11,
+          minHeight: 28,
+          padding: "3px 9px",
+          fontSize: 12,
           borderRadius: 6,
-          border: "1px solid var(--cw-border)",
+          border: "1px solid var(--cw-border-strong)",
           background: "var(--cw-bg-overlay)",
-          color: "var(--cw-fg)"
+          color: "var(--cw-fg)",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.12)"
         }}
       >
         {copied ? "已复制" : "复制"}
@@ -92,10 +93,19 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
           border: "1px solid var(--cw-code-border)",
           fontFamily: "var(--font-mono)",
           fontSize: 12,
-          overflowX: "auto"
+          overflowX: "auto",
+          paddingRight: 72
         }}
       >
-        <code className={className}>{code}</code>
+        <code
+          className={className}
+          style={{
+            background: "transparent",
+            color: "inherit"
+          }}
+        >
+          {code}
+        </code>
       </pre>
     </div>
   );

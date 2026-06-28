@@ -16,7 +16,7 @@ import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 type Props = {
   entries: TimelineEntry[];
   approvals?: PendingServerRequest[];
-  onResolveApproval?: (req: PendingServerRequest, decision: string) => Promise<void>;
+  onResolveApproval?: (req: PendingServerRequest, value: string) => Promise<void>;
   onResendUser?: (text: string) => void;
 };
 
@@ -37,8 +37,8 @@ export function Timeline({ entries, approvals, onResolveApproval, onResendUser }
           <ApprovalCard
             key={approval.requestId}
             approval={approval}
-            onResolved={async (decision) => {
-              if (onResolveApproval) await onResolveApproval(approval, decision);
+            onResolved={async (value) => {
+              if (onResolveApproval) await onResolveApproval(approval, value);
             }}
           />
         ))}

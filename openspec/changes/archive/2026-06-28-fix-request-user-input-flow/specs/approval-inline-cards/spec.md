@@ -1,28 +1,4 @@
-# approval-inline-cards Specification
-
-## Purpose
-TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
-## Requirements
-### Requirement: 审批一律在 timeline 内嵌呈现
-所有 app-server `server-request`（包括 `command_approval`、`file_approval`、`permissions_approval`、`question`、`mcp_elicitation`、`dynamic_tool` 等）SHALL 在 timeline 中以内嵌卡片呈现，不弹 modal、不跳转独立页面。
-
-#### Scenario: 收到审批请求
-- **WHEN** 前端从 `/ws` 收到 `server-request`
-- **AND** 当前会话页是该 thread 所在页
-- **THEN** timeline MUST 在对应位置插入一张审批卡片
-
-#### Scenario: 不做跨会话 inbox
-- **WHEN** 多个会话都有待审批请求
-- **THEN** 系统 MUST 不提供任何跨会话的审批汇总入口
-- **AND** 用户 MUST 必须进入各自会话查看
-
-### Requirement: 多张审批依次内嵌
-当一段时间内连续出现多个审批请求时 SHALL 在 timeline 上按顺序依次内嵌，每张审批一张卡片。
-
-#### Scenario: 连续审批
-- **WHEN** 短时间内出现 N 张审批请求
-- **THEN** timeline MUST 按到达顺序插入 N 张卡片
-- **AND** MUST 不合并或堆叠
+## MODIFIED Requirements
 
 ### Requirement: 审批卡片显示关键内容与两个按钮
 审批卡片 SHALL 显示 request kind、关键内容（命令文本、文件路径与 diff、权限范围、question 文本等）以及适合该 request kind 的操作控件。普通审批类请求 SHALL 提供「拒绝」和「同意」按钮；`question` 请求 SHALL 显示问题文本和每个可选答案，不得把 question 简化为普通 approve/deny。
@@ -55,13 +31,6 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 卡片 MUST 显示对应文本
 - **AND** MUST 至少提供两个操作（同意 / 拒绝 或 等价语义），除非该 kind 没有可安全提交的默认响应
 
-### Requirement: 审批按钮无默认聚焦
-审批卡片上的「拒绝 / 同意」按钮 SHALL 不预先聚焦任意一个，防止误点。
-
-#### Scenario: 渲染时
-- **WHEN** 审批卡片首次出现
-- **THEN** 两个按钮 MUST 都处于未聚焦状态
-
 ### Requirement: 点击审批调用 resolve API
 用户点击审批操作 SHALL 调用 `POST /api/codex/requests/:requestId/resolve` 并把 UI 切换为已处理态。不同 request kind MUST 携带能让后端构造正确 app-server response 的语义值；`question` MUST 携带用户选择的 option value。
 
@@ -82,18 +51,6 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **AND** 审批卡片 MUST 恢复可点状态
 - **AND** 如果 request 仍处于 pending 状态，用户 MUST 能再次提交
 
-### Requirement: 失效审批标灰且不可操作
-当审批通过其他渠道被 resolve（其他客户端、turn 已结束、`server-request-resolved` 已到达）时 SHALL 把对应卡片标灰、按钮置为不可点。
-
-#### Scenario: 外部 resolve
-- **WHEN** 收到 `server-request-resolved` 对应原本 timeline 上的某张卡片
-- **THEN** 该卡片 MUST 切换为灰色样式
-- **AND** 两个按钮 MUST 不可点
-
-#### Scenario: turn 已结束
-- **WHEN** 该审批所在 turn 已收到 completed 事件并且审批仍未被处理
-- **THEN** 该卡片 MUST 自动标灰并禁用
-
 ### Requirement: 进入会话时拉取待处理审批
 进入某个会话页时 SHALL 调用 `GET /api/codex/requests` 拉取该 thread 未处理的审批和 question，并把它们补到 timeline 对应位置。
 
@@ -106,4 +63,3 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **WHEN** 用户刷新或重新进入包含未回答 `question` 的会话页
 - **THEN** 前端 MUST 从 `GET /api/codex/requests` 恢复该 question 卡片
 - **AND** 用户 MUST 能继续选择答案并提交
-

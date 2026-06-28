@@ -213,11 +213,11 @@ export async function listPendingRequests(): Promise<PendingServerRequest[]> {
 
 export async function resolveRequest(
   requestId: string,
-  response: Record<string, unknown>
+  input: { value: string } | { response: unknown }
 ): Promise<void> {
   await api(`/api/codex/requests/${encodeURIComponent(requestId)}/resolve`, {
     method: "POST",
-    body: { response }
+    body: input
   });
 }
 

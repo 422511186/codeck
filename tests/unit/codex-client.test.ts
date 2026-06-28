@@ -1438,6 +1438,77 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("读取未 materialized 空会话时会降级为 metadata-only 并返回空 timeline", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/read" && (params as { includeTurns?: boolean }).includeTurns) {
+        throw new Error(
+          "thread empty-thread is not materialized yet; includeTurns is unavailable before first user message"
+        );
+      }
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "empty-thread",
+            sessionId: "empty-session",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 200,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "新会话"
+          }
+        };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThread("empty-thread")).resolves.toMatchObject({
+      id: "empty-thread",
+      title: "新会话",
+      timeline: [],
+      lastTurnId: null
+    });
+    expect(peer.calls.filter((call) => call.method === "thread/read")).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "empty-thread", includeTurns: true }
+      },
+      {
+        method: "thread/read",
+        params: { threadId: "empty-thread" }
+      }
+    ]);
+  });
+
+  it("读取普通会话时保持 includeTurns 并且不触发降级重试", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.readThread("thread-1");
+
+    expect(peer.calls.filter((call) => call.method === "thread/read")).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-1", includeTurns: true }
+      }
+    ]);
+  });
+
   it("能把 userMessage 里的 localImage 保留为缩略图路径", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);

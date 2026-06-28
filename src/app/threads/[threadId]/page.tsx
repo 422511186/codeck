@@ -33,6 +33,8 @@ export default function ThreadPage(): JSX.Element {
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
   const setRunning = useStore((s) => s.setRunning);
+  const setPendingRequests = useStore((s) => s.setPendingRequests);
+  const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const threadState = useStore((s) => s.threads[threadId]);
   const webSettings = settingsStore.get();
 
@@ -126,6 +128,23 @@ export default function ThreadPage(): JSX.Element {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
   }, [loading, threadState?.entries.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    codex
+      .listPendingRequests()
+      .then((requests) => {
+        if (!cancelled) {
+          setPendingRequests(requests);
+        }
+      })
+      .catch(() => {
+        // WebSocket remains the live path; this is only a reload recovery path.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, setPendingRequests]);
 
   useEffect(() => {
     if (!threadState?.running) return;
@@ -423,12 +442,8 @@ export default function ThreadPage(): JSX.Element {
           onResendUser={async (text) => {
             await onSend(text, []);
           }}
-          onResolveApproval={async (req, decision) => {
-            try {
-              await codex.resolveRequest(req.requestId, { decision });
-            } catch (err) {
-              console.warn("resolve failed", err);
-            }
+          onResolveApproval={async (req) => {
+            resolvePendingRequest(req.requestId);
           }}
         />
         {running ? (

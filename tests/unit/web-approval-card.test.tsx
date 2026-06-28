@@ -13,7 +13,7 @@ vi.mock("../../src/web/api/endpoints", () => ({
 
 describe("ApprovalCard", () => {
   beforeEach(() => {
-    mockResolveRequest.mockClear();
+    mockResolveRequest.mockReset();
     mockResolveRequest.mockResolvedValue({});
   });
 
@@ -58,8 +58,8 @@ describe("ApprovalCard", () => {
     await user.click(approveButton);
 
     await waitFor(() => {
-      expect(mockResolveRequest).toHaveBeenCalledWith("req-1", { decision: "approve" });
-      expect(onResolved).toHaveBeenCalledWith("approve");
+      expect(mockResolveRequest).toHaveBeenCalledWith("req-1", { value: "accept" });
+      expect(onResolved).toHaveBeenCalledWith("accept");
     });
   });
 
@@ -78,8 +78,8 @@ describe("ApprovalCard", () => {
     await user.click(denyButton);
 
     await waitFor(() => {
-      expect(mockResolveRequest).toHaveBeenCalledWith("req-1", { decision: "deny" });
-      expect(onResolved).toHaveBeenCalledWith("deny");
+      expect(mockResolveRequest).toHaveBeenCalledWith("req-1", { value: "decline" });
+      expect(onResolved).toHaveBeenCalledWith("decline");
     });
   });
 
@@ -146,6 +146,86 @@ describe("ApprovalCard", () => {
 
     rerender(<ApprovalCard approval={approvals[2]} />);
     expect(screen.getByText("Should we proceed?")).toBeInTheDocument();
+  });
+
+  it("should render question options and submit the selected option value", async () => {
+    const user = userEvent.setup();
+    const onResolved = vi.fn();
+    const approval = {
+      requestId: "req-question",
+      kind: "question",
+      title: "需要你回答",
+      description: "请选择执行方式",
+      options: [
+        { value: "fast", label: "快速", description: "尽快给出结果" },
+        { value: "safe", label: "稳妥", description: "多做验证" }
+      ],
+      request: {
+        questions: [
+          {
+            id: "mode",
+            question: "请选择执行方式"
+          }
+        ]
+      }
+    } as PendingServerRequest;
+
+    render(<ApprovalCard approval={approval} onResolved={onResolved} />);
+
+    expect(screen.getByText("请选择执行方式")).toBeInTheDocument();
+    expect(screen.getByText("快速")).toBeInTheDocument();
+    expect(screen.getByText("尽快给出结果")).toBeInTheDocument();
+    expect(screen.queryByText("同意")).not.toBeInTheDocument();
+    expect(screen.queryByText("拒绝")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /快速/ }));
+
+    await waitFor(() => {
+      expect(mockResolveRequest).toHaveBeenCalledWith("req-question", { value: "fast" });
+      expect(onResolved).toHaveBeenCalledWith("fast");
+    });
+  });
+
+  it("should keep question options clickable and show an error when resolve fails", async () => {
+    const user = userEvent.setup();
+    mockResolveRequest.mockRejectedValueOnce(new Error("missing field answers")).mockResolvedValueOnce({});
+    const approval = {
+      requestId: "req-question",
+      kind: "question",
+      description: "请选择执行方式",
+      options: [{ value: "fast", label: "快速", description: "尽快给出结果" }],
+      request: {}
+    } as PendingServerRequest;
+
+    render(<ApprovalCard approval={approval} />);
+
+    const option = screen.getByRole("button", { name: /快速/ });
+    await user.click(option);
+
+    await waitFor(() => {
+      expect(screen.getByText("missing field answers")).toBeInTheDocument();
+      expect(option).not.toBeDisabled();
+    });
+
+    await user.click(option);
+    expect(mockResolveRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("should render question without options as a non-submittable state", () => {
+    const approval = {
+      requestId: "req-question",
+      kind: "question",
+      description: "请输入自定义内容",
+      options: [],
+      request: {}
+    } as PendingServerRequest;
+
+    render(<ApprovalCard approval={approval} />);
+
+    expect(screen.getByText("请输入自定义内容")).toBeInTheDocument();
+    expect(screen.getByText("当前问题没有可用选项，无法在移动端回答")).toBeInTheDocument();
+    expect(screen.queryByText("同意")).not.toBeInTheDocument();
+    expect(screen.queryByText("拒绝")).not.toBeInTheDocument();
   });
 
   it("should prevent double submission", async () => {

@@ -19,6 +19,8 @@ const mockReplaceOrAddEntry = vi.fn();
 const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
 const mockSetRunning = vi.fn();
+const mockSetPendingRequests = vi.fn();
+const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
 
 vi.mock("../../src/web/state/store", () => ({
@@ -32,6 +34,8 @@ vi.mock("../../src/web/state/store", () => ({
       setMode: mockSetMode,
       setModel: mockSetModel,
       setRunning: mockSetRunning,
+      setPendingRequests: mockSetPendingRequests,
+      resolvePendingRequest: mockResolvePendingRequest,
       threads: { "thread-1": mockThreadState() }
     })
 }));
@@ -47,6 +51,7 @@ const mockCollaborationModes = vi.fn();
 const mockUpdateThreadSettings = vi.fn();
 const mockRenameThread = vi.fn();
 const mockRollbackThread = vi.fn();
+const mockListPendingRequests = vi.fn();
 const mockResolveRequest = vi.fn();
 const mockArchiveThread = vi.fn();
 const mockUnarchiveThread = vi.fn();
@@ -66,6 +71,7 @@ vi.mock("../../src/web/api/endpoints", () => ({
     updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args),
     renameThread: (...args: unknown[]) => mockRenameThread(...args),
     rollbackThread: (...args: unknown[]) => mockRollbackThread(...args),
+    listPendingRequests: () => mockListPendingRequests(),
     resolveRequest: (...args: unknown[]) => mockResolveRequest(...args),
     archiveThread: (...args: unknown[]) => mockArchiveThread(...args),
     unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args),
@@ -94,6 +100,8 @@ describe("ThreadPage", () => {
     mockSetMode.mockClear();
     mockSetModel.mockClear();
     mockSetRunning.mockClear();
+    mockSetPendingRequests.mockClear();
+    mockResolvePendingRequest.mockClear();
     mockResumeThread.mockClear();
     mockListTurnsBefore.mockClear();
     mockUpdateThreadSettings.mockClear();
@@ -145,6 +153,7 @@ describe("ThreadPage", () => {
     mockUpdateThreadSettings.mockResolvedValue({});
     mockRenameThread.mockResolvedValue({});
     mockRollbackThread.mockResolvedValue({});
+    mockListPendingRequests.mockResolvedValue([]);
     mockResolveRequest.mockResolvedValue({});
     mockArchiveThread.mockResolvedValue({});
     mockUnarchiveThread.mockResolvedValue({});
@@ -243,6 +252,26 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(mockSetRunning).toHaveBeenCalledWith("thread-1", true);
     });
+  });
+
+  it("should fetch pending server requests when entering a thread", async () => {
+    const pendingQuestion = {
+      requestId: "req-question",
+      threadId: "thread-1",
+      kind: "question",
+      title: "需要你回答",
+      description: "请选择模式",
+      options: [{ value: "fast", label: "快速" }],
+      request: {}
+    };
+    mockListPendingRequests.mockResolvedValue([pendingQuestion]);
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockListPendingRequests).toHaveBeenCalled();
+    });
+    expect(mockSetPendingRequests).toHaveBeenCalledWith([pendingQuestion]);
   });
 
   it("should refresh running threads without a manual reload", async () => {
@@ -1036,6 +1065,37 @@ describe("ThreadPage", () => {
       );
     });
     expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", false);
+  });
+
+  it("should let a freshly-created empty thread send the first user message", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "新会话",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "第一条消息");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockResumeThread).not.toHaveBeenCalled();
+    expect(mockStartTurn).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      text: "第一条消息",
+      imagePaths: []
+    });
+    expect(screen.queryByText(/is not materialized/)).not.toBeInTheDocument();
   });
 
   it("should append an inline error card when startTurn fails", async () => {

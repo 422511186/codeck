@@ -4,6 +4,29 @@ import { userEvent } from "@testing-library/user-event";
 import { Timeline } from "../../src/web/components/Timeline";
 
 describe("Timeline", () => {
+  it("把 Default 模式工具不可用提示作为普通 Markdown 文本展示，不生成 question 卡片", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "agent-1",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "request_user_input is unavailable in Default mode"
+            }
+          }
+        ]}
+        approvals={[]}
+      />
+    );
+
+    expect(screen.getByText("request_user_input is unavailable in Default mode")).toBeInTheDocument();
+    expect(screen.queryByText("需要你回答")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "同意" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+  });
+
   it("在本页弹窗预览用户消息图片，不打开新页面", async () => {
     const user = userEvent.setup();
     const open = vi.spyOn(window, "open").mockImplementation(() => null);

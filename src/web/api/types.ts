@@ -72,11 +72,22 @@ export type ServerRequestKind =
   | "dynamic_tool"
   | "unknown";
 
+export type PendingServerRequestOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
 export type PendingServerRequest = {
   requestId: string;
   threadId?: string;
   kind: ServerRequestKind;
-  request: Record<string, unknown>;
+  title?: string;
+  description?: string;
+  options?: PendingServerRequestOption[];
+  method?: string;
+  params?: unknown;
+  request?: Record<string, unknown>;
 };
 
 export type AppServerStatusState =

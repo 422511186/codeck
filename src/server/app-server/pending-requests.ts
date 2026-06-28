@@ -211,7 +211,7 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   if (request.kind === "question") {
     const id = questionId(params);
     if (!id) {
-      return { answers: {} };
+      throw new Error("question 缺少 id，无法回答");
     }
 
     return {

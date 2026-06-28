@@ -788,6 +788,15 @@ function threadDetail(
   };
 }
 
+function isUnmaterializedIncludeTurnsError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not materialized yet/i.test(message) && /includeTurns/i.test(message);
+}
+
+function threadWithTurns(thread: Thread): Thread {
+  return { ...thread, turns: Array.isArray(thread.turns) ? thread.turns : [] };
+}
+
 function conversationSummaryView(response: GetConversationSummaryResponse): MobileThreadSummary {
   const summary = response.summary;
   return {
@@ -1249,14 +1258,26 @@ export class CodexAppServerClient {
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     const [response, goal] = await Promise.all([
-      this.peer.request("thread/read", {
-        threadId,
-        includeTurns: true
-      }) as Promise<ThreadReadResponse>,
+      this.readThreadWithTurnsFallback(threadId),
       this.readThreadGoal(threadId)
     ]);
 
-    return { ...threadDetail(response.thread), goal };
+    return { ...threadDetail(threadWithTurns(response.thread)), goal };
+  }
+
+  private async readThreadWithTurnsFallback(threadId: string): Promise<ThreadReadResponse> {
+    try {
+      return (await this.peer.request("thread/read", {
+        threadId,
+        includeTurns: true
+      })) as ThreadReadResponse;
+    } catch (error) {
+      if (!isUnmaterializedIncludeTurnsError(error)) {
+        throw error;
+      }
+
+      return (await this.peer.request("thread/read", { threadId })) as ThreadReadResponse;
+    }
   }
 
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {

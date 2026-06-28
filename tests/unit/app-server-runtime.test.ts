@@ -56,6 +56,52 @@ class ReconnectablePeer implements ManagedAppServerPeer {
   }
 }
 
+class RejectingServerRequestPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "ready" };
+  responses: Array<{ id: number; result: unknown }> = [];
+  private serverRequestHandler: ((message: AppServerServerRequestMessage) => void) | null = null;
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void {
+    this.serverRequestHandler = handler;
+    return () => {
+      this.serverRequestHandler = null;
+    };
+  }
+
+  emitServerRequest(message: AppServerServerRequestMessage): void {
+    this.serverRequestHandler?.(message);
+  }
+
+  async respondToServerRequest(id: number, result: unknown): Promise<void> {
+    this.responses.push({ id, result });
+    throw new Error("app-server 拒绝 response");
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(): Promise<unknown> {
+    return {};
+  }
+}
+
 describe("createAppServerGateway", () => {
   it("mock 模式可以初始化并返回移动端基础数据", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
@@ -207,10 +253,49 @@ describe("createAppServerGateway", () => {
       })
     });
 
-    await gateway.resolveServerRequest(1, { decision: "accept" });
+    await gateway.resolveServerRequest(1, "accept");
 
     expect(gateway.listPendingServerRequests()).toEqual([]);
     expect(events).toContainEqual({ type: "server-request-resolved", requestId: 1 });
+  });
+
+  it("resolveServerRequest 为 question 构造 response，respond 失败时保留 pending 且不广播 resolved", async () => {
+    const peer = new RejectingServerRequestPeer();
+    const gateway = new AppServerGateway(peer);
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    peer.emitServerRequest({
+      id: 22,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [
+          {
+            id: "mode",
+            header: "模式",
+            question: "请选择模式",
+            isOther: false,
+            isSecret: false,
+            options: [{ id: "fast", label: "快速", description: "更快完成" }]
+          }
+        ],
+        autoResolutionMs: null
+      }
+    });
+
+    await expect(gateway.resolveServerRequest(22, "fast")).rejects.toThrow("app-server 拒绝 response");
+
+    expect(peer.responses).toEqual([
+      {
+        id: 22,
+        result: { answers: { mode: { answers: ["fast"] } } }
+      }
+    ]);
+    expect(gateway.listPendingServerRequests()).toHaveLength(1);
+    expect(events).not.toContainEqual({ type: "server-request-resolved", requestId: 22 });
   });
 
   it("mock 模式支持 fork、rollback、interrupt 和 steer", async () => {

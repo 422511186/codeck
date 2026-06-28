@@ -85,4 +85,39 @@ describe("codex turn start route", () => {
       })
     );
   });
+
+  it("turn/start 后返回 readThread 提供的空会话详情", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    mockReadThread.mockResolvedValueOnce({
+      id: "thread-1",
+      title: "新会话",
+      preview: "",
+      cwd: "C:\\repo",
+      modelProvider: "custom",
+      status: "idle",
+      updatedAt: 1,
+      lastTurnId: null,
+      timeline: []
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-1",
+          text: "第一条消息"
+        })
+      })
+    );
+    const json = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockReadThread).toHaveBeenCalledWith("thread-1");
+    expect(json.thread).toMatchObject({
+      id: "thread-1",
+      timeline: [],
+      lastTurnId: null
+    });
+  });
 });

@@ -94,6 +94,37 @@ describe("normalizePendingServerRequest", () => {
     });
   });
 
+  it("question options 优先使用 id 作为 value，缺少 id 时回退到 label，并保留描述", () => {
+    const request = normalizePendingServerRequest({
+      id: 15,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-3",
+        questions: [
+          {
+            id: "mode",
+            header: "模式",
+            question: "请选择模式",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { id: "fast", label: "快速", description: "更快完成" },
+              { label: "稳妥", description: "多做验证" }
+            ]
+          }
+        ],
+        autoResolutionMs: null
+      }
+    });
+
+    expect(request.options).toEqual([
+      { value: "fast", label: "快速", description: "更快完成" },
+      { value: "稳妥", label: "稳妥", description: "多做验证" }
+    ]);
+  });
+
   it("为文件审批构造 JSON-RPC response", () => {
     const request = normalizePendingServerRequest({
       id: 10,
@@ -155,6 +186,31 @@ describe("normalizePendingServerRequest", () => {
     expect(buildPendingServerRequestResponse(request, "快速")).toEqual({
       answers: { mode: { answers: ["快速"] } }
     });
+    expect(buildPendingServerRequestResponse(request, "快速")).not.toHaveProperty("decision");
+  });
+
+  it("question 缺少 id 时不构造空 answers response", () => {
+    const request = normalizePendingServerRequest({
+      id: 16,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [
+          {
+            header: "模式",
+            question: "请选择模式",
+            isOther: false,
+            isSecret: false,
+            options: [{ id: "fast", label: "快速", description: "更快完成" }]
+          }
+        ],
+        autoResolutionMs: null
+      }
+    });
+
+    expect(() => buildPendingServerRequestResponse(request, "fast")).toThrow("question 缺少 id");
   });
 
   it("为 MCP elicitation 构造 JSON-RPC response", () => {

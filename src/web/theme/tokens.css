@@ -43,6 +43,7 @@
 
   --cw-bg: var(--bg);
   --cw-bg-elevated: var(--bg-elevated);
+  --cw-bg-overlay: var(--bg-overlay);
   --cw-card: var(--bg-card);
   --cw-fg: var(--fg);
   --cw-fg-muted: var(--fg-muted);
