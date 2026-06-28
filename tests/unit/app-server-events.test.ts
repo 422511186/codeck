@@ -25,6 +25,54 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 turn 生命周期 notification 映射为浏览器运行态事件", () => {
+    const turn = {
+      id: "turn-1",
+      items: [],
+      itemsView: "full",
+      status: "inProgress",
+      error: null,
+      startedAt: 1,
+      completedAt: null,
+      durationMs: null
+    };
+
+    expect(
+      normalizeAppServerNotification({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "turn_started",
+        threadId: "thread-1",
+        turnId: "turn-1"
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { ...turn, status: "completed", completedAt: 2, durationMs: 1000 }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed"
+      }
+    });
+  });
+
   it("把 turn diff 更新映射为浏览器 diff 事件", () => {
     expect(
       normalizeAppServerNotification({
@@ -65,6 +113,35 @@ describe("normalizeAppServerNotification", () => {
         turnId: "turn-1",
         itemId: "file-1",
         delta: "写入 src/app.ts"
+      }
+    });
+  });
+
+  it("把 item/completed 映射为完整 timeline item 更新", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          completedAtMs: 1234,
+          item: {
+            type: "agentMessage",
+            id: "agent-1",
+            text: "完整回复",
+            phase: "final",
+            memoryCitation: null
+          }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: { id: "agent-1", role: "agent", text: "完整回复" }
       }
     });
   });
@@ -129,6 +206,33 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 turn error notification 映射为浏览器错误事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          willRetry: false,
+          error: {
+            message: "API 调用失败",
+            codexErrorInfo: null,
+            additionalDetails: "502 Bad Gateway"
+          }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        message: "API 调用失败：502 Bad Gateway",
+        willRetry: false
+      }
+    });
+  });
+
   it("把 config warning 映射为全局警告事件", () => {
     expect(
       normalizeAppServerNotification({
@@ -161,6 +265,47 @@ describe("normalizeAppServerNotification", () => {
         event: { kind: "settings_invalidated" }
       });
     }
+  });
+
+  it("把会话设置更新映射为浏览器会话设置事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "thread/settings/updated",
+        params: {
+          threadId: "thread-1",
+          threadSettings: {
+            cwd: "C:\\repo",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "user",
+            sandboxPolicy: { mode: "workspace-write" },
+            activePermissionProfile: null,
+            model: "gpt-5-codex",
+            modelProvider: "custom",
+            serviceTier: null,
+            effort: "high",
+            summary: null,
+            collaborationMode: {
+              mode: "plan",
+              settings: {
+                model: "gpt-5-codex",
+                reasoning_effort: "high",
+                developer_instructions: null
+              }
+            },
+            personality: null
+          }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "thread_settings_updated",
+        threadId: "thread-1",
+        model: "gpt-5-codex",
+        reasoningEffort: "high",
+        collaborationMode: "plan"
+      }
+    });
   });
 
   it("把会话目标更新和清除映射为浏览器事件", () => {

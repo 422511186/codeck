@@ -3,6 +3,7 @@ import { CodexAppServerClient, type AppServerPeer } from "../../src/server/app-s
 
 class FakePeer implements AppServerPeer {
   readonly calls: Array<{ method: string; params: unknown }> = [];
+  readonly notifications: Array<{ method: string; params: unknown }> = [];
 
   async request(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params });
@@ -1340,6 +1341,10 @@ class FakePeer implements AppServerPeer {
 
     throw new Error(`unexpected method ${method}`);
   }
+
+  notify(method: string, params?: unknown): void {
+    this.notifications.push({ method, params });
+  }
 }
 
 describe("CodexAppServerClient", () => {
@@ -1364,6 +1369,7 @@ describe("CodexAppServerClient", () => {
         }
       }
     });
+    expect(peer.notifications).toEqual([{ method: "initialized", params: undefined }]);
   });
 
   it("能把 thread/list 结果整理成移动端会话摘要", async () => {
@@ -1429,6 +1435,206 @@ describe("CodexAppServerClient", () => {
       timeUsedSeconds: 120,
       createdAt: 1_800_000_000,
       updatedAt: 1_800_000_100
+    });
+  });
+
+  it("能把 userMessage 里的 localImage 保留为缩略图路径", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "thread-1",
+            sessionId: "session-1",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "看图",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 200,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "图片会话",
+            turns: [
+              {
+                id: "turn-1",
+                itemsView: { type: "complete" },
+                status: { type: "completed" },
+                error: null,
+                startedAt: 101,
+                completedAt: 199,
+                durationMs: 98000,
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "item-user-image",
+                    clientId: "client-user-image",
+                    content: [
+                      { type: "text", text: "请看这张图", text_elements: [] },
+                      { type: "localImage", path: "C:\\Users\\huang\\AppData\\Local\\Temp\\shot.png" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThread("thread-1")).resolves.toMatchObject({
+      timeline: [
+        {
+          id: "item-user-image",
+          role: "user",
+          text: "请看这张图",
+          imagePaths: ["C:\\Users\\huang\\AppData\\Local\\Temp\\shot.png"]
+        }
+      ]
+    });
+  });
+
+  it("能把 MCP 工具调用转换成 timeline 工具项", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "thread-1",
+            sessionId: "session-1",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "工具",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 200,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "工具会话",
+            turns: [
+              {
+                id: "turn-1",
+                itemsView: { type: "complete" },
+                status: { type: "completed" },
+                error: null,
+                startedAt: 101,
+                completedAt: 199,
+                durationMs: 98000,
+                items: [
+                  {
+                    type: "mcpToolCall",
+                    id: "tool-1",
+                    server: "filesystem",
+                    tool: "read_file",
+                    status: "completed",
+                    arguments: { path: "README.md" },
+                    pluginId: null,
+                    result: { content: [{ type: "text", text: "README content" }], isError: false },
+                    error: null,
+                    durationMs: 12
+                  }
+                ]
+              }
+            ]
+          }
+        };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThread("thread-1")).resolves.toMatchObject({
+      timeline: [
+        {
+          id: "tool-1",
+          role: "tool",
+          toolKind: "mcp",
+          server: "filesystem",
+          tool: "read_file",
+          arguments: '{\n  "path": "README.md"\n}',
+          text: expect.stringContaining("README content")
+        }
+      ]
+    });
+  });
+
+  it("能把失败 turn 的错误转换成 timeline 错误项", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "thread-1",
+            sessionId: "session-1",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "错误",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 200,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "错误会话",
+            turns: [
+              {
+                id: "turn-failed",
+                itemsView: { type: "complete" },
+                status: { type: "failed" },
+                error: {
+                  message: "API 调用失败",
+                  codexErrorInfo: null,
+                  additionalDetails: "502 Bad Gateway"
+                },
+                startedAt: 101,
+                completedAt: 199,
+                durationMs: 98000,
+                items: []
+              }
+            ]
+          }
+        };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThread("thread-1")).resolves.toMatchObject({
+      timeline: [
+        {
+          id: "turn-failed-error",
+          role: "error",
+          text: "API 调用失败：502 Bad Gateway"
+        }
+      ]
     });
   });
 
@@ -1582,7 +1788,21 @@ describe("CodexAppServerClient", () => {
       text: "继续开发发送功能",
       model: "gpt-5-codex",
       reasoningEffort: "high",
-      permissions: "full-auto"
+      permissions: "full-auto",
+      additionalContext: {
+        "codex-web:collaboration-mode": {
+          kind: "application",
+          value: "# Collaboration Mode: Plan"
+        }
+      },
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: "high",
+          developer_instructions: null
+        }
+      }
     });
 
     expect(result.turnId).toBe("turn-new-1");
@@ -1593,7 +1813,46 @@ describe("CodexAppServerClient", () => {
         input: [{ type: "text", text: "继续开发发送功能", text_elements: [] }],
         model: "gpt-5-codex",
         effort: "high",
-        permissions: "full-auto"
+        permissions: "full-auto",
+        additionalContext: {
+          "codex-web:collaboration-mode": {
+            kind: "application",
+            value: "# Collaboration Mode: Plan"
+          }
+        },
+        collaborationMode: {
+          mode: "plan",
+          settings: {
+            model: "gpt-5-codex",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
+        }
+      }
+    });
+  });
+
+  it("转发 turn/start 前会把旧版 ask collaboration mode 规整为 plan", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      text: "只做计划",
+      collaborationMode: {
+        mode: "ask",
+        settings: {
+          model: "gpt-5-codex",
+          reasoning_effort: null,
+          developer_instructions: null
+        }
+      } as never
+    });
+
+    expect(peer.calls.at(-1)).toMatchObject({
+      method: "turn/start",
+      params: {
+        collaborationMode: expect.objectContaining({ mode: "plan" })
       }
     });
   });
@@ -1722,7 +1981,15 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         model: "gpt-5-mini",
         reasoningEffort: "high",
-        permissions: "full-auto"
+        permissions: "full-auto",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5-mini",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
+        }
       })
     ).resolves.toBeUndefined();
 
@@ -1732,9 +1999,29 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         model: "gpt-5-mini",
         effort: "high",
-        permissions: "full-auto"
+        permissions: "full-auto",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5-mini",
+            reasoning_effort: "high",
+            developer_instructions: null
+          }
+        }
       }
     });
+  });
+
+  it("能单独读取 collaboration mode preset 列表", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listCollaborationModes()).resolves.toEqual([
+      { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
+      { name: "Ask", mode: "ask", model: null, reasoningEffort: null }
+    ]);
+
+    expect(peer.calls.at(-1)).toEqual({ method: "collaborationMode/list", params: {} });
   });
 
   it("能中断运行中的 turn", async () => {
@@ -2032,6 +2319,19 @@ describe("CodexAppServerClient", () => {
       { method: "thread/backgroundTerminals/terminate", params: { threadId: "thread-1", processId: "bg-proc-1" } },
       { method: "thread/backgroundTerminals/clean", params: { threadId: "thread-1" } }
     ]);
+  });
+
+  it("能只通过 config/read 读取默认模型设置", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readModelDefaults()).resolves.toEqual({
+      model: "gpt-5-codex",
+      modelProvider: "openai",
+      reasoningEffort: "medium"
+    });
+
+    expect(peer.calls).toEqual([{ method: "config/read", params: {} }]);
   });
 
   it("能读取设置状态", async () => {

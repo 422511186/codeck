@@ -9,7 +9,7 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const authStatus = await getAppServerGateway().getAuthStatus();
-    return NextResponse.json({ ok: true, authStatus });
+    return NextResponse.json({ ok: true, result: authStatus, authStatus });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "无法读取账号鉴权状态" },

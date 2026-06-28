@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
@@ -10,7 +10,14 @@ import { timelineItemToEntry, type TimelineEntry } from "../../../web/state/time
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
-import { permissionsForMode, type ChatMode, type ModelOption, type ThreadDetail } from "../../../web/api/types";
+import {
+  DEFAULT_COLLABORATION_MODEL,
+  collaborationModeForChatMode,
+  type ChatMode,
+  type ModelOption,
+  type ThreadDetail
+} from "../../../web/api/types";
+import { loadJson, saveJson, threadModeKey } from "../../../web/storage/localStore";
 import { settingsStore } from "../../../web/storage/settings";
 
 export default function ThreadPage(): JSX.Element {
@@ -21,10 +28,13 @@ export default function ThreadPage(): JSX.Element {
   const ensureThread = useStore((s) => s.ensureThread);
   const setThreadEntries = useStore((s) => s.setThreadEntries);
   const prependEntries = useStore((s) => s.prependEntries);
+  const appendEntries = useStore((s) => s.appendEntries);
+  const replaceOrAddEntry = useStore((s) => s.replaceOrAddEntry);
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
   const setRunning = useStore((s) => s.setRunning);
   const threadState = useStore((s) => s.threads[threadId]);
+  const webSettings = settingsStore.get();
 
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +42,10 @@ export default function ThreadPage(): JSX.Element {
   const [showSheet, setShowSheet] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [models, setModels] = useState<ModelOption[] | null>(null);
+  const [serverDefaults, setServerDefaults] = useState<{ model: string | null; reasoningEffort: string | null }>({
+    model: null,
+    reasoningEffort: null
+  });
   const [renameOpen, setRenameOpen] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
   const [archiveToast, setArchiveToast] = useState<{ visible: boolean } | null>(null);
@@ -40,29 +54,59 @@ export default function ThreadPage(): JSX.Element {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
 
+  const configuredModel = threadState?.model ?? detail?.model ?? webSettings.defaultModel ?? null;
+  const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
+  const configuredReasoningEffort = threadState?.modelEffort ?? detail?.reasoningEffort ?? null;
+  const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    codex
+      .settings()
+      .then((settings) => {
+        if (!cancelled) {
+          setServerDefaults({
+            model: settings.model,
+            reasoningEffort: settings.reasoningEffort
+          });
+        }
+      })
+      .catch(() => {
+        // Keep the protocol fallback when app-server settings are temporarily unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const applyThreadDetail = useCallback(
+    (td: ThreadDetail) => {
+      setDetail(td);
+      const entries: TimelineEntry[] = td.timeline.map((item, idx) =>
+        timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
+      );
+      setThreadEntries(threadId, entries, null);
+      if (td.model) {
+        setModel(threadId, td.model, td.reasoningEffort ?? null);
+      }
+    },
+    [threadId, setThreadEntries, setModel]
+  );
+
   useEffect(() => {
     ensureThread(threadId);
+    const savedMode = loadJson<ChatMode | null>(threadModeKey(threadId), null);
+    if (savedMode) {
+      setMode(threadId, savedMode);
+    }
     let cancelled = false;
     setLoading(true);
     (async () => {
       try {
         const td = await codex.readThread(threadId);
         if (cancelled) return;
-        setDetail(td);
-        const entries: TimelineEntry[] = td.timeline.map((item, idx) =>
-          timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
-        );
-        setThreadEntries(threadId, entries, null);
-        if (td.lastTurnId) {
-          try {
-            const page = await codex.listTurnsBefore(threadId, td.lastTurnId);
-            if (cancelled) return;
-            const extra = page.items.map((it, i) => timelineItemToEntry(it, td.updatedAt - 1_000 - i));
-            prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
-          } catch {
-            // ignore initial back-fill failure
-          }
-        }
+        applyThreadDetail(td);
+        setRunning(threadId, isThreadRunningStatus(td.status));
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiError ? err.message : (err as Error).message);
@@ -74,7 +118,7 @@ export default function ThreadPage(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [threadId, ensureThread, setThreadEntries, prependEntries]);
+  }, [threadId, ensureThread, applyThreadDetail, setMode, setRunning]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -82,6 +126,29 @@ export default function ThreadPage(): JSX.Element {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
   }, [loading, threadState?.entries.length]);
+
+  useEffect(() => {
+    if (!threadState?.running) return;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const td = await codex.readThread(threadId);
+        if (cancelled) return;
+        applyThreadDetail(td);
+        setRunning(threadId, isThreadRunningStatus(td.status));
+      } catch {
+        // WebSocket remains the primary live path; polling is only a fallback.
+      }
+    };
+
+    void refresh();
+    const interval = window.setInterval(refresh, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [threadId, threadState?.running, applyThreadDetail, setRunning]);
 
   const onScroll = useCallback(
     async (event: React.UIEvent<HTMLDivElement>) => {
@@ -108,16 +175,63 @@ export default function ThreadPage(): JSX.Element {
   const onSend = useCallback(
     async (text: string, imagePaths: string[]) => {
       if (!detail) return;
-      const mode: ChatMode = threadState?.mode ?? settingsStore.get().defaultMode;
+      const optimisticEntry: TimelineEntry = {
+        id: `local-user-${Date.now()}`,
+        createdAt: Date.now(),
+        body: {
+          kind: "user-message",
+          text,
+          ...(imagePaths.length ? { imagePaths } : {}),
+          status: "sending"
+        }
+      };
+      appendEntries(threadId, [optimisticEntry]);
       setRunning(threadId, true);
       try {
-        await codex.startTurn({
+        if (detail.status === "notLoaded") {
+          const resumed = await codex.resumeThread(threadId);
+          setDetail(resumed);
+        }
+        const currentMode = threadState?.mode ?? "build";
+        const collaborationMode =
+          currentMode === "plan"
+            ? collaborationModeForChatMode("plan", effectiveModel, effectiveReasoningEffort)
+            : undefined;
+        const startInput = {
           threadId,
           text,
           imagePaths,
-          model: threadState?.model ?? detail.modelProvider,
-          permissions: permissionsForMode(mode)
-        });
+          ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
+          ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
+          ...(collaborationMode ? { collaborationMode } : {})
+        };
+        let started: Awaited<ReturnType<typeof codex.startTurn>>;
+        try {
+          started = await codex.startTurn(startInput);
+        } catch (err) {
+          if (!isThreadNotFoundError(err)) {
+            throw err;
+          }
+          const resumed = await codex.resumeThread(threadId);
+          setDetail(resumed);
+          started = await codex.startTurn(startInput);
+        }
+        applyThreadDetail(started.thread);
+        const serverHasUserMessage = started.thread.timeline.some(
+          (item) => item.role === "user" && item.text.trim() === text.trim()
+        );
+        if (!serverHasUserMessage) {
+          replaceOrAddEntry(threadId, {
+            ...optimisticEntry,
+            body: {
+              kind: "user-message",
+              text,
+              ...(imagePaths.length ? { imagePaths } : {}),
+              status: "sent"
+            }
+          });
+        }
+        setRunning(threadId, isThreadRunningStatus(started.thread.status));
         // Auto-name thread after first user message
         if ((!detail.title || detail.title === "新会话") && text.trim()) {
           try {
@@ -129,11 +243,39 @@ export default function ThreadPage(): JSX.Element {
           }
         }
       } catch (err) {
+        replaceOrAddEntry(threadId, {
+          ...optimisticEntry,
+          body: {
+            kind: "user-message",
+            text,
+            ...(imagePaths.length ? { imagePaths } : {}),
+            status: "failed"
+          }
+        });
+        appendEntries(threadId, [
+          {
+            id: `${optimisticEntry.id}-error`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: `发送失败：${errorMessage(err)}` }
+          }
+        ]);
         setRunning(threadId, false);
         throw err;
       }
     },
-    [detail, threadId, threadState, setRunning]
+    [
+      detail,
+      threadId,
+      effectiveModel,
+      effectiveReasoningEffort,
+      configuredModel,
+      configuredReasoningEffort,
+      threadState?.mode,
+      appendEntries,
+      applyThreadDetail,
+      replaceOrAddEntry,
+      setRunning
+    ]
   );
 
   const onInterrupt = useCallback(async () => {
@@ -148,8 +290,9 @@ export default function ThreadPage(): JSX.Element {
 
   const openModelPicker = useCallback(async () => {
     setShowModelPicker(true);
+    setModels(null);
     try {
-      setModels(await codex.listModels());
+      setModels(await codex.models());
     } catch {
       setModels([]);
     }
@@ -158,27 +301,56 @@ export default function ThreadPage(): JSX.Element {
   const onSelectModel = useCallback(
     async (model: ModelOption) => {
       setShowModelPicker(false);
-      setModel(threadId, model.id);
+      const nextEffort =
+        effectiveReasoningEffort && model.supportedReasoningEfforts.includes(effectiveReasoningEffort)
+          ? effectiveReasoningEffort
+          : null;
+      setModel(threadId, model.id, nextEffort);
       try {
-        await codex.updateThreadSettings(threadId, { model: model.id });
+        await codex.updateThreadSettings(threadId, {
+          model: model.id,
+          ...(nextEffort ? { reasoningEffort: nextEffort } : {})
+        });
       } catch (err) {
         // optimistic — surface error
         console.warn("update model failed", err);
       }
     },
-    [threadId, setModel]
+    [threadId, effectiveReasoningEffort, setModel]
+  );
+
+  const onSelectReasoningEffort = useCallback(
+    async (effort: string) => {
+      setModel(threadId, effectiveModel, effort);
+      try {
+        await codex.updateThreadSettings(threadId, {
+          model: effectiveModel,
+          reasoningEffort: effort
+        });
+      } catch (err) {
+        console.warn("update reasoning effort failed", err);
+      }
+    },
+    [threadId, effectiveModel, setModel]
   );
 
   const onToggleMode = useCallback(
     async (next: ChatMode) => {
       setMode(threadId, next);
+      saveJson(threadModeKey(threadId), next);
       try {
-        await codex.updateThreadSettings(threadId, { permissions: permissionsForMode(next) });
-      } catch {
-        // ignore
+        await codex.updateThreadSettings(threadId, {
+          collaborationMode: collaborationModeForChatMode(
+            next,
+            effectiveModel,
+            effectiveReasoningEffort
+          )
+        });
+      } catch (err) {
+        console.warn("update mode failed", err);
       }
     },
-    [threadId, setMode]
+    [threadId, setMode, effectiveModel, effectiveReasoningEffort]
   );
 
   if (error) {
@@ -201,10 +373,12 @@ export default function ThreadPage(): JSX.Element {
   }
 
   const mode = threadState?.mode ?? "build";
-  const modelId = threadState?.model ?? detail.modelProvider ?? null;
+  const modelId = effectiveModel;
   const running = threadState?.running ?? false;
   const plan = threadState?.plan ?? [];
   const entries = threadState?.entries ?? [];
+  const lastUserEntry = entries.slice().reverse().find((item) => item.body.kind === "user-message");
+  const lastUserMessageText = lastUserEntry?.body.kind === "user-message" ? lastUserEntry.body.text : null;
 
   return (
     <main style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
@@ -239,13 +413,16 @@ export default function ThreadPage(): JSX.Element {
 
       {plan.length > 0 ? <PlanBar steps={plan} /> : null}
 
-      <div ref={scrollerRef} onScroll={onScroll} style={scrollStyle}>
+      <div ref={scrollerRef} className="cw-thread-scroller" onScroll={onScroll} style={scrollStyle}>
         {threadState?.reachedBeginning ? (
           <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
         ) : null}
         <Timeline
           entries={entries}
           approvals={threadState?.pendingApprovals ?? []}
+          onResendUser={async (text) => {
+            await onSend(text, []);
+          }}
           onResolveApproval={async (req, decision) => {
             try {
               await codex.resolveRequest(req.requestId, { decision });
@@ -306,13 +483,17 @@ export default function ThreadPage(): JSX.Element {
       <ChatInput
         threadId={threadId}
         running={running}
+        canResendLast={Boolean(lastUserMessageText)}
         onSend={onSend}
         onInterrupt={onInterrupt}
         onResendLast={async () => {
+          if (!lastUserMessageText) return null;
           try {
             await codex.rollbackThread(threadId, 1);
+            return lastUserMessageText;
           } catch (err) {
             console.warn("rollback failed", err);
+            return null;
           }
         }}
       />
@@ -354,7 +535,9 @@ export default function ThreadPage(): JSX.Element {
         <ModelPicker
           models={models}
           current={modelId}
+          currentEffort={effectiveReasoningEffort}
           onSelect={onSelectModel}
+          onSelectEffort={onSelectReasoningEffort}
           onClose={() => setShowModelPicker(false)}
         />
       ) : null}
@@ -480,14 +663,21 @@ function SheetItem({ label, onClick }: { label: string; onClick: () => void }): 
 function ModelPicker({
   models,
   current,
+  currentEffort,
   onSelect,
+  onSelectEffort,
   onClose
 }: {
   models: ModelOption[] | null;
   current: string | null;
+  currentEffort: string | null;
   onSelect: (m: ModelOption) => void;
+  onSelectEffort: (effort: string) => void;
   onClose: () => void;
 }): JSX.Element {
+  const currentModel = models?.find((model) => model.id === current) ?? null;
+  const efforts = currentModel?.supportedReasoningEfforts ?? [];
+
   return (
     <Overlay onClose={onClose} align="bottom">
       <div style={sheetStyle}>
@@ -516,9 +706,52 @@ function ModelPicker({
             </button>
           ))
         )}
+        {efforts.length > 0 ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "10px 12px 12px",
+              borderTop: "1px solid var(--cw-border)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8
+            }}
+          >
+            <div style={{ color: "var(--cw-fg-muted)", fontSize: 13 }}>推理强度</div>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${efforts.length}, 1fr)`, gap: 6 }}>
+              {efforts.map((effort) => {
+                const active = currentEffort === effort;
+                return (
+                  <button
+                    key={effort}
+                    type="button"
+                    onClick={() => onSelectEffort(effort)}
+                    style={{
+                      padding: "9px 6px",
+                      borderRadius: 8,
+                      border: `1px solid ${active ? "var(--cw-accent)" : "var(--cw-border)"}`,
+                      background: active ? "var(--cw-accent)" : "transparent",
+                      color: active ? "#fff" : "var(--cw-fg)",
+                      fontSize: 13
+                    }}
+                  >
+                    {reasoningEffortLabel(effort)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </div>
     </Overlay>
   );
+}
+
+function reasoningEffortLabel(effort: string): string {
+  if (effort === "low") return "低";
+  if (effort === "medium") return "中";
+  if (effort === "high") return "高";
+  return effort;
 }
 
 function RenameDialog({
@@ -613,6 +846,18 @@ function shortModel(id: string | null): string {
   return last.length > 14 ? last.slice(0, 12) + "…" : last;
 }
 
+function isThreadNotFoundError(error: unknown): boolean {
+  return error instanceof ApiError && /thread not found|找不到会话/i.test(error.message);
+}
+
+function isThreadRunningStatus(status: string): boolean {
+  return status === "active";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : "未知错误";
+}
+
 const headerStyle: React.CSSProperties = {
   position: "sticky",
   top: 0,
@@ -648,6 +893,7 @@ const scrollStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
   padding: "12px",
+  paddingBottom: "calc(112px + var(--safe-bottom))",
   display: "flex",
   flexDirection: "column",
   gap: 10

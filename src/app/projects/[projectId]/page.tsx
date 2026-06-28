@@ -2,16 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { getProject, touchProjectLastUsed, type Project } from "../../../web/storage/projects";
-import type { ThreadSummary } from "../../../web/api/types";
+import { settingsStore } from "../../../web/storage/settings";
+import { saveJson, threadModeKey } from "../../../web/storage/localStore";
+import {
+  DEFAULT_COLLABORATION_MODEL,
+  collaborationModeForChatMode,
+  type ThreadSummary
+} from "../../../web/api/types";
 
 type Tab = "active" | "archived";
 
-export default function ProjectThreadsPage({ params }: { params: { projectId: string } }): JSX.Element {
+export default function ProjectThreadsPage(): JSX.Element {
   const router = useRouter();
+  const params = useParams<{ projectId: string }>();
+  const projectId = String(params?.projectId ?? "");
   const [project, setProject] = useState<Project | null>(null);
   const [tab, setTab] = useState<Tab>("active");
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -19,14 +27,14 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const p = getProject(params.projectId);
+    const p = getProject(projectId);
     if (!p) {
       router.replace("/projects");
       return;
     }
     setProject(p);
     touchProjectLastUsed(p.id);
-  }, [params.projectId, router]);
+  }, [projectId, router]);
 
   useEffect(() => {
     if (!project) return;
@@ -54,7 +62,24 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
   async function startNewThread(): Promise<void> {
     if (!project) return;
     try {
-      const thread = await codex.startThread({ cwd: project.path });
+      const settings = settingsStore.load();
+      const serverDefaults = settings.defaultMode === "plan" ? await readServerDefaults() : null;
+      const planModel = settings.defaultModel ?? serverDefaults?.model ?? DEFAULT_COLLABORATION_MODEL;
+      const planEffort = serverDefaults?.reasoningEffort ?? null;
+      const thread = await codex.startThread({
+        cwd: project.path,
+        ...(settings.defaultModel ? { model: settings.defaultModel } : {})
+      });
+      saveJson(threadModeKey(thread.id), settings.defaultMode);
+      if (settings.defaultMode === "plan") {
+        try {
+          await codex.updateThreadSettings(thread.id, {
+            collaborationMode: collaborationModeForChatMode("plan", planModel, planEffort)
+          });
+        } catch (err) {
+          console.warn("sync default thread mode failed", err);
+        }
+      }
       router.push(`/threads/${thread.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : (err as Error).message);
@@ -64,8 +89,17 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
   if (!project) return <main style={{ padding: 16 }} />;
 
   return (
-    <main style={{ padding: "var(--cw-space-4)", paddingBottom: 96 }}>
-      <header style={{ display: "flex", alignItems: "center", gap: 10, padding: "var(--cw-space-2) 0" }}>
+    <main
+      style={{
+        height: "100dvh",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        padding: "var(--cw-space-4)",
+        paddingBottom: 0
+      }}
+    >
+      <header style={{ display: "flex", alignItems: "center", gap: 10, padding: "var(--cw-space-2) 0", flexShrink: 0 }}>
         <Link href="/projects" aria-label="返回" style={{ fontSize: 22, textDecoration: "none" }}>
           ‹
         </Link>
@@ -87,7 +121,8 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
           padding: 4,
           background: "var(--cw-bg-elevated)",
           borderRadius: 10,
-          margin: "12px 0"
+          margin: "12px 0",
+          flexShrink: 0
         }}
       >
         <TabButton active={tab === "active"} onClick={() => setTab("active")}>
@@ -98,19 +133,29 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
         </TabButton>
       </div>
 
-      {loading ? (
-        <ThreadSkeleton />
-      ) : error ? (
-        <div style={{ color: "var(--cw-danger)", padding: 14, fontSize: 14 }}>{error}</div>
-      ) : threads.length === 0 ? (
-        <EmptyState tab={tab} onStart={startNewThread} />
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-          {threads.map((t) => (
-            <ThreadRow key={t.id} thread={t} onClick={() => router.push(`/threads/${t.id}`)} />
-          ))}
-        </ul>
-      )}
+      <div
+        data-testid="project-thread-scroll"
+        style={{
+          flex: "1 1 0%",
+          minHeight: 0,
+          overflowY: "auto",
+          paddingBottom: "calc(96px + var(--safe-bottom))"
+        }}
+      >
+        {loading ? (
+          <ThreadSkeleton />
+        ) : error ? (
+          <div style={{ color: "var(--cw-danger)", padding: 14, fontSize: 14 }}>{error}</div>
+        ) : threads.length === 0 ? (
+          <EmptyState tab={tab} onStart={startNewThread} />
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+            {threads.map((t) => (
+              <ThreadRow key={t.id} thread={t} onClick={() => router.push(`/threads/${t.id}`)} />
+            ))}
+          </ul>
+        )}
+      </div>
 
       <button
         type="button"
@@ -134,6 +179,18 @@ export default function ProjectThreadsPage({ params }: { params: { projectId: st
       </button>
     </main>
   );
+}
+
+async function readServerDefaults(): Promise<{ model: string | null; reasoningEffort: string | null } | null> {
+  try {
+    const settings = await codex.settings();
+    return {
+      model: settings.model,
+      reasoningEffort: settings.reasoningEffort
+    };
+  } catch {
+    return null;
+  }
 }
 
 function TabButton({
@@ -278,10 +335,11 @@ function EmptyState({ tab, onStart }: { tab: Tab; onStart: () => void }): JSX.El
 
 function formatRelative(ts: number): string {
   if (!ts) return "";
-  const diff = Date.now() - ts;
+  const normalized = ts < 10_000_000_000 ? ts * 1000 : ts;
+  const diff = Date.now() - normalized;
   if (diff < 60_000) return "刚刚";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
   if (diff < 86_400_000 * 7) return `${Math.floor(diff / 86_400_000)} 天前`;
-  return new Date(ts).toLocaleDateString();
+  return new Date(normalized).toLocaleDateString();
 }

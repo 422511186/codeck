@@ -1,6 +1,9 @@
 import { api } from "./client";
 import type {
   AppServerStatus,
+  CodexSettings,
+  CollaborationModePayload,
+  CollaborationModePreset,
   ModelOption,
   PendingServerRequest,
   ThreadDetail,
@@ -27,7 +30,7 @@ export async function login(token: string): Promise<void> {
 
 export async function logout(): Promise<void> {
   try {
-    await api("/api/auth/login", { method: "DELETE", skipSessionRedirect: true });
+    await api("/api/auth/logout", { method: "POST", skipSessionRedirect: true });
   } catch {
     // ignore
   }
@@ -43,9 +46,24 @@ export async function listModels(): Promise<ModelOption[]> {
   return data.models ?? [];
 }
 
+export async function readCodexSettings(): Promise<CodexSettings> {
+  const data = await api<{ settings: CodexSettings }>("/api/codex/settings/model-defaults");
+  return {
+    model: data.settings?.model ?? null,
+    modelProvider: data.settings?.modelProvider ?? null,
+    reasoningEffort: data.settings?.reasoningEffort ?? null
+  };
+}
+
+export async function listCollaborationModes(): Promise<CollaborationModePreset[]> {
+  const data = await api<{ modes: CollaborationModePreset[] }>("/api/codex/collaboration-modes");
+  return data.modes ?? [];
+}
+
 export type ListThreadsParams = {
   cursor?: string | null;
   search?: string;
+  cwd?: string;
   archived?: boolean;
 };
 
@@ -54,6 +72,7 @@ export async function listThreads(params: ListThreadsParams = {}): Promise<Threa
     query: {
       cursor: params.cursor,
       search: params.search,
+      cwd: params.cwd,
       archived: params.archived
     }
   });
@@ -63,6 +82,14 @@ export async function listThreads(params: ListThreadsParams = {}): Promise<Threa
 export async function readThread(threadId: string): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}`
+  );
+  return data.thread;
+}
+
+export async function resumeThread(threadId: string): Promise<ThreadDetail> {
+  const data = await api<{ thread: ThreadDetail }>(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/resume`,
+    { method: "POST" }
   );
   return data.thread;
 }
@@ -101,6 +128,8 @@ export type StartTurnInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string;
+  additionalContext?: Record<string, { value: string; kind: "untrusted" | "application" }>;
+  collaborationMode?: CollaborationModePayload;
 };
 
 export type StartTurnResult = { turnId: string; thread: ThreadDetail };
@@ -164,6 +193,7 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string;
+  collaborationMode?: CollaborationModePayload;
 };
 
 export async function updateThreadSettings(
@@ -209,8 +239,10 @@ export type AccountAuthStatus = {
 };
 
 export async function getAccountAuthStatus(): Promise<AccountAuthStatus> {
-  const data = await api<{ result: AccountAuthStatus }>("/api/codex/account/auth-status");
-  return data.result;
+  const data = await api<{ result?: AccountAuthStatus; authStatus?: AccountAuthStatus }>(
+    "/api/codex/account/auth-status"
+  );
+  return data.result ?? data.authStatus!;
 }
 
 export type TokenUsageSummary = {
@@ -221,8 +253,10 @@ export type TokenUsageSummary = {
 };
 
 export async function getTokenUsage(): Promise<TokenUsageSummary> {
-  const data = await api<{ result: TokenUsageSummary }>("/api/codex/account/token-usage");
-  return data.result;
+  const data = await api<{ result?: TokenUsageSummary; usage?: TokenUsageSummary }>(
+    "/api/codex/account/token-usage"
+  );
+  return data.result ?? data.usage!;
 }
 
 export type ProbeWorkspaceResult = { allowed: boolean; threadCount: number; error?: string };
@@ -250,20 +284,8 @@ export async function listThreadsForCwd(
   cwd: string,
   archived = false
 ): Promise<ThreadSummary[]> {
-  const all: ThreadSummary[] = [];
-  let cursor: string | null = null;
-  const target = normalizePath(cwd);
-  for (let i = 0; i < 10; i++) {
-    const page = await listThreads({ cursor, archived });
-    for (const t of page.threads) {
-      if (normalizePath(t.cwd) === target) {
-        all.push(t);
-      }
-    }
-    if (!page.nextCursor) break;
-    cursor = page.nextCursor;
-  }
-  return all;
+  const page = await listThreads({ cwd, archived });
+  return page.threads;
 }
 
 export const auth = {
@@ -274,7 +296,9 @@ export const auth = {
 
 export const codex = {
   status: getAppServerStatus,
+  settings: readCodexSettings,
   models: listModels,
+  collaborationModes: listCollaborationModes,
   listThreads: async (params: { cwd?: string; archived?: boolean; cursor?: string | null; limit?: number; search?: string } = {}) => {
     if (params.cwd) {
       const items = await listThreadsForCwd(params.cwd, params.archived ?? false);
@@ -288,6 +312,7 @@ export const codex = {
   },
   listThreadsForCwd,
   readThread,
+  resumeThread,
   listTurnsBefore,
   startThread,
   startTurn,

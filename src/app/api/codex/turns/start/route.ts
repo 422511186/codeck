@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
+import type { StartTurnInput } from "../../../../../server/app-server/client";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
@@ -17,6 +18,8 @@ export async function POST(request: Request): Promise<Response> {
       model?: string;
       reasoningEffort?: string;
       permissions?: string;
+      additionalContext?: StartTurnInput["additionalContext"];
+      collaborationMode?: StartTurnInput["collaborationMode"];
     };
 
     if (!body.threadId) {
@@ -35,7 +38,9 @@ export async function POST(request: Request): Promise<Response> {
       imageCount: imagePaths?.length || 0,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions
+      permissions: body.permissions,
+      additionalContext: body.additionalContext,
+      collaborationMode: body.collaborationMode
     });
     const result = await getAppServerGateway().startTurn({
       threadId: body.threadId,
@@ -43,7 +48,9 @@ export async function POST(request: Request): Promise<Response> {
       imagePaths,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions
+      permissions: body.permissions,
+      additionalContext: body.additionalContext,
+      collaborationMode: body.collaborationMode
     });
     const thread = await getAppServerGateway().readThread(body.threadId);
 

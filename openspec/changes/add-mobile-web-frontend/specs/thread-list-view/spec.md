@@ -71,7 +71,7 @@
 #### Scenario: 点击悬浮按钮
 - **WHEN** 用户点击「+ 新会话」悬浮按钮
 - **THEN** 系统 MUST 调用 `POST /api/codex/threads/start`，使用当前项目的 cwd
-- **AND** 新会话 MUST 默认 Plan/Build = `Build`
+- **AND** 新会话 MUST 使用设置页中的全局默认 Plan/Build，系统初始默认值为 `Build`
 - **AND** 系统 MUST 跳转到该新会话的聊天页
 - **AND** 聊天页 MUST 不弹出任何配置面板
 

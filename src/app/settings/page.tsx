@@ -3,42 +3,73 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { codex, auth } from "../../../web/api/endpoints";
-import { settingsStore } from "../../../web/storage/settings";
-import type { ChatMode, ModelOption } from "../../../web/api/types";
+import { codex, auth } from "../../web/api/endpoints";
+import { applyTheme, settingsStore, themeLabel, type ThemeMode } from "../../web/storage/settings";
+import type { ChatMode, ModelOption } from "../../web/api/types";
 
 export default function SettingsPage(): JSX.Element {
   const router = useRouter();
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>("system");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [authStatus, setAuthStatus] = useState<{ authMethod: string | null; hasAuthToken: boolean } | null>(null);
   const [tokenUsage, setTokenUsage] = useState<{ lifetimeTokens: number | null; peakDailyTokens: number | null } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [usageLoading, setUsageLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
 
   useEffect(() => {
     const settings = settingsStore.load();
     setMode(settings.defaultMode);
     setModel(settings.defaultModel);
+    setTheme(settings.theme);
 
     let cancelled = false;
-    (async () => {
-      try {
-        const [m, a, t] = await Promise.all([
-          codex.models(),
-          codex.authStatus(),
-          codex.tokenUsage()
-        ]);
+    codex
+      .models()
+      .then((m) => {
+        if (!cancelled) setModels(m);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+
+    codex
+      .authStatus()
+      .then((a) => {
         if (!cancelled) {
-          setModels(m);
           setAuthStatus(a);
-          setTokenUsage(t.summary);
-          setLoading(false);
+          setAuthError(null);
         }
-      } catch {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+      })
+      .catch((err) => {
+        if (!cancelled) setAuthError(errorMessage(err, "无法读取账号状态"));
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+
+    codex
+      .tokenUsage()
+      .then((t) => {
+        if (!cancelled) {
+          setTokenUsage(t.summary);
+          setUsageError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setUsageError(errorMessage(err, "无法读取用量统计"));
+      })
+      .finally(() => {
+        if (!cancelled) setUsageLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -49,9 +80,15 @@ export default function SettingsPage(): JSX.Element {
     settingsStore.update({ defaultMode: next });
   }
 
-  function updateModel(next: string): void {
+  function updateModel(next: string | null): void {
     setModel(next);
     settingsStore.update({ defaultModel: next });
+  }
+
+  function updateTheme(next: ThemeMode): void {
+    setTheme(next);
+    settingsStore.update({ theme: next });
+    applyTheme(next);
   }
 
   async function logout(): Promise<void> {
@@ -80,7 +117,7 @@ export default function SettingsPage(): JSX.Element {
           </select>
         </Row>
         <Row label="默认模型">
-          {loading ? (
+          {modelsLoading ? (
             <span style={{ color: "var(--cw-fg-muted)", fontSize: 14 }}>载入中…</span>
           ) : (
             <select value={model ?? ""} onChange={(e) => updateModel(e.target.value || null)} style={selectStyle}>
@@ -95,8 +132,18 @@ export default function SettingsPage(): JSX.Element {
         </Row>
       </Section>
 
+      <Section title="主题">
+        <Row label="主题">
+          <select value={theme} onChange={(e) => updateTheme(e.target.value as ThemeMode)} style={selectStyle}>
+            <option value="system">{themeLabel("system")}</option>
+            <option value="light">{themeLabel("light")}</option>
+            <option value="dark">{themeLabel("dark")}</option>
+          </select>
+        </Row>
+      </Section>
+
       <Section title="账号">
-        {loading ? (
+        {authLoading ? (
           <Row label="账号状态">
             <span style={{ color: "var(--cw-fg-muted)", fontSize: 14 }}>载入中…</span>
           </Row>
@@ -115,13 +162,15 @@ export default function SettingsPage(): JSX.Element {
           </>
         ) : (
           <Row label="账号状态">
-            <span style={{ color: "var(--cw-danger)", fontSize: 14 }}>获取失败</span>
+            <span style={{ color: "var(--cw-danger)", fontSize: 14 }}>
+              账号暂不可用：{authError ?? "获取失败"}
+            </span>
           </Row>
         )}
       </Section>
 
       <Section title="Token 用量">
-        {loading ? (
+        {usageLoading ? (
           <Row label="用量统计">
             <span style={{ color: "var(--cw-fg-muted)", fontSize: 14 }}>载入中…</span>
           </Row>
@@ -144,7 +193,9 @@ export default function SettingsPage(): JSX.Element {
           </>
         ) : (
           <Row label="用量统计">
-            <span style={{ color: "var(--cw-danger)", fontSize: 14 }}>获取失败</span>
+            <span style={{ color: "var(--cw-danger)", fontSize: 14 }}>
+              用量暂不可用：{usageError ?? "获取失败"}
+            </span>
           </Row>
         )}
       </Section>
@@ -168,6 +219,10 @@ export default function SettingsPage(): JSX.Element {
       </Section>
     </main>
   );
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): JSX.Element {

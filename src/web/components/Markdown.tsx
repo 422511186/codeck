@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { isValidElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -15,19 +16,17 @@ export function Markdown({ text }: Props): JSX.Element {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          code({ inline, className, children, ...rest }) {
+          code({ inline, className, children }) {
             const lang = (className ?? "").replace(/^language-/, "");
-            if (inline) {
-              return (
-                <code className={className} {...rest}>
-                  {children}
-                </code>
-              );
+            const code = textFromChildren(children);
+            const isInline = inline ?? (!className && !code.includes("\n"));
+            if (isInline) {
+              return <code className={className}>{children}</code>;
             }
             if (lang === "mermaid") {
-              return <MermaidBlock code={String(children).trim()} />;
+              return <MermaidBlock code={code.trim()} />;
             }
-            return <CodeBlock code={String(children).replace(/\n$/, "")} className={className} />;
+            return <CodeBlock code={code.replace(/\n$/, "")} className={className} />;
           },
           pre({ children }) {
             return <>{children}</>;
@@ -38,6 +37,19 @@ export function Markdown({ text }: Props): JSX.Element {
       </ReactMarkdown>
     </div>
   );
+}
+
+function textFromChildren(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") {
+    return String(children);
+  }
+  if (Array.isArray(children)) {
+    return children.map(textFromChildren).join("");
+  }
+  if (isValidElement<{ children?: ReactNode }>(children)) {
+    return textFromChildren(children.props.children);
+  }
+  return "";
 }
 
 function CodeBlock({ code, className }: { code: string; className?: string }): JSX.Element {
@@ -74,9 +86,10 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
         style={{
           margin: 0,
           padding: 12,
-          background: "#0d1117",
-          color: "#c9d1d9",
+          background: "var(--cw-code-bg)",
+          color: "var(--cw-code-fg)",
           borderRadius: 10,
+          border: "1px solid var(--cw-code-border)",
           fontFamily: "var(--font-mono)",
           fontSize: 12,
           overflowX: "auto"

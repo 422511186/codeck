@@ -1,8 +1,8 @@
 "use client";
 
 import { create } from "zustand";
-import type { AppServerStatus, ChatMode, PendingServerRequest } from "../api/types";
-import type { TimelineEntry } from "./timeline";
+import type { AppServerStatus, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
+import { timelineItemToEntry, type TimelineEntry } from "./timeline";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
 export type { WsConnectionState };
@@ -42,6 +42,7 @@ type Actions = {
   ) => void;
   appendEntries: (threadId: string, entries: TimelineEntry[]) => void;
   replaceOrAddEntry: (threadId: string, entry: TimelineEntry) => void;
+  appendTextToEntry: (threadId: string, entry: TimelineEntry) => void;
   setRunning: (threadId: string, running: boolean) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
@@ -130,6 +131,42 @@ export const useStore = create<State & Actions>((set, get) => ({
         threads: { ...state.threads, [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: entry.id } }
       };
     }),
+  appendTextToEntry: (threadId, entry) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const idx = prev.entries.findIndex((e) => e.id === entry.id);
+      const nextEntries =
+        idx >= 0
+          ? prev.entries.map((current, i) => {
+              if (i !== idx || current.body.kind !== entry.body.kind) {
+                return current;
+              }
+              if (
+                (current.body.kind === "agent-message" && entry.body.kind === "agent-message") ||
+                (current.body.kind === "reasoning" && entry.body.kind === "reasoning")
+              ) {
+                return {
+                  ...current,
+                  body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
+                };
+              }
+              if (current.body.kind === "tool" && entry.body.kind === "tool") {
+                return {
+                  ...current,
+                  body: {
+                    ...current.body,
+                    result: `${current.body.result ?? ""}${entry.body.result ?? ""}`,
+                    status: entry.body.status
+                  }
+                };
+              }
+              return entry;
+            })
+          : [...prev.entries, entry];
+      return {
+        threads: { ...state.threads, [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: entry.id } }
+      };
+    }),
   setRunning: (threadId, running) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -146,7 +183,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, model, modelEffort: effort ?? prev.modelEffort }
+          [threadId]: { ...prev, model, modelEffort: effort === undefined ? prev.modelEffort : effort }
         }
       };
     }),
@@ -205,11 +242,15 @@ export const useStore = create<State & Actions>((set, get) => ({
       get().ensureThread(threadId);
       switch (ev.kind) {
         case "turn.started":
+        case "turn_started":
           get().setRunning(threadId, true);
           break;
         case "turn.completed":
         case "turn.failed":
         case "turn.canceled":
+        case "turn_completed":
+        case "turn_failed":
+        case "turn_interrupted":
           get().setRunning(threadId, false);
           break;
         case "plan.delta": {
@@ -217,10 +258,122 @@ export const useStore = create<State & Actions>((set, get) => ({
           get().setPlan(threadId, plan);
           break;
         }
+        case "agent_message_delta": {
+          const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-agent-live`;
+          const delta = typeof ev.delta === "string" ? ev.delta : "";
+          if (delta) {
+            get().appendTextToEntry(threadId, {
+              id: itemId,
+              createdAt: Date.now(),
+              body: { kind: "agent-message", text: delta }
+            });
+          }
+          break;
+        }
+        case "reasoning_delta": {
+          const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-reasoning-live`;
+          const delta = typeof ev.delta === "string" ? ev.delta : "";
+          if (delta) {
+            get().appendTextToEntry(threadId, {
+              id: itemId,
+              createdAt: Date.now(),
+              body: { kind: "reasoning", text: delta, done: false }
+            });
+          }
+          break;
+        }
+        case "command_output_delta":
+        case "file_output_delta": {
+          const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-${ev.kind}`;
+          const delta = typeof ev.delta === "string" ? ev.delta : "";
+          if (delta) {
+            get().appendTextToEntry(threadId, {
+              id: itemId,
+              createdAt: Date.now(),
+              body: {
+                kind: "tool",
+                server: ev.kind === "command_output_delta" ? "command" : "file",
+                tool: ev.kind === "command_output_delta" ? "command" : "file",
+                status: "running",
+                result: delta
+              }
+            });
+          }
+          break;
+        }
+        case "turn_diff_updated": {
+          const diff = typeof ev.diff === "string" ? ev.diff : "";
+          get().replaceOrAddEntry(threadId, {
+            id: `${ev.turnId ?? threadId}-diff`,
+            createdAt: Date.now(),
+            body: {
+              kind: "diff",
+              path: "工作区变更",
+              added: 0,
+              removed: 0,
+              diff
+            }
+          });
+          break;
+        }
+        case "context_compacted": {
+          const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
+          get().replaceOrAddEntry(threadId, {
+            id: `${turnId}-context-compacted`,
+            createdAt: Date.now(),
+            body: { kind: "system", text: "压缩上下文已完成" }
+          });
+          break;
+        }
+        case "warning": {
+          const message = typeof ev.message === "string" ? ev.message : "发生错误";
+          get().replaceOrAddEntry(threadId, {
+            id: `${threadId}-warning-${Date.now()}`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: message }
+          });
+          break;
+        }
+        case "turn_error": {
+          const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
+          const message = typeof ev.message === "string" ? ev.message : "运行失败";
+          get().replaceOrAddEntry(threadId, {
+            id: `${turnId}-error`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: message }
+          });
+          if (ev.willRetry !== true) {
+            get().setRunning(threadId, false);
+          }
+          break;
+        }
+        case "thread_settings_updated": {
+          const mode = ev.collaborationMode === "plan" ? "plan" : ev.collaborationMode === "default" ? "build" : null;
+          if (mode) {
+            get().setMode(threadId, mode);
+          }
+          if (typeof ev.model === "string") {
+            get().setModel(
+              threadId,
+              ev.model,
+              typeof ev.reasoningEffort === "string" ? ev.reasoningEffort : null
+            );
+          }
+          break;
+        }
         case "item.appended":
-        case "item.updated": {
+        case "item.updated":
+        case "item_updated": {
           const entry = (ev.entry as TimelineEntry | undefined) ?? null;
-          if (entry) get().replaceOrAddEntry(threadId, entry);
+          if (entry) {
+            get().replaceOrAddEntry(threadId, entry);
+            break;
+          }
+          const item = (ev.item as TimelineItem | undefined) ?? null;
+          if (item) {
+            const createdAt = typeof ev.completedAtMs === "number" ? ev.completedAtMs : Date.now();
+            get().replaceOrAddEntry(threadId, timelineItemToEntry(item, createdAt));
+          }
           break;
         }
         default:

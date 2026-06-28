@@ -11,6 +11,7 @@ import { ToolCard } from "./cards/ToolCard";
 import { SystemMessage } from "./cards/SystemMessage";
 import { ErrorCard } from "./cards/ErrorCard";
 import { ApprovalCard } from "./cards/ApprovalCard";
+import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 
 type Props = {
   entries: TimelineEntry[];
@@ -20,35 +21,52 @@ type Props = {
 };
 
 export function Timeline({ entries, approvals, onResolveApproval, onResendUser }: Props): JSX.Element {
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {entries.map((entry) => (
-        <TimelineRow key={entry.id} entry={entry} onResendUser={onResendUser} />
-      ))}
-      {approvals?.map((approval) => (
-        <ApprovalCard
-          key={approval.requestId}
-          approval={approval}
-          onResolved={async (decision) => {
-            if (onResolveApproval) await onResolveApproval(approval, decision);
-          }}
-        />
-      ))}
-    </div>
+    <>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {entries.map((entry) => (
+          <TimelineRow
+            key={entry.id}
+            entry={entry}
+            onResendUser={onResendUser}
+            onPreviewImage={setPreviewSrc}
+          />
+        ))}
+        {approvals?.map((approval) => (
+          <ApprovalCard
+            key={approval.requestId}
+            approval={approval}
+            onResolved={async (decision) => {
+              if (onResolveApproval) await onResolveApproval(approval, decision);
+            }}
+          />
+        ))}
+      </div>
+      {previewSrc ? <ImagePreviewDialog src={previewSrc} onClose={() => setPreviewSrc(null)} /> : null}
+    </>
   );
 }
 
 function TimelineRow({
   entry,
-  onResendUser
+  onResendUser,
+  onPreviewImage
 }: {
   entry: TimelineEntry;
   onResendUser?: (text: string) => void;
+  onPreviewImage: (src: string) => void;
 }): JSX.Element {
   const body = entry.body;
   switch (body.kind) {
     case "user-message":
-      return <UserMessage entry={entry} onResend={() => onResendUser?.(body.text)} />;
+      return (
+        <UserMessage
+          entry={entry}
+          onResend={() => onResendUser?.(body.text)}
+          onPreviewImage={onPreviewImage}
+        />
+      );
     case "agent-message":
       return (
         <div style={{ padding: "4px 14px" }}>
@@ -72,7 +90,15 @@ function TimelineRow({
   }
 }
 
-function UserMessage({ entry, onResend }: { entry: TimelineEntry; onResend: () => void }): JSX.Element {
+function UserMessage({
+  entry,
+  onResend,
+  onPreviewImage
+}: {
+  entry: TimelineEntry;
+  onResend: () => void;
+  onPreviewImage: (src: string) => void;
+}): JSX.Element {
   const body = entry.body as Extract<TimelineEntry["body"], { kind: "user-message" }>;
   const [menuOpen, setMenuOpen] = useState(false);
   const failed = body.status === "failed";
@@ -101,13 +127,7 @@ function UserMessage({ entry, onResend }: { entry: TimelineEntry; onResend: () =
       {body.imagePaths?.length ? (
         <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
           {body.imagePaths.map((src) => (
-            <img
-              key={src}
-              src={src}
-              alt=""
-              onClick={() => window.open(src, "_blank")}
-              style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, cursor: "zoom-in" }}
-            />
+            <ImageThumb key={src} src={src} onPreview={onPreviewImage} />
           ))}
         </div>
       ) : null}
@@ -179,4 +199,3 @@ const menuBtn: React.CSSProperties = {
   background: "transparent",
   color: "var(--cw-fg)"
 };
-

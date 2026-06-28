@@ -23,7 +23,7 @@
 - [x] 3.3 实现路由守卫：未登录访问 `/projects`、`/projects/:projectId`、`/threads/:threadId` 时跳转 `/login?next=<原 URL>`。
 - [x] 3.4 实现路由布局 `app/(mobile)/layout.tsx`：顶部断线细横幅（监听 WS 状态机，状态 != open 时展示「网络已断开，重连中…」）、iOS 风格右进左出过渡。
 - [x] 3.5 实现「session 失效」处理：API client 401 时清除前端 session 状态、保留来源 URL、跳回 `/login?next=...`。
-- [ ] 3.6 写组件测试：路由守卫、断线横幅显隐、登录页错误展示、session 失效跳转。
+- [x] 3.6 写组件测试：路由守卫、断线横幅显隐、登录页错误展示、session 失效跳转。
 
 ## 4. project-management（项目页）
 
@@ -34,7 +34,7 @@
 - [x] 4.5 实现「添加项目」交互：手输路径，提交时调用 `GET /api/codex/threads?cwd=<path>` 进行 allowlist 校验；成功后写入 localStorage、跳到该项目会话列表。
 - [x] 4.6 实现「重命名项目」弹窗输入；保留默认目录名作为可还原值。
 - [x] 4.7 实现「移除项目」直接移除，不弹确认（threads 不受影响）。
-- [ ] 4.8 写组件 + 集成测试：项目列表渲染、添加流程、添加路径不合法时回填错误、移除项目后入口消失但 thread 数据保留。
+- [x] 4.8 写组件 + 集成测试：项目列表渲染、添加流程、添加路径不合法时回填错误、移除项目后入口消失但 thread 数据保留。
 
 ## 5. thread-list-view（项目内会话列表）
 
@@ -43,7 +43,7 @@
 - [x] 5.3 接入 `GET /api/codex/threads?cwd=<path>&archived=<bool>&cursor=...`：分页/排序（最后活动时间倒序，归档 tab 按归档时间倒序）。
 - [x] 5.4 在列表空状态展示「提示 + 大按钮」；加载用骨架屏。
 - [x] 5.5 实现悬浮 + 按钮跳到新会话；点击会话条进入 `/threads/:threadId`。
-- [ ] 5.6 写组件测试：tab 切换、列表条文案截断、空状态、运行中标识。
+- [x] 5.6 写组件测试：tab 切换、列表条文案截断、空状态、运行中标识。
 
 ## 6. thread-chat-view（会话页基础）
 
@@ -57,7 +57,7 @@
 - [x] 6.8 实现「中央 spinner」加载状态；turn 已结束、agent 静止时清除 running 标记。
 - [x] 6.9 实现用户消息长按出菜单（复制等）。
 - [x] 6.10 实现 markdown 渲染：`react-markdown` + `remark-gfm`，全量；不渲染 LaTeX；渲染 mermaid 代码块；代码块满宽 + 横向滑动、右上角复制按钮。
-- [ ] 6.11 写组件测试：自动滚策略、跳到最新按钮显隐、历史加载顺序、长按菜单。
+- [x] 6.11 写组件测试：自动滚策略、跳到最新按钮显隐、历史加载顺序、长按菜单。
 
 ## 7. agent-output-rendering（折叠卡片家族 + 计划条）
 
@@ -70,7 +70,7 @@
 - [x] 7.7 实现「系统消息」样式：居中细线 + 灰色小字；覆盖压缩上下文完成、Plan→Build 切换提示、错误事件等。
 - [x] 7.8 实现错误卡片：所有 turn 错误 / warning 用统一内嵌错误卡片；不带任何操作按钮（不做重试）。
 - [x] 7.9 实现「微动效」：思考中、运行中等临时状态的轻度动画；遵循 `prefers-reduced-motion`。
-- [ ] 7.10 写组件测试：每种卡片折叠/展开、运行/完成/失败状态、计划步骤增量更新。
+- [x] 7.10 写组件测试：每种卡片折叠/展开、运行/完成/失败状态、计划步骤增量更新。
 
 ## 8. approval-inline-cards（审批）
 
@@ -79,7 +79,7 @@
 - [x] 8.3 实现失效审批的灰化：监听 `server-request-resolved` 事件；若 turn 已结束也视为失效。
 - [x] 8.4 实现进入会话时调用 `GET /api/codex/requests` 拉取既有的待审批，再叠 WS 增量。
 - [x] 8.5 多张审批 timeline 中依次内嵌渲染。
-- [ ] 8.6 写组件测试：审批 resolve 成功路径、resolve 失败路径、失效灰化、多审批并存。
+- [x] 8.6 写组件测试：审批 resolve 成功路径、resolve 失败路径、失效灰化、多审批并存。
 
 ## 9. chat-input-area（输入区）
 
@@ -92,12 +92,12 @@
 - [x] 9.7 实现图片上传流程：先调用 `POST /api/codex/uploads/images`，得到 path；发送 turn 时把 path 放入 `imagePaths`；上传中缩略图盖进度环；失败缩略图变红，点击重试。
 - [x] 9.8 实现 `turns/start` 失败时：用户消息变红 + 重试按钮（重试时复用同一份 imagePaths）。
 - [x] 9.9 实现 timeline 中图片呈现：缩略图；点击全屏预览。
-- [ ] 9.10 写组件测试：草稿保存、空消息禁用、中断流程、全屏编辑器、重发按钮显隐、图片上传成功/失败路径。
+- [x] 9.10 写组件测试：草稿保存、空消息禁用、中断流程、全屏编辑器、重发按钮显隐、图片上传成功/失败路径。
 
 ## 10. thread-controls（Plan/Build、模型、底部抽屉）
 
 - [x] 10.1 实现头部 Plan/Build segmented：每会话独立；状态存内存 + 同步到后端会话设置（`POST /api/codex/threads/:threadId/settings`）；切换只影响下一条 turn。
-- [x] 10.2 实现新会话默认 Build；不做发送时二次确认。
+- [x] 10.2 实现系统初始默认 Build；设置页修改全局默认模式后，新会话使用该默认值；不做发送时二次确认。
 - [x] 10.3 实现 Plan 末尾「转 Build 执行」按钮：点击 → 切换 Plan/Build + 自动追加重新执行；只显示薄警告标识，不弹确认对话框。
 - [x] 10.4 实现头部模型显示 + 切换：点击进入模型选择器；每次打开切换器时调用 `GET /api/codex/models` 拉最新列表；选择后调用 `threads/:threadId/settings` 更新会话模型。
 - [x] 10.5 实现 ⋮ → 底部抽屉：重命名 / 归档 / 压缩上下文 / Fork。
@@ -106,16 +106,16 @@
 - [x] 10.8 实现「压缩上下文」：弹确认对话框 → 调用 `POST /api/codex/threads/:threadId/compact`；进行中禁用输入框；完成后 timeline 插入系统消息。
 - [x] 10.9 实现「Fork」：点即调用 `POST /api/codex/threads/:threadId/fork`，继承原会话 Plan/Build 和模型；跳转到新会话。
 - [x] 10.10 实现会话名自动生成：第一条 user 消息发送成功后，用首句调用 `threads/:threadId/name` 写入名字；之前在列表里显示「新会话」占位。
-- [ ] 10.11 写组件测试：Plan/Build 切换、模型切换、底部抽屉各项、归档 + 撤销、压缩上下文流程。
+- [x] 10.11 写组件测试：Plan/Build 切换、模型切换、底部抽屉各项、归档 + 撤销、压缩上下文流程。
 
 ## 11. settings-minimal（设置页）
 
-- [x] 11.1 实现 `app/(mobile)/settings/page.tsx`：四个分组 = 默认模型与模式、账号、Token 用量、登出 Web。
+- [x] 11.1 实现 `app/(mobile)/settings/page.tsx`：五个分组 = 默认模型与模式、主题、账号、Token 用量、登出 Web。
 - [x] 11.2 「默认模型与模式」：本地默认值存 localStorage；模型列表通过 `GET /api/codex/models` 拉；模式 = Plan / Build。
 - [x] 11.3 「账号」：调用 `GET /api/codex/account/auth-status` 展示 Codex 账号状态；不在此处做账号登录入口（保持最小集）。
 - [x] 11.4 「Token 用量」：调用 `GET /api/codex/account/token-usage` 展示当前用量。
 - [x] 11.5 「登出 Web」：清除 session cookie（前端调用本项目登出方式，或在缺失时调用 `POST /api/auth/login` 反向，由 design 决定）；跳回 `/login`。
-- [ ] 11.6 写组件测试：模型/模式持久化、默认值在新会话生效、登出后回到登录页。
+- [x] 11.6 写组件测试：模型/模式持久化、主题切换持久化、默认值在新会话生效、登出后回到登录页。
 
 ## 12. 集成与验收
 

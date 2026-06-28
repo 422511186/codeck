@@ -41,9 +41,14 @@ export const StorageKeys = {
   Projects: "projects",
   Settings: "settings",
   Drafts: "drafts",
-  ChatDraftPrefix: "draft:" // 完整 key = `draft:${threadId}`
+  ChatDraftPrefix: "draft:", // 完整 key = `draft:${threadId}`
+  ThreadModePrefix: "thread-mode:" // 完整 key = `thread-mode:${threadId}`
 } as const;
 
 export function draftKey(threadId: string): string {
   return `${StorageKeys.ChatDraftPrefix}${threadId}`;
+}
+
+export function threadModeKey(threadId: string): string {
+  return `${StorageKeys.ThreadModePrefix}${threadId}`;
 }

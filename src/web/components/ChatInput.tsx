@@ -10,7 +10,8 @@ export type ChatInputProps = {
   running: boolean;
   onSend: (text: string, imagePaths: string[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
-  onResendLast: () => Promise<void>;
+  onResendLast: () => Promise<string | null | void>;
+  canResendLast?: boolean;
 };
 
 type ImageState = {
@@ -56,10 +57,10 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     await uploadImage(image.file);
   }
 
-  async function send(): Promise<void> {
+  async function send(value = text): Promise<void> {
     if (sending || props.running) return;
-    const trimmed = text.trim();
-    if (!trimmed && !image) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
     if (image && image.status !== "ready") return;
     setSending(true);
     try {
@@ -79,8 +80,17 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
   }
 
-  const disabled = sending || (image?.status === "uploading");
-  const canSend = !disabled && (text.trim().length > 0 || image?.status === "ready");
+  const disabled = sending || props.running || image?.status === "uploading";
+  const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
+
+  async function resendLast(): Promise<void> {
+    if (props.running) return;
+    const value = await props.onResendLast();
+    if (typeof value === "string") {
+      setText(value);
+      setDraft(props.threadId, value);
+    }
+  }
 
   return (
     <>
@@ -103,7 +113,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <button type="button" onClick={pickImage} aria-label="添加图片" style={iconBtn} disabled={disabled}>
-            🖼
+            <ImageIcon />
           </button>
           <input
             ref={fileInput}
@@ -125,30 +135,32 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
             disabled={disabled}
           />
           <button type="button" onClick={() => setFullscreen(true)} aria-label="全屏编辑" style={iconBtn}>
-            ⤢
+            <ExpandIcon />
           </button>
-          <button
-            type="button"
-            onClick={() => props.onResendLast()}
-            aria-label="重发上一条"
-            style={{ ...iconBtn, opacity: props.running ? 0.3 : 1 }}
-            disabled={props.running}
-          >
-            ↺
-          </button>
+          {props.canResendLast ? (
+            <button
+              type="button"
+              onClick={resendLast}
+              aria-label="重发上一条"
+              style={{ ...iconBtn, opacity: props.running ? 0.3 : 1 }}
+              disabled={props.running}
+            >
+              <RefreshIcon />
+            </button>
+          ) : null}
           {props.running ? (
             <button type="button" onClick={() => props.onInterrupt()} style={interruptBtn} aria-label="中断">
-              ■
+              <StopIcon />
             </button>
           ) : (
             <button
               type="button"
-              onClick={send}
+              onClick={() => send()}
               disabled={!canSend}
               style={{ ...sendBtn, opacity: canSend ? 1 : 0.4 }}
               aria-label="发送"
             >
-              ➤
+              <SendIcon />
             </button>
           )}
         </div>
@@ -160,7 +172,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
           onCancel={() => setFullscreen(false)}
           onSubmit={async (value) => {
             setText(value);
-            await send();
+            await send(value);
           }}
         />
       ) : null}
@@ -291,7 +303,9 @@ const iconBtn: React.CSSProperties = {
   border: "none",
   background: "transparent",
   color: "var(--cw-fg)",
-  fontSize: 20
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center"
 };
 
 const sendBtn: React.CSSProperties = {
@@ -301,7 +315,9 @@ const sendBtn: React.CSSProperties = {
   border: "none",
   background: "var(--cw-accent)",
   color: "#fff",
-  fontSize: 18
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center"
 };
 
 const interruptBtn: React.CSSProperties = {
@@ -311,7 +327,9 @@ const interruptBtn: React.CSSProperties = {
   border: "none",
   background: "var(--cw-danger)",
   color: "#fff",
-  fontSize: 18
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center"
 };
 
 const textareaStyle: React.CSSProperties = {
@@ -356,3 +374,47 @@ const primaryBtn: React.CSSProperties = {
   padding: "6px 14px",
   borderRadius: 10
 };
+
+function ImageIcon(): JSX.Element {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="9" cy="10" r="1.6" fill="currentColor" />
+      <path d="M7 17l4.2-4.2 2.8 2.8 1.4-1.4L19 17" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ExpandIcon(): JSX.Element {
+  return (
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 9l5-5M19 9l-5-5M5 15l5 5M19 15l-5 5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RefreshIcon(): JSX.Element {
+  return (
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M20 12a8 8 0 1 1-2.3-5.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M20 5v5h-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SendIcon(): JSX.Element {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function StopIcon(): JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+    </svg>
+  );
+}

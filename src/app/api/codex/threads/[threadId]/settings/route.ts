@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
+import type { UpdateThreadSettingsInput } from "../../../../../../server/app-server/client";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
 import { audit } from "../../../../../../server/security";
 
@@ -17,18 +18,21 @@ export async function POST(
       model?: string;
       reasoningEffort?: string;
       permissions?: string;
+      collaborationMode?: UpdateThreadSettingsInput["collaborationMode"];
     };
     await audit("thread.settings.update", {
       threadId,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions
+      permissions: body.permissions,
+      collaborationMode: body.collaborationMode
     });
     await getAppServerGateway().updateThreadSettings({
       threadId,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions
+      permissions: body.permissions,
+      collaborationMode: body.collaborationMode
     });
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -74,16 +74,28 @@
 - **THEN** 当前页面 MUST 向右滑出
 - **AND** 上一层页面 MUST 从左侧滑入
 
-### Requirement: 系统主题跟随设备
-应用 SHALL 根据设备 `prefers-color-scheme` 自动切换深色/浅色主题，不提供应用内手动主题切换。
+### Requirement: 主题支持自适应与手动切换
+应用 SHALL 支持「自适应 / 明亮 / 暗黑」三种主题模式；默认自适应模式根据设备 `prefers-color-scheme` 自动切换深色/浅色主题，手动模式 SHALL 覆盖系统偏好。
 
-#### Scenario: 设备深色模式
+#### Scenario: 自适应模式下设备深色模式
 - **WHEN** 设备处于深色模式
+- **AND** 应用主题设置为「自适应」
 - **THEN** 系统 MUST 渲染深色主题
 
-#### Scenario: 设备浅色模式
+#### Scenario: 自适应模式下设备浅色模式
 - **WHEN** 设备处于浅色模式
+- **AND** 应用主题设置为「自适应」
 - **THEN** 系统 MUST 渲染浅色主题
+
+#### Scenario: 手动选择明亮
+- **WHEN** 用户在设置页选择「明亮」
+- **THEN** 系统 MUST 立即渲染浅色主题
+- **AND** MUST 持久化该选择
+
+#### Scenario: 手动选择暗黑
+- **WHEN** 用户在设置页选择「暗黑」
+- **THEN** 系统 MUST 立即渲染深色主题
+- **AND** MUST 持久化该选择
 
 ### Requirement: 网络断开顶部细横幅提示
 应用 SHALL 在 WebSocket 断开时显示顶部细横幅，重连成功后自动消失。

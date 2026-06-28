@@ -9,15 +9,16 @@
 - **AND** 点击后 MUST 跳转到独立设置页路径
 
 ### Requirement: 设置项最小集
-设置页 SHALL 只包含以下四类内容，不暴露其他后端能力：
+设置页 SHALL 只包含以下五类内容，不暴露其他后端能力：
 - 默认模型与默认 Plan/Build 模式
+- 主题切换（自适应 / 明亮 / 暗黑）
 - 账号状态（来自 `GET /api/codex/account/auth-status`）
 - Token 用量（来自 `GET /api/codex/account/token-usage`）
 - 登出 Web（清除 session cookie + 跳回登录页）
 
 #### Scenario: 设置项分组
 - **WHEN** 用户进入设置页
-- **THEN** 页面 MUST 至少包含「默认模型与模式」「账号」「Token 用量」「登出 Web」四块
+- **THEN** 页面 MUST 至少包含「默认模型与模式」「主题」「账号」「Token 用量」「登出 Web」五块
 - **AND** MUST 不包含 marketplace、插件、MCP、配置批量编辑、Remote Control、Windows Sandbox、environment 等管理类入口
 
 ### Requirement: 默认模型与默认模式
@@ -52,6 +53,18 @@
 #### Scenario: 不在 timeline 显示
 - **WHEN** 用户在会话聊天页
 - **THEN** timeline 中 MUST 不显示任何 token 用量或耗时数字
+
+### Requirement: 主题切换
+设置页 SHALL 提供「自适应 / 明亮 / 暗黑」三种主题选择；选择结果 MUST 持久化到 localStorage，并立即应用到当前页面。
+
+#### Scenario: 默认主题
+- **WHEN** 用户尚未设置主题
+- **THEN** 设置页主题选项 MUST 默认显示「自适应」
+
+#### Scenario: 切换主题
+- **WHEN** 用户选择「明亮」或「暗黑」
+- **THEN** 前端 MUST 持久化该主题
+- **AND** 当前页面 MUST 立即切换到对应主题
 
 ### Requirement: 登出 Web
 设置页 SHALL 提供「登出 Web」按钮；点击后清除前端 session cookie 并跳转回登录页；MUST 不影响 Codex 账号在 app-server 侧的登录状态。

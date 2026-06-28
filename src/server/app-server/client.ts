@@ -14,6 +14,7 @@ import type { GetConversationSummaryParams } from "../../../docs/generated/app-s
 import type { GetConversationSummaryResponse } from "../../../docs/generated/app-server-ts/GetConversationSummaryResponse";
 import type { GitDiffToRemoteParams } from "../../../docs/generated/app-server-ts/GitDiffToRemoteParams";
 import type { GitDiffToRemoteResponse } from "../../../docs/generated/app-server-ts/GitDiffToRemoteResponse";
+import type { CollaborationMode } from "../../../docs/generated/app-server-ts/CollaborationMode";
 import type { JsonValue } from "../../../docs/generated/app-server-ts/serde_json/JsonValue";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type { AppInfo } from "../../../docs/generated/app-server-ts/v2/AppInfo";
@@ -196,6 +197,7 @@ import type { ThreadUnsubscribeParams } from "../../../docs/generated/app-server
 import type { ThreadUnsubscribeResponse } from "../../../docs/generated/app-server-ts/v2/ThreadUnsubscribeResponse";
 import type { ThreadApproveGuardianDeniedActionParams } from "../../../docs/generated/app-server-ts/v2/ThreadApproveGuardianDeniedActionParams";
 import type { ThreadInjectItemsParams } from "../../../docs/generated/app-server-ts/v2/ThreadInjectItemsParams";
+import type { TurnError } from "../../../docs/generated/app-server-ts/v2/TurnError";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -240,6 +242,7 @@ import type {
   MobileJsonValue,
   MobileMcpServerView,
   MobileMcpLoginView,
+  MobileModelDefaultsView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
   MobileMarketplaceAddInput,
@@ -296,6 +299,7 @@ import { createTurnUserInput } from "./user-input";
 
 export type AppServerPeer = {
   request(method: string, params: unknown): Promise<unknown>;
+  notify?(method: string, params?: unknown): void | Promise<void>;
 };
 
 export type StartThreadInput = {
@@ -312,6 +316,8 @@ export type StartTurnInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string;
+  additionalContext?: TurnStartParams["additionalContext"];
+  collaborationMode?: TurnStartParams["collaborationMode"];
 };
 
 export type ExecCommandInput = {
@@ -372,6 +378,7 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string;
+  collaborationMode?: ThreadSettingsUpdateParams["collaborationMode"];
 };
 
 export type SetThreadGoalInput = {
@@ -541,25 +548,94 @@ function timestampSeconds(value: string | null): number {
   return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : 0;
 }
 
-function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
-  return item.content
+function stringifyJson(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractToolResultText(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.content)) {
+      return record.content
+        .map((item) => {
+          if (typeof item === "object" && item !== null && "text" in item) {
+            return String((item as { text?: unknown }).text ?? "");
+          }
+          return stringifyJson(item);
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+  }
+
+  return stringifyJson(value);
+}
+
+function toolStatus(status: unknown, failed = false): "running" | "success" | "failed" {
+  const normalized = typeof status === "string" ? status.toLowerCase() : "";
+  if (failed || normalized.includes("fail") || normalized.includes("error")) {
+    return "failed";
+  }
+  if (normalized.includes("running") || normalized.includes("inprogress") || normalized.includes("pending")) {
+    return "running";
+  }
+  return "success";
+}
+
+function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): MobileTimelineItem {
+  const imagePaths: string[] = [];
+  const text = item.content
     .map((content) => {
       if (content.type === "text") {
         return content.text;
       }
 
-      if (content.type === "image" || content.type === "localImage") {
-        return "[图片]";
+      if (content.type === "localImage") {
+        imagePaths.push(content.path);
+        return "";
+      }
+
+      if (content.type === "image") {
+        imagePaths.push(content.url);
+        return "";
       }
 
       return `[${content.type}]`;
     })
+    .filter((part) => part.trim().length > 0)
     .join("\n");
+
+  return {
+    id: item.id,
+    role: "user",
+    text,
+    ...(imagePaths.length ? { imagePaths } : {})
+  };
 }
 
-function timelineItem(item: ThreadItem): MobileTimelineItem | null {
+export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   if (item.type === "userMessage") {
-    return { id: item.id, role: "user", text: userMessageText(item) };
+    return userMessageView(item);
   }
 
   if (item.type === "agentMessage") {
@@ -586,25 +662,129 @@ function timelineItem(item: ThreadItem): MobileTimelineItem | null {
     return {
       id: item.id,
       role: "tool",
-      text: item.aggregatedOutput ? `${item.command}\n${item.aggregatedOutput}` : item.command
+      text: item.aggregatedOutput ? `${item.command}\n${item.aggregatedOutput}` : item.command,
+      toolKind: "command",
+      server: item.cwd,
+      tool: item.command,
+      status: toolStatus(item.status, item.exitCode !== null && item.exitCode !== 0)
+    };
+  }
+
+  if (item.type === "mcpToolCall") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: item.error ? stringifyJson(item.error) : extractToolResultText(item.result),
+      toolKind: "mcp",
+      server: item.server,
+      tool: item.tool,
+      arguments: stringifyJson(item.arguments),
+      status: toolStatus(item.status, Boolean(item.error))
+    };
+  }
+
+  if (item.type === "dynamicToolCall") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: extractToolResultText(item.contentItems),
+      toolKind: "dynamic",
+      server: item.namespace ?? "dynamic",
+      tool: item.tool,
+      arguments: stringifyJson(item.arguments),
+      status: toolStatus(item.status, item.success === false)
+    };
+  }
+
+  if (item.type === "fileChange") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: stringifyJson(item.changes),
+      toolKind: "file",
+      server: "file",
+      tool: "change",
+      status: toolStatus(item.status)
+    };
+  }
+
+  if (item.type === "webSearch") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: item.action ? stringifyJson(item.action) : "",
+      toolKind: "web",
+      server: "web",
+      tool: item.query,
+      status: "success"
+    };
+  }
+
+  if (item.type === "imageView") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: item.path,
+      imagePaths: [item.path],
+      toolKind: "image",
+      server: "image",
+      tool: "view",
+      status: "success"
+    };
+  }
+
+  if (item.type === "imageGeneration") {
+    const path = item.savedPath ?? null;
+    return {
+      id: item.id,
+      role: "tool",
+      text: item.revisedPrompt ?? "",
+      ...(path ? { imagePaths: [path] } : {}),
+      toolKind: "image",
+      server: "image",
+      tool: "generation",
+      status: toolStatus(item.status)
+    };
+  }
+
+  if (item.type === "contextCompaction") {
+    return {
+      id: item.id,
+      role: "system",
+      text: "压缩上下文已完成",
+      toolKind: "system"
     };
   }
 
   return null;
 }
 
-function threadDetail(thread: Thread): MobileThreadDetail {
-  const timeline = thread.turns.flatMap((turn) =>
-    turn.items.flatMap((item) => {
+function turnErrorTimelineItem(turnId: string, error: TurnError): MobileTimelineItem {
+  const details = error.additionalDetails?.trim() ? `：${error.additionalDetails}` : "";
+  return {
+    id: `${turnId}-error`,
+    role: "error",
+    text: `${error.message}${details}`
+  };
+}
+
+function threadDetail(
+  thread: Thread,
+  extras: Pick<MobileThreadDetail, "model" | "reasoningEffort"> = {}
+): MobileThreadDetail {
+  const timeline = thread.turns.flatMap((turn) => {
+    const items = turn.items.flatMap((item) => {
       const mapped = timelineItem(item);
       return mapped ? [mapped] : [];
-    })
-  );
+    });
+    return turn.error ? [...items, turnErrorTimelineItem(turn.id, turn.error)] : items;
+  });
 
   return {
     ...threadSummary(thread),
     lastTurnId: thread.turns.at(-1)?.id || null,
-    timeline
+    timeline,
+    ...extras
   };
 }
 
@@ -875,6 +1055,16 @@ function collaborationModeViews(response: CollaborationModeListResponse): Mobile
   }));
 }
 
+function normalizeCollaborationMode(
+  mode: TurnStartParams["collaborationMode"]
+): CollaborationMode | null | undefined {
+  if (!mode) return mode;
+  if ((mode as { mode?: unknown }).mode === "ask") {
+    return { ...mode, mode: "plan" };
+  }
+  return mode;
+}
+
 function skillViews(response: SkillsListResponse): MobileSkillView[] {
   return response.data.flatMap((entry) =>
     entry.skills.map((skill) => ({
@@ -1007,7 +1197,9 @@ export class CodexAppServerClient {
       }
     };
 
-    return this.peer.request("initialize", params) as Promise<InitializeResponse>;
+    const response = (await this.peer.request("initialize", params)) as InitializeResponse;
+    await this.peer.notify?.("initialized");
+    return response;
   }
 
   async listThreads(params: ThreadListParams = {}): Promise<MobileThreadPage> {
@@ -1085,7 +1277,13 @@ export class CodexAppServerClient {
       ? { ...response.thread, turns: response.initialTurnsPage.data }
       : response.thread;
 
-    return { ...threadDetail(thread), goal };
+    return {
+      ...threadDetail(thread, {
+        model: response.model,
+        reasoningEffort: response.reasoningEffort
+      }),
+      goal
+    };
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -1106,7 +1304,9 @@ export class CodexAppServerClient {
       input: createTurnUserInput(input.text, input.imagePaths),
       model: input.model,
       effort: input.reasoningEffort,
-      permissions: input.permissions
+      permissions: input.permissions,
+      additionalContext: input.additionalContext,
+      collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
 
     const response = (await this.peer.request("turn/start", params)) as TurnStartResponse;
@@ -1119,7 +1319,10 @@ export class CodexAppServerClient {
       excludeTurns: false
     };
     const response = (await this.peer.request("thread/fork", params)) as ThreadForkResponse;
-    return threadDetail(response.thread);
+    return threadDetail(response.thread, {
+      model: response.model,
+      reasoningEffort: response.reasoningEffort
+    });
   }
 
   async rollbackThread(threadId: string, numTurns: number): Promise<MobileThreadDetail> {
@@ -1186,9 +1389,18 @@ export class CodexAppServerClient {
       threadId: input.threadId,
       model: input.model,
       effort: input.reasoningEffort,
-      permissions: input.permissions
+      permissions: input.permissions,
+      collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
     await this.peer.request("thread/settings/update", params);
+  }
+
+  async listCollaborationModes(): Promise<MobileCollaborationModeView[]> {
+    const response = (await this.peer.request(
+      "collaborationMode/list",
+      {}
+    )) as CollaborationModeListResponse;
+    return collaborationModeViews(response);
   }
 
   async updateThreadMetadata(input: MobileThreadMetadataUpdateInput): Promise<MobileThreadDetail> {
@@ -1952,6 +2164,16 @@ export class CodexAppServerClient {
   async cleanThreadBackgroundTerminals(threadId: string): Promise<void> {
     const params: ThreadBackgroundTerminalsCleanParams = { threadId };
     await this.peer.request("thread/backgroundTerminals/clean", params);
+  }
+
+  async readModelDefaults(): Promise<MobileModelDefaultsView> {
+    const response = (await this.peer.request("config/read", {})) as ConfigReadResponse;
+    const config = response.config;
+    return {
+      model: settingsValue(config.model),
+      modelProvider: settingsValue(config.model_provider),
+      reasoningEffort: settingsValue(config.model_reasoning_effort)
+    };
   }
 
   async readSettings(): Promise<MobileSettingsView> {

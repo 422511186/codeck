@@ -17,17 +17,25 @@ export type ThreadPage = {
   nextCursor: string | null;
 };
 
-export type TimelineRole = "user" | "agent" | "reasoning" | "plan" | "tool";
+export type TimelineRole = "user" | "agent" | "reasoning" | "plan" | "tool" | "system" | "error";
 
 export type TimelineItem = {
   id: string;
   role: TimelineRole;
   text: string;
+  imagePaths?: string[];
+  toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  server?: string;
+  tool?: string;
+  arguments?: string;
+  status?: "running" | "success" | "failed";
 };
 
 export type ThreadDetail = ThreadSummary & {
   lastTurnId: string | null;
   timeline: TimelineItem[];
+  model?: string | null;
+  reasoningEffort?: string | null;
 };
 
 export type TimelinePage = {
@@ -41,6 +49,12 @@ export type ModelOption = {
   isDefault: boolean;
   supportedReasoningEfforts: string[];
   inputModalities: string[];
+};
+
+export type CodexSettings = {
+  model: string | null;
+  modelProvider: string | null;
+  reasoningEffort: string | null;
 };
 
 export type UploadedImage = {
@@ -82,6 +96,55 @@ export type ChatPermissions = "read-only" | "workspace-write" | "danger-full-acc
 
 export type ChatMode = "plan" | "build";
 
+export type CollaborationModePreset = {
+  name: string;
+  mode: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+};
+
+type GeneratedCollaborationMode = "plan" | "default";
+type SupportedCollaborationModePreset = CollaborationModePreset & {
+  mode: GeneratedCollaborationMode;
+};
+
+export type CollaborationModePayload = {
+  mode: GeneratedCollaborationMode;
+  settings: {
+    model: string;
+    reasoning_effort?: string | null;
+    developer_instructions?: string | null;
+  };
+};
+
+export const DEFAULT_COLLABORATION_MODEL = "gpt-5-codex";
+
 export function permissionsForMode(mode: ChatMode): ChatPermissions {
   return mode === "plan" ? "read-only" : "workspace-write";
+}
+
+export function collaborationModeForChatMode(
+  mode: ChatMode,
+  model?: string | null,
+  reasoningEffort?: string | null,
+  presets: CollaborationModePreset[] = []
+): CollaborationModePayload {
+  const preset = selectCollaborationPreset(mode, presets);
+  const protocolMode = preset?.mode ?? (mode === "plan" ? "plan" : "default");
+  return {
+    mode: protocolMode,
+    settings: {
+      model: model || preset?.model || DEFAULT_COLLABORATION_MODEL,
+      reasoning_effort: reasoningEffort ?? preset?.reasoningEffort ?? null,
+      developer_instructions: null
+    }
+  };
+}
+
+function selectCollaborationPreset(
+  mode: ChatMode,
+  presets: CollaborationModePreset[]
+): SupportedCollaborationModePreset | null {
+  const protocolMode: GeneratedCollaborationMode = mode === "plan" ? "plan" : "default";
+  return presets.find((preset): preset is SupportedCollaborationModePreset => preset.mode === protocolMode) ?? null;
 }

@@ -35,7 +35,7 @@
   - `/projects`：项目列表（localStorage 管理，按 `cwd` 聚合会话）
   - `/projects/[projectId]`：项目内会话列表（进行中 / 已归档）
   - `/threads/[threadId]`：会话页（timeline + 输入 + Plan/Build + 模型切换 + 底部抽屉）
-  - `/settings`：默认模型与模式、账号状态、Token 用量、登出
+  - `/settings`：默认模型与模式、主题、账号状态、Token 用量、登出
 - **核心交互**：
   - 会话 timeline：用户消息 + agent 消息（markdown + mermaid）+ 折叠卡片（命令/diff/推理/MCP/系统消息/错误）
   - 历史无限滚动 + 自动滚策略 + 「跳到最新」浮动按钮
@@ -46,7 +46,7 @@
   - Plan 末尾「转 Build 执行」按钮 + 会话名自动生成（首句）
 - **localStorage 命名空间**：`codex-web:`
   - `codex-web:projects`：项目列表 `{ id, name, path, addedAt, lastUsedAt }[]`
-  - `codex-web:settings`：默认模型与模式 `{ defaultModel, defaultMode }`
+  - `codex-web:settings`：默认模型、默认模式与主题 `{ defaultModel, defaultMode, theme }`
   - `codex-web:drafts`：草稿 `{ [threadId]: string }`
 
 ## 后端能力

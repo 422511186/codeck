@@ -416,6 +416,12 @@ export type MobileCollaborationModeView = {
   reasoningEffort: string | null;
 };
 
+export type MobileModelDefaultsView = {
+  model: string | null;
+  modelProvider: string | null;
+  reasoningEffort: string | null;
+};
+
 export type MobileSkillView = {
   cwd: string;
   name: string;
@@ -579,8 +585,14 @@ export type MobileExperimentalFeatureView = {
 
 export type MobileTimelineItem = {
   id: string;
-  role: "user" | "agent" | "reasoning" | "plan" | "tool";
+  role: "user" | "agent" | "reasoning" | "plan" | "tool" | "system" | "error";
   text: string;
+  imagePaths?: string[];
+  toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  server?: string;
+  tool?: string;
+  arguments?: string;
+  status?: "running" | "success" | "failed";
 };
 
 export type MobileThreadGoalView = {
@@ -597,6 +609,8 @@ export type MobileThreadGoalView = {
 export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
   timeline: MobileTimelineItem[];
+  model?: string | null;
+  reasoningEffort?: string | null;
   tokenUsageTotal?: number;
   goal?: MobileThreadGoalView | null;
 };

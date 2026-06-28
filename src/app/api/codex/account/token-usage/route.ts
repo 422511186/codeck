@@ -9,7 +9,7 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const usage = await getAppServerGateway().getAccountTokenUsage();
-    return NextResponse.json({ ok: true, usage });
+    return NextResponse.json({ ok: true, result: usage, usage });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "无法读取账号 token 用量" },

@@ -42,6 +42,7 @@ export type ToolEntry = {
   status: CommandEntryStatus;
   arguments?: string;
   result?: string;
+  imagePaths?: string[];
 };
 
 export type SystemEntry = {
@@ -80,22 +81,64 @@ export type TimelineEntry = {
     | ErrorEntry;
 };
 
+const localImagePattern = /[A-Za-z]:[\\/][^\r\n]+?\.(?:png|jpe?g|webp|gif)/gi;
+
+function normalizeUserTextAndImages(text: string, imagePaths?: string[]): { text: string; imagePaths?: string[] } {
+  const images = [...(imagePaths ?? [])];
+  let nextText = text.replace(localImagePattern, (match) => {
+    images.push(match);
+    return "";
+  });
+
+  nextText = nextText
+    .replace(/^# Files mentioned by the user:[\s\S]*?(?=^## My request for Codex:)/m, "")
+    .replace(/^## My request for Codex:\s*/m, "")
+    .replace(/^\[图片\]\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return { text: nextText, ...(images.length ? { imagePaths: Array.from(new Set(images)) } : {}) };
+}
+
 export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: number): TimelineEntry {
   const id = item.id;
   switch (item.role as TimelineRole) {
-    case "user":
-      return { id, createdAt: fallbackCreatedAt, body: { kind: "user-message", text: item.text, status: "sent" } };
+    case "user": {
+      const normalized = normalizeUserTextAndImages(item.text, item.imagePaths);
+      return {
+        id,
+        createdAt: fallbackCreatedAt,
+        body: {
+          kind: "user-message",
+          text: normalized.text,
+          ...(normalized.imagePaths?.length ? { imagePaths: normalized.imagePaths } : {}),
+          status: "sent"
+        }
+      };
+    }
     case "agent":
       return { id, createdAt: fallbackCreatedAt, body: { kind: "agent-message", text: item.text } };
     case "reasoning":
       return { id, createdAt: fallbackCreatedAt, body: { kind: "reasoning", text: item.text, done: true } };
     case "plan":
       return { id, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
+    case "system":
+      return { id, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
+    case "error":
+      return { id, createdAt: fallbackCreatedAt, body: { kind: "error", text: item.text } };
     case "tool":
       return {
         id,
         createdAt: fallbackCreatedAt,
-        body: { kind: "tool", server: "tool", tool: "tool", status: "success", result: item.text }
+        body: {
+          kind: "tool",
+          server: item.server ?? item.toolKind ?? "tool",
+          tool: item.tool ?? item.toolKind ?? "tool",
+          status: item.status ?? "success",
+          arguments: item.arguments,
+          result: item.text,
+          ...(item.imagePaths?.length ? { imagePaths: item.imagePaths } : {})
+        }
       };
     default:
       return { id, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };

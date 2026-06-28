@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   poweredByHeader: false,
   outputFileTracingExcludes: {
     "/*": ["./docs/**/*", "./logs/**/*", "./next.config.mjs", "./test-results/**/*", "./tests/**/*", "./uploads/**/*"]

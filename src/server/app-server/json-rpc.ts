@@ -26,6 +26,12 @@ export class JsonRpcPeer {
     return promise;
   }
 
+  notify(method: string, params?: unknown): void {
+    const message =
+      params === undefined ? { jsonrpc: "2.0", method } : { jsonrpc: "2.0", method, params };
+    this.sendRaw(JSON.stringify(message));
+  }
+
   onNotification(handler: NotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);

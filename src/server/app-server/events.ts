@@ -1,3 +1,6 @@
+import type { MobileTimelineItem } from "../../shared/codex";
+import { timelineItem } from "./client";
+
 export type AppServerNotificationMessage = {
   method: string;
   params?: unknown;
@@ -34,6 +37,17 @@ export type BrowserRealtimeAudioChunk = {
 
 export type BrowserCodexEvent =
   | {
+      kind: "turn_started";
+      threadId: string;
+      turnId: string;
+    }
+  | {
+      kind: "turn_completed";
+      threadId: string;
+      turnId: string;
+      status: string;
+    }
+  | {
       kind: "agent_message_delta";
       threadId: string;
       turnId: string;
@@ -69,6 +83,13 @@ export type BrowserCodexEvent =
       delta: string;
     }
   | {
+      kind: "item_updated";
+      threadId: string;
+      turnId: string;
+      completedAtMs: number;
+      item: MobileTimelineItem;
+    }
+  | {
       kind: "turn_diff_updated";
       threadId: string;
       turnId: string;
@@ -95,7 +116,21 @@ export type BrowserCodexEvent =
       message: string;
     }
   | {
+      kind: "turn_error";
+      threadId: string;
+      turnId: string;
+      message: string;
+      willRetry: boolean;
+    }
+  | {
       kind: "settings_invalidated";
+    }
+  | {
+      kind: "thread_settings_updated";
+      threadId: string;
+      model: string | null;
+      reasoningEffort: string | null;
+      collaborationMode: "plan" | "default" | null;
     }
   | {
       kind: "thread_goal_updated";
@@ -203,6 +238,29 @@ function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function collaborationModeKind(value: unknown): "plan" | "default" | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return value.mode === "plan" || value.mode === "default" ? value.mode : null;
+}
+
+function turnErrorMessage(error: unknown): string | null {
+  if (!isRecord(error) || typeof error.message !== "string") {
+    return null;
+  }
+
+  const details = typeof error.additionalDetails === "string" && error.additionalDetails.trim()
+    ? `：${error.additionalDetails}`
+    : "";
+  return `${error.message}${details}`;
+}
+
 function normalizeGoal(value: unknown): BrowserThreadGoal | null {
   if (!isRecord(value) || typeof value.threadId !== "string" || typeof value.objective !== "string") {
     return null;
@@ -270,6 +328,42 @@ function normalizeRealtimeAudio(value: unknown): BrowserRealtimeAudioChunk | nul
 export function normalizeAppServerNotification(
   message: AppServerNotificationMessage
 ): BrowserCodexEventEnvelope | null {
+  if (message.method === "turn/started") {
+    const params = message.params as { threadId?: unknown; turn?: { id?: unknown } } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turn?.id !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "turn_started",
+        threadId: params.threadId,
+        turnId: params.turn.id
+      }
+    };
+  }
+
+  if (message.method === "turn/completed") {
+    const params = message.params as
+      | { threadId?: unknown; turn?: { id?: unknown; status?: unknown } }
+      | null
+      | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turn?.id !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: params.threadId,
+        turnId: params.turn.id,
+        status: typeof params.turn.status === "string" ? params.turn.status : "completed"
+      }
+    };
+  }
+
   if (message.method === "item/agentMessage/delta") {
     return deltaEvent("agent_message_delta", message.params);
   }
@@ -288,6 +382,34 @@ export function normalizeAppServerNotification(
 
   if (message.method === "item/fileChange/outputDelta") {
     return deltaEvent("file_output_delta", message.params);
+  }
+
+  if (message.method === "item/completed" || message.method === "item/started") {
+    const params = message.params as
+      | { threadId?: unknown; turnId?: unknown; item?: unknown; completedAtMs?: unknown; startedAtMs?: unknown }
+      | null
+      | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
+      return null;
+    }
+    const item = params.item ? timelineItem(params.item as Parameters<typeof timelineItem>[0]) : null;
+    if (!item) return null;
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        completedAtMs:
+          typeof params.completedAtMs === "number"
+            ? params.completedAtMs
+            : typeof params.startedAtMs === "number"
+              ? params.startedAtMs
+              : Date.now(),
+        item
+      }
+    };
   }
 
   if (message.method === "turn/diff/updated") {
@@ -364,6 +486,28 @@ export function normalizeAppServerNotification(
     };
   }
 
+  if (message.method === "error") {
+    const params = message.params as
+      | { threadId?: unknown; turnId?: unknown; error?: unknown; willRetry?: unknown }
+      | null
+      | undefined;
+    const errorMessage = turnErrorMessage(params?.error);
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string" || !errorMessage) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        message: errorMessage,
+        willRetry: Boolean(params.willRetry)
+      }
+    };
+  }
+
   if (message.method === "configWarning") {
     const params = message.params as { summary?: unknown; details?: unknown } | null | undefined;
     if (!params || typeof params.summary !== "string") {
@@ -391,6 +535,24 @@ export function normalizeAppServerNotification(
       type: "codex-event",
       event: {
         kind: "settings_invalidated"
+      }
+    };
+  }
+
+  if (message.method === "thread/settings/updated") {
+    const params = message.params as { threadId?: unknown; threadSettings?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || !isRecord(params.threadSettings)) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "thread_settings_updated",
+        threadId: params.threadId,
+        model: stringOrNull(params.threadSettings.model),
+        reasoningEffort: stringOrNull(params.threadSettings.effort),
+        collaborationMode: collaborationModeKind(params.threadSettings.collaborationMode)
       }
     };
   }

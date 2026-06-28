@@ -14,11 +14,17 @@
 - **THEN** 头部 MUST 保持 sticky 不隐藏
 
 ### Requirement: Plan/Build 每会话独立
-Plan/Build 模式 SHALL 每个会话独立保存；新建会话默认 `Build`；切换 MUST 只影响下一条用户消息，不影响当前正在执行的 turn。
+Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Build`，但新建会话 MUST 使用设置页中的全局默认模式；切换 MUST 只影响下一条用户消息，不影响当前正在执行的 turn。
 
-#### Scenario: 新建会话默认
-- **WHEN** 用户新建会话
+#### Scenario: 未修改设置时新建会话默认
+- **WHEN** 用户尚未修改全局默认模式
+- **AND** 用户新建会话
 - **THEN** Plan/Build segmented MUST 默认选中 `Build`
+
+#### Scenario: 设置全局默认 Plan 后新建会话
+- **WHEN** 用户在设置页把全局默认模式设为 `Plan`
+- **AND** 用户新建会话
+- **THEN** Plan/Build segmented MUST 默认选中 `Plan`
 
 #### Scenario: 切换不影响当前 turn
 - **WHEN** agent 正在跑某个 turn

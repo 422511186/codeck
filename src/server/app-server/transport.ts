@@ -21,6 +21,7 @@ export type ManagedAppServerPeer = AppServerPeer & {
   getStatus(): AppServerStatus;
   onNotification(handler: (message: AppServerNotificationMessage) => void): () => void;
   onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void;
+  notify(method: string, params?: unknown): Promise<void>;
   respondToServerRequest(id: number, result: unknown): Promise<void>;
 };
 
@@ -166,6 +167,15 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
     }
 
     return this.rpc.request(method, params);
+  }
+
+  async notify(method: string, params?: unknown): Promise<void> {
+    await this.connect();
+    if (!this.rpc) {
+      throw new Error("app-server 尚未连接");
+    }
+
+    this.rpc.notify(method, params);
   }
 
   async respondToServerRequest(id: number, result: unknown): Promise<void> {

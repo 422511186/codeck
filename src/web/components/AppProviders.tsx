@@ -3,9 +3,10 @@
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { setSessionInvalidHandler } from "../api/client";
+import { auth } from "../api/endpoints";
 import { connectBrowserWs } from "../ws/client";
 import { useStore } from "../state/store";
-import { settingsStore } from "../storage/settings";
+import { applyTheme, settingsStore } from "../storage/settings";
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -25,7 +26,8 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
   }, [pathname, router]);
 
   useEffect(() => {
-    settingsStore.load();
+    const settings = settingsStore.load();
+    applyTheme(settings.theme);
     if (typeof window === "undefined") return;
     if (pathname?.startsWith("/login")) return;
 
@@ -51,6 +53,25 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 
     return () => conn.close();
   }, [dispatchEvent, pathname, resolvePendingRequest, setAppServer, setWsState]);
+
+  useEffect(() => {
+    if (pathname?.startsWith("/login")) return;
+    if (wsState === "open" || wsState === "idle") return;
+
+    let cancelled = false;
+    auth
+      .session()
+      .then((res) => {
+        if (cancelled || res.authenticated) return;
+        const next = encodeURIComponent(pathname || "/projects");
+        router.replace(`/login?next=${next}`);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, router, wsState]);
 
   const showOffline = useMemo(
     () => wsState !== "open" && wsState !== "idle" && !pathname?.startsWith("/login"),

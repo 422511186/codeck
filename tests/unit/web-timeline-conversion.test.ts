@@ -1,19 +1,47 @@
 import { describe, it, expect } from "vitest";
 import { timelineItemToEntry } from "../../src/web/state/timeline";
-import type { TimelineItem } from "../../src/web/api/types";
+import type { TimelineItem, TimelineRole } from "../../src/web/api/types";
 
 describe("timeline conversion", () => {
   it("should convert user message", () => {
     const item: TimelineItem = {
       id: "1",
       role: "user",
-      text: "hello"
+      text: "hello",
+      imagePaths: ["C:/shot.png"]
     };
     const entry = timelineItemToEntry(item, 1000);
     expect(entry.id).toBe("1");
     expect(entry.createdAt).toBe(1000);
     expect(entry.body.kind).toBe("user-message");
     expect((entry.body as any).text).toBe("hello");
+    expect((entry.body as any).imagePaths).toEqual(["C:/shot.png"]);
+  });
+
+  it("should convert historical file mention blocks into image thumbnails", () => {
+    const item: TimelineItem = {
+      id: "1b",
+      role: "user",
+      text: `
+# Files mentioned by the user:
+
+## shot.png: C:/Users/huang/AppData/Local/Temp/shot.png
+
+# In app browser:
+- Current URL: http://127.0.0.1:3000/threads/abc
+
+## My request for Codex:
+请看截图
+
+[图片]
+`
+    };
+
+    const entry = timelineItemToEntry(item, 1001);
+
+    expect(entry.body.kind).toBe("user-message");
+    expect((entry.body as any).text).toBe("请看截图");
+    expect((entry.body as any).imagePaths).toEqual(["C:/Users/huang/AppData/Local/Temp/shot.png"]);
   });
 
   it("should convert agent message", () => {
@@ -50,15 +78,44 @@ describe("timeline conversion", () => {
     expect((entry.body as any).text).toBe("Step 1: ...");
   });
 
+  it("should convert context compaction items into system messages", () => {
+    const item: TimelineItem = {
+      id: "compact-1",
+      role: "system" as TimelineRole,
+      text: "压缩上下文已完成"
+    };
+    const entry = timelineItemToEntry(item, 9100);
+    expect(entry.body.kind).toBe("system");
+    expect((entry.body as any).text).toBe("压缩上下文已完成");
+  });
+
+  it("should convert error items into error cards", () => {
+    const item: TimelineItem = {
+      id: "error-1",
+      role: "error" as TimelineRole,
+      text: "API 调用失败：502 Bad Gateway"
+    };
+    const entry = timelineItemToEntry(item, 9200);
+    expect(entry.body.kind).toBe("error");
+    expect((entry.body as any).text).toBe("API 调用失败：502 Bad Gateway");
+  });
+
   it("should convert tool call", () => {
     const item: TimelineItem = {
       id: "6",
       role: "tool",
-      text: "search result"
+      text: "search result",
+      server: "filesystem",
+      tool: "read_file",
+      arguments: "{\n  \"path\": \"README.md\"\n}",
+      status: "success"
     };
     const entry = timelineItemToEntry(item, 6000);
     expect(entry.body.kind).toBe("tool");
     expect((entry.body as any).result).toBe("search result");
+    expect((entry.body as any).server).toBe("filesystem");
+    expect((entry.body as any).tool).toBe("read_file");
+    expect((entry.body as any).arguments).toContain("README.md");
   });
 
   it("should handle unknown role as system", () => {

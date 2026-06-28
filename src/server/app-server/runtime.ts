@@ -18,11 +18,13 @@ import type {
   MobileAppPage,
   MobileBackgroundTerminalPage,
   MobileBackgroundTerminalTerminateResult,
+  MobileCollaborationModeView,
   MobileConfigRequirementsView,
   MobileConfigWriteResultView,
   MobileMcpLoginView,
   MobileMcpResourceReadView,
   MobileMcpToolCallResult,
+  MobileModelDefaultsView,
   MobileModelOption,
   MobileMarketplaceAddResult,
   MobileMarketplaceRemoveResult,
@@ -322,6 +324,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   }
 
   async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
     return undefined;
   }
 
@@ -2346,6 +2352,10 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
     return Promise.reject(new Error("app-server 已关闭"));
   }
 
+  notify(): Promise<void> {
+    return Promise.reject(new Error("app-server 已关闭"));
+  }
+
   close(): void {
     return undefined;
   }
@@ -2470,6 +2480,10 @@ export class AppServerGateway {
   }
 
   ensureReady(): Promise<void> {
+    if (this.peer.getStatus().state !== "ready") {
+      this.initialized = null;
+    }
+
     if (!this.initialized) {
       this.initialized = this.peer.connect().then(async () => {
         await this.client.initialize();
@@ -2578,6 +2592,11 @@ export class AppServerGateway {
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
     await this.ensureReady();
     await this.client.updateThreadSettings(input);
+  }
+
+  async listCollaborationModes(): Promise<MobileCollaborationModeView[]> {
+    await this.ensureReady();
+    return this.client.listCollaborationModes();
   }
 
   async updateThreadMetadata(input: MobileThreadMetadataUpdateInput): Promise<MobileThreadDetail> {
@@ -2995,6 +3014,11 @@ export class AppServerGateway {
   async readSettings(): Promise<MobileSettingsView> {
     await this.ensureReady();
     return this.client.readSettings();
+  }
+
+  async readModelDefaults(): Promise<MobileModelDefaultsView> {
+    await this.ensureReady();
+    return this.client.readModelDefaults();
   }
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {

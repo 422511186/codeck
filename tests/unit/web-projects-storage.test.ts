@@ -10,26 +10,29 @@ import {
 
 const mockStorage: Record<string, string> = {};
 
-// Mock window.localStorage globally
-global.window = {
-  localStorage: {
-    getItem: (key: string) => mockStorage[key] ?? null,
-    setItem: (key: string, value: string) => {
-      mockStorage[key] = value;
-    },
-    removeItem: (key: string) => {
-      delete mockStorage[key];
-    },
-    clear: () => Object.keys(mockStorage).forEach((k) => delete mockStorage[k]),
-    key: (index: number) => Object.keys(mockStorage)[index] ?? null,
-    get length() {
-      return Object.keys(mockStorage).length;
-    }
-  }
-} as unknown as Window & typeof globalThis;
-
 beforeEach(() => {
   Object.keys(mockStorage).forEach((k) => delete mockStorage[k]);
+
+  // Mock localStorage using Storage API
+  Object.defineProperty(window, "localStorage", {
+    value: {
+      getItem: (key: string) => mockStorage[key] ?? null,
+      setItem: (key: string, value: string) => {
+        mockStorage[key] = value;
+      },
+      removeItem: (key: string) => {
+        delete mockStorage[key];
+      },
+      clear: () => Object.keys(mockStorage).forEach((k) => delete mockStorage[k]),
+      key: (index: number) => Object.keys(mockStorage)[index] ?? null,
+      get length() {
+        return Object.keys(mockStorage).length;
+      }
+    },
+    writable: true,
+    configurable: true
+  });
+
   vi.useFakeTimers();
 });
 

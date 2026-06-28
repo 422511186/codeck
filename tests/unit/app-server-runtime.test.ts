@@ -1,5 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { createAppServerGateway } from "../../src/server/app-server/runtime";
+import { AppServerGateway, createAppServerGateway } from "../../src/server/app-server/runtime";
+import type { AppServerNotificationMessage } from "../../src/server/app-server/events";
+import type { AppServerServerRequestMessage } from "../../src/server/app-server/pending-requests";
+import type { AppServerStatus, ManagedAppServerPeer } from "../../src/server/app-server/transport";
+
+class ReconnectablePeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  connectCount = 0;
+  initializeCount = 0;
+  notifications: string[] = [];
+
+  async connect(): Promise<void> {
+    this.connectCount += 1;
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(method: string): Promise<void> {
+    this.notifications.push(method);
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      this.initializeCount += 1;
+      return {
+        userAgent: "codex-test",
+        codexHome: "C:\\Users\\huang\\.codex",
+        platformFamily: "windows",
+        platformOs: "windows"
+      };
+    }
+    if (method === "thread/list") {
+      return { data: [], nextCursor: null };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
 
 describe("createAppServerGateway", () => {
   it("mock 模式可以初始化并返回移动端基础数据", async () => {
@@ -34,6 +89,19 @@ describe("createAppServerGateway", () => {
 
     expect(gateway.getStatus()).toEqual({ state: "disabled" });
     await expect(gateway.listThreads()).rejects.toThrow("app-server 已关闭");
+  });
+
+  it("app-server 断线后下一次请求会重新初始化连接", async () => {
+    const peer = new ReconnectablePeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.listThreads();
+    peer.close();
+    await gateway.listThreads();
+
+    expect(peer.connectCount).toBe(2);
+    expect(peer.initializeCount).toBe(2);
+    expect(peer.notifications).toEqual(["initialized", "initialized"]);
   });
 
   it("mock 模式发送消息时会广播规范化 realtime 事件", async () => {
