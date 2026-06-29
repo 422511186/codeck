@@ -1,5 +1,5 @@
 import type { IncomingMessage, Server as HttpServer } from "node:http";
-import type { Duplex } from "node:stream";
+import type { UpgradeHandler as NextUpgradeHandler } from "next/dist/server/next";
 import { WebSocketServer } from "ws";
 import type { BrowserCodexEventEnvelope } from "./app-server/events";
 import type { BrowserServerRequestEvent } from "./app-server/pending-requests";
@@ -11,7 +11,6 @@ export type BrowserEvent =
   | BrowserCodexEventEnvelope
   | BrowserServerRequestEvent;
 
-type UpgradeHandler = (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void>;
 type BrowserWebSocketOptions = {
   isAuthenticated(cookie: string | undefined): boolean;
   getAppServerStatus(): AppServerStatus;
@@ -20,7 +19,7 @@ type BrowserWebSocketOptions = {
 
 export function attachBrowserWebSocket(
   server: HttpServer,
-  nextUpgradeHandler: UpgradeHandler,
+  nextUpgradeHandler: NextUpgradeHandler,
   options: BrowserWebSocketOptions
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });

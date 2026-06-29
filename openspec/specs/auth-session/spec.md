@@ -41,7 +41,7 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **THEN** 使用配置值，`generatedAccessToken` 为 `false`，不打印到控制台
 
 ### Requirement: WebSocket authentication
-WebSocket 连接（路径 `/ws`）MUST 在 upgrade 阶段校验 cookie 认证。未认证的连接 SHALL 返回 `401 Unauthorized` 并销毁 socket。
+WebSocket 连接（路径 `/ws`）MUST 在 upgrade 阶段校验 cookie 认证。未认证的连接 SHALL 返回 `401 Unauthorized` 并销毁 socket。非 `/ws` 路径的 WebSocket 升级请求 MUST 转发给 Next.js 的 `app.upgradeHandler` 处理，不进行认证拦截。
 
 #### Scenario: Authenticated WebSocket upgrade
 - **WHEN** 客户端发起 `/ws` upgrade 且携带有效 session cookie
@@ -50,6 +50,10 @@ WebSocket 连接（路径 `/ws`）MUST 在 upgrade 阶段校验 cookie 认证。
 #### Scenario: Unauthenticated WebSocket upgrade
 - **WHEN** 客户端发起 `/ws` upgrade 且无有效 cookie
 - **THEN** 服务端写入 `HTTP/1.1 401 Unauthorized` 并销毁 socket
+
+#### Scenario: Non-/ws upgrade bypasses custom auth
+- **WHEN** 客户端发起非 `/ws` 路径的 WebSocket 升级请求
+- **THEN** 请求不经过自定义 WebSocket 认证逻辑，直接转发给 Next.js upgrade handler
 
 ### Requirement: API route authentication
 所有 `/api/codex/*` 路由 SHALL 在处理请求前调用 `isRequestAuthenticated`。未认证请求 MUST 返回 `{ok: false}` 和 HTTP 401。
@@ -88,4 +92,3 @@ WebSocket 连接（路径 `/ws`）MUST 在 upgrade 阶段校验 cookie 认证。
 1. **Cookie 无轮换机制**：session cookie 有效期 30 天，无 token 轮换或刷新机制。缺少 CSRF token（依赖 `sameSite: lax`）。是否需要更强的 CSRF 防护？
 2. **API Key 明文经过后端**：API Key 在 HTTP 请求体中以明文传递给 app-server。是否需要端到端加密或仅在 TLS 层保护？
 3. **WebSocket 认证仅限 upgrade 阶段**：连接建立后不再重新校验。如果 cookie 过期，已建立的 WebSocket 连接不受影响。是否符合预期？
-

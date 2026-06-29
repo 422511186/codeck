@@ -1,6 +1,6 @@
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { extname, join, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
 const imageExtensions: Record<string, string> = {
   "image/png": ".png",
@@ -15,6 +15,11 @@ export type SavedUpload = {
   mimeType: string;
   size: number;
 };
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return relativePath === "" || (relativePath.length > 0 && !relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
 
 export async function saveUploadedImage(input: {
   uploadDir: string;
@@ -32,7 +37,7 @@ export async function saveUploadedImage(input: {
 
   const id = randomUUID();
   const filePath = resolve(/*turbopackIgnore: true*/ join(/*turbopackIgnore: true*/ root, `${id}${extension}`));
-  if (!filePath.startsWith(`${root}\\`) && filePath !== root) {
+  if (!isPathInside(root, filePath)) {
     throw new Error("上传路径越界");
   }
 
@@ -56,7 +61,7 @@ export async function cleanupExpiredUploads(
   let removed = 0;
   for (const entry of await readdir(/*turbopackIgnore: true*/ root)) {
     const filePath = resolve(/*turbopackIgnore: true*/ join(/*turbopackIgnore: true*/ root, entry));
-    if (!filePath.startsWith(`${root}\\`)) {
+    if (!isPathInside(root, filePath)) {
       continue;
     }
 

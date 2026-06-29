@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import next from "next";
+import type { RequestHandler, UpgradeHandler } from "next/dist/server/next";
 import { loadRuntimeEnvConfig } from "../config/env";
 import { getAppServerGateway } from "./app-server/runtime";
 import { isCookieHeaderAuthenticated } from "./auth";
@@ -8,9 +9,13 @@ import { attachBrowserWebSocket } from "./ws";
 
 loadRuntimeEnvConfig();
 
+type PreparedNextServer = ReturnType<typeof next> & {
+  requestHandler: RequestHandler;
+  upgradeHandler: UpgradeHandler;
+};
+
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
-const handle = app.getRequestHandler();
 const config = getRuntimeConfig();
 
 if (config.generatedAccessToken) {
@@ -18,7 +23,9 @@ if (config.generatedAccessToken) {
 }
 
 await app.prepare();
-const handleUpgrade = app.getUpgradeHandler();
+const preparedApp = app as PreparedNextServer;
+const handle = preparedApp.requestHandler;
+const handleUpgrade = preparedApp.upgradeHandler;
 
 const server = createServer((req, res) => {
   handle(req, res);
