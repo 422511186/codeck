@@ -102,6 +102,108 @@ class RejectingServerRequestPeer implements ManagedAppServerPeer {
   }
 }
 
+class NotificationOverlayPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  emitNotification(message: AppServerNotificationMessage): void {
+    for (const handler of this.notificationHandlers) {
+      handler(message);
+    }
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+
+    if (method === "thread/read") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "overlay test",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 2,
+          status: { type: "idle" },
+          path: null,
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "Overlay",
+          turns: [
+            {
+              id: "turn-1",
+              itemsView: "full",
+              status: "completed",
+              error: null,
+              startedAt: 1,
+              completedAt: 2,
+              durationMs: 1,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "user-1",
+                  clientId: "client-user-1",
+                  content: [{ type: "text", text: "触发工具", text_elements: [] }]
+                }
+              ]
+            }
+          ]
+        }
+      };
+    }
+
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
 describe("createAppServerGateway", () => {
   it("mock 模式可以初始化并返回移动端基础数据", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
@@ -148,6 +250,96 @@ describe("createAppServerGateway", () => {
     expect(peer.connectCount).toBe(2);
     expect(peer.initializeCount).toBe(2);
     expect(peer.notifications).toEqual(["initialized", "initialized"]);
+  });
+
+  it("刷新读取会合并尚未 materialized 的实时工具输出", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "command/exec/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        processId: "process-1",
+        deltaBase64: Buffer.from("npm test\n").toString("base64")
+      }
+    });
+    peer.emitNotification({
+      method: "item/mcpToolCall/progress",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "mcp-1",
+        message: "正在读取资源"
+      }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        {
+          id: "process-1",
+          role: "tool",
+          text: "npm test\n",
+          toolKind: "command",
+          server: "command",
+          tool: "command",
+          status: "running"
+        },
+        {
+          id: "mcp-1",
+          role: "tool",
+          text: "正在读取资源",
+          toolKind: "mcp",
+          server: "mcp",
+          tool: "progress",
+          status: "running"
+        }
+      ])
+    });
+
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        expect.objectContaining({ id: "process-1", status: "success" }),
+        expect.objectContaining({ id: "mcp-1", status: "success" })
+      ])
+    });
+  });
+
+  it("刷新读取会保留运行中的 reasoning 占位，并在空内容完成后清理", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-active" } }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        {
+          id: "turn-active-reasoning-pending",
+          role: "reasoning",
+          text: "",
+          done: false
+        }
+      ])
+    });
+
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-active", status: "completed" } }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+    expect(detail.timeline.some((item) => item.id === "turn-active-reasoning-pending")).toBe(false);
   });
 
   it("mock 模式发送消息时会广播规范化 realtime 事件", async () => {
@@ -393,6 +585,7 @@ describe("createAppServerGateway", () => {
       model: "gpt-5-codex",
       modelProvider: "openai",
       reasoningEffort: "medium",
+      reasoningSummary: null,
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       loadedThreadIds: ["mock-thread-1"],

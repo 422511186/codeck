@@ -753,6 +753,7 @@ class FakePeer implements AppServerPeer {
           model: "gpt-5-codex",
           model_provider: "openai",
           model_reasoning_effort: "medium",
+          model_reasoning_summary: "auto",
           approval_policy: "untrusted",
           sandbox_mode: "workspace-write"
         },
@@ -1859,6 +1860,7 @@ describe("CodexAppServerClient", () => {
       text: "继续开发发送功能",
       model: "gpt-5-codex",
       reasoningEffort: "high",
+      reasoningSummary: "auto",
       permissions: "full-auto",
       additionalContext: {
         "codex-web:collaboration-mode": {
@@ -1884,6 +1886,7 @@ describe("CodexAppServerClient", () => {
         input: [{ type: "text", text: "继续开发发送功能", text_elements: [] }],
         model: "gpt-5-codex",
         effort: "high",
+        summary: "auto",
         permissions: "full-auto",
         additionalContext: {
           "codex-web:collaboration-mode": {
@@ -2399,7 +2402,8 @@ describe("CodexAppServerClient", () => {
     await expect(client.readModelDefaults()).resolves.toEqual({
       model: "gpt-5-codex",
       modelProvider: "openai",
-      reasoningEffort: "medium"
+      reasoningEffort: "medium",
+      reasoningSummary: "auto"
     });
 
     expect(peer.calls).toEqual([{ method: "config/read", params: {} }]);
@@ -2413,6 +2417,7 @@ describe("CodexAppServerClient", () => {
       model: "gpt-5-codex",
       modelProvider: "openai",
       reasoningEffort: "medium",
+      reasoningSummary: "auto",
       approvalPolicy: "untrusted",
       sandboxMode: "workspace-write",
       loadedThreadIds: ["thread-1", "thread-2"],

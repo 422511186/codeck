@@ -5,6 +5,21 @@ import { BaseCard } from "./BaseCard";
 
 export function ReasoningCard({ entry }: { entry: ReasoningEntry }): JSX.Element {
   if (!entry.done) {
+    if (entry.text.trim()) {
+      const preview = entry.text.split("\n")[0]?.slice(0, 60) || "思考中…";
+      return (
+        <BaseCard
+          icon={<span className="cw-pulse">●</span>}
+          title={<span>思考中… {preview}</span>}
+          status="running"
+        >
+          <div style={{ whiteSpace: "pre-wrap", color: "var(--cw-fg-muted)", fontSize: 13, paddingTop: 6 }}>
+            {entry.text}
+          </div>
+        </BaseCard>
+      );
+    }
+
     return (
       <div
         role="status"
@@ -25,7 +40,26 @@ export function ReasoningCard({ entry }: { entry: ReasoningEntry }): JSX.Element
   }
   const preview = entry.text.split("\n")[0]?.slice(0, 60) || "推理过程";
   return (
-    <BaseCard icon="🧠" title={<span>{preview}</span>}>
+    <BaseCard
+      icon="🧠"
+      title={<span>推理过程</span>}
+      right={
+        preview !== "推理过程" ? (
+          <span
+            style={{
+              maxWidth: "56%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: "var(--cw-fg-muted)",
+              fontSize: 12
+            }}
+          >
+            {preview}
+          </span>
+        ) : null
+      }
+    >
       <div style={{ whiteSpace: "pre-wrap", color: "var(--cw-fg-muted)", fontSize: 13, paddingTop: 6 }}>
         {entry.text}
       </div>

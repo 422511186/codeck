@@ -119,7 +119,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
     case "agent":
       return { id, createdAt: fallbackCreatedAt, body: { kind: "agent-message", text: item.text } };
     case "reasoning":
-      return { id, createdAt: fallbackCreatedAt, body: { kind: "reasoning", text: item.text, done: true } };
+      return { id, createdAt: fallbackCreatedAt, body: { kind: "reasoning", text: item.text, done: item.done ?? true } };
     case "plan":
       return { id, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
     case "system":

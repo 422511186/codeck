@@ -27,6 +27,7 @@ export default function ThreadPage(): JSX.Element {
 
   const ensureThread = useStore((s) => s.ensureThread);
   const setThreadEntries = useStore((s) => s.setThreadEntries);
+  const mergeThreadEntries = useStore((s) => s.mergeThreadEntries);
   const prependEntries = useStore((s) => s.prependEntries);
   const appendEntries = useStore((s) => s.appendEntries);
   const replaceOrAddEntry = useStore((s) => s.replaceOrAddEntry);
@@ -44,9 +45,14 @@ export default function ThreadPage(): JSX.Element {
   const [showSheet, setShowSheet] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [models, setModels] = useState<ModelOption[] | null>(null);
-  const [serverDefaults, setServerDefaults] = useState<{ model: string | null; reasoningEffort: string | null }>({
+  const [serverDefaults, setServerDefaults] = useState<{
+    model: string | null;
+    reasoningEffort: string | null;
+    reasoningSummary: string | null;
+  }>({
     model: null,
-    reasoningEffort: null
+    reasoningEffort: null,
+    reasoningSummary: null
   });
   const [renameOpen, setRenameOpen] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
@@ -55,11 +61,13 @@ export default function ThreadPage(): JSX.Element {
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
+  const pendingSendKeysRef = useRef(new Set<string>());
 
   const configuredModel = threadState?.model ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
   const configuredReasoningEffort = threadState?.modelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
+  const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
 
   useEffect(() => {
     let cancelled = false;
@@ -69,7 +77,8 @@ export default function ThreadPage(): JSX.Element {
         if (!cancelled) {
           setServerDefaults({
             model: settings.model,
-            reasoningEffort: settings.reasoningEffort
+            reasoningEffort: settings.reasoningEffort,
+            reasoningSummary: settings.reasoningSummary
           });
         }
       })
@@ -82,17 +91,21 @@ export default function ThreadPage(): JSX.Element {
   }, []);
 
   const applyThreadDetail = useCallback(
-    (td: ThreadDetail) => {
+    (td: ThreadDetail, mode: "replace" | "merge" = "replace") => {
       setDetail(td);
       const entries: TimelineEntry[] = td.timeline.map((item, idx) =>
         timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
       );
-      setThreadEntries(threadId, entries, null);
+      if (mode === "merge") {
+        mergeThreadEntries(threadId, entries, null);
+      } else {
+        setThreadEntries(threadId, entries, null);
+      }
       if (td.model) {
         setModel(threadId, td.model, td.reasoningEffort ?? null);
       }
     },
-    [threadId, setThreadEntries, setModel]
+    [threadId, setThreadEntries, mergeThreadEntries, setModel]
   );
 
   useEffect(() => {
@@ -107,7 +120,7 @@ export default function ThreadPage(): JSX.Element {
       try {
         const td = await codex.readThread(threadId);
         if (cancelled) return;
-        applyThreadDetail(td);
+        applyThreadDetail(td, "replace");
         setRunning(threadId, isThreadRunningStatus(td.status));
       } catch (err) {
         if (!cancelled) {
@@ -154,14 +167,13 @@ export default function ThreadPage(): JSX.Element {
       try {
         const td = await codex.readThread(threadId);
         if (cancelled) return;
-        applyThreadDetail(td);
+        applyThreadDetail(td, "merge");
         setRunning(threadId, isThreadRunningStatus(td.status));
       } catch {
         // WebSocket remains the primary live path; polling is only a fallback.
       }
     };
 
-    void refresh();
     const interval = window.setInterval(refresh, 2_000);
     return () => {
       cancelled = true;
@@ -194,6 +206,9 @@ export default function ThreadPage(): JSX.Element {
   const onSend = useCallback(
     async (text: string, imagePaths: string[]) => {
       if (!detail) return;
+      const sendKey = sendPayloadKey(text, imagePaths);
+      if (pendingSendKeysRef.current.has(sendKey)) return;
+      pendingSendKeysRef.current.add(sendKey);
       const optimisticEntry: TimelineEntry = {
         id: `local-user-${Date.now()}`,
         createdAt: Date.now(),
@@ -218,10 +233,12 @@ export default function ThreadPage(): JSX.Element {
             : undefined;
         const startInput = {
           threadId,
+          clientUserMessageId: optimisticEntry.id,
           text,
           imagePaths,
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
           ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
+          ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
           ...(collaborationMode ? { collaborationMode } : {})
         };
         let started: Awaited<ReturnType<typeof codex.startTurn>>;
@@ -235,7 +252,7 @@ export default function ThreadPage(): JSX.Element {
           setDetail(resumed);
           started = await codex.startTurn(startInput);
         }
-        applyThreadDetail(started.thread);
+        applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
         const serverHasUserMessage = started.thread.timeline.some(
           (item) => item.role === "user" && item.text.trim() === text.trim()
         );
@@ -280,6 +297,8 @@ export default function ThreadPage(): JSX.Element {
         ]);
         setRunning(threadId, false);
         throw err;
+      } finally {
+        pendingSendKeysRef.current.delete(sendKey);
       }
     },
     [
@@ -287,6 +306,7 @@ export default function ThreadPage(): JSX.Element {
       threadId,
       effectiveModel,
       effectiveReasoningEffort,
+      effectiveReasoningSummary,
       configuredModel,
       configuredReasoningEffort,
       threadState?.mode,
@@ -872,6 +892,10 @@ function isThreadNotFoundError(error: unknown): boolean {
 
 function isThreadRunningStatus(status: string): boolean {
   return status === "active";
+}
+
+function sendPayloadKey(text: string, imagePaths: string[]): string {
+  return `${text.trim()}\u0001${[...imagePaths].sort().join("\u0000")}`;
 }
 
 function errorMessage(error: unknown): string {

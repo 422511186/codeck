@@ -200,6 +200,7 @@ import type { ThreadInjectItemsParams } from "../../../docs/generated/app-server
 import type { TurnError } from "../../../docs/generated/app-server-ts/v2/TurnError";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
+import type { ReasoningSummary } from "../../../docs/generated/app-server-ts/ReasoningSummary";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
 import type { TurnSteerParams } from "../../../docs/generated/app-server-ts/v2/TurnSteerParams";
 import type { TurnSteerResponse } from "../../../docs/generated/app-server-ts/v2/TurnSteerResponse";
@@ -313,8 +314,10 @@ export type StartTurnInput = {
   threadId: string;
   text: string;
   imagePaths?: string[];
+  clientUserMessageId?: string;
   model?: string;
   reasoningEffort?: string;
+  reasoningSummary?: ReasoningSummary;
   permissions?: string;
   additionalContext?: TurnStartParams["additionalContext"];
   collaborationMode?: TurnStartParams["collaborationMode"];
@@ -591,6 +594,13 @@ function extractToolResultText(value: unknown): string {
   return stringifyJson(value);
 }
 
+function textFromFragments(fragments: Array<{ text?: unknown }>): string {
+  return fragments
+    .map((fragment) => (typeof fragment.text === "string" ? fragment.text : stringifyJson(fragment)))
+    .filter(Boolean)
+    .join("\n");
+}
+
 function toolStatus(status: unknown, failed = false): "running" | "success" | "failed" {
   const normalized = typeof status === "string" ? status.toLowerCase() : "";
   if (failed || normalized.includes("fail") || normalized.includes("error")) {
@@ -650,6 +660,15 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
     return { id: item.id, role: "plan", text: item.text };
   }
 
+  if (item.type === "hookPrompt") {
+    return {
+      id: item.id,
+      role: "system",
+      text: textFromFragments(item.fragments) || "Hook prompt",
+      toolKind: "system"
+    };
+  }
+
   if (item.type === "enteredReviewMode") {
     return { id: item.id, role: "tool", text: `代码审查：${item.review}` };
   }
@@ -693,6 +712,40 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
       tool: item.tool,
       arguments: stringifyJson(item.arguments),
       status: toolStatus(item.status, item.success === false)
+    };
+  }
+
+  if (item.type === "collabAgentToolCall") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: stringifyJson({
+        prompt: item.prompt,
+        model: item.model,
+        reasoningEffort: item.reasoningEffort,
+        receiverThreadIds: item.receiverThreadIds,
+        agentsStates: item.agentsStates
+      }),
+      toolKind: "dynamic",
+      server: "collab",
+      tool: item.tool,
+      status: toolStatus(item.status)
+    };
+  }
+
+  if (item.type === "subAgentActivity") {
+    return {
+      id: item.id,
+      role: "tool",
+      text: stringifyJson({
+        agentThreadId: item.agentThreadId,
+        agentPath: item.agentPath,
+        kind: item.kind
+      }),
+      toolKind: "dynamic",
+      server: "sub-agent",
+      tool: item.kind,
+      status: item.kind === "interrupted" ? "failed" : item.kind === "started" ? "running" : "success"
     };
   }
 
@@ -756,7 +809,22 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
     };
   }
 
-  return null;
+  if (item.type === "sleep") {
+    return {
+      id: item.id,
+      role: "system",
+      text: `等待 ${item.durationMs}ms`,
+      toolKind: "system"
+    };
+  }
+
+  const record = item as unknown as { id?: unknown; type?: unknown };
+  return {
+    id: typeof record.id === "string" ? record.id : `unknown-${String(record.type ?? "item")}`,
+    role: "system",
+    text: stringifyJson(item),
+    toolKind: "system"
+  };
 }
 
 function turnErrorTimelineItem(turnId: string, error: TurnError): MobileTimelineItem {
@@ -1322,9 +1390,11 @@ export class CodexAppServerClient {
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
     const params: TurnStartParams = {
       threadId: input.threadId,
+      clientUserMessageId: input.clientUserMessageId,
       input: createTurnUserInput(input.text, input.imagePaths),
       model: input.model,
       effort: input.reasoningEffort,
+      summary: input.reasoningSummary,
       permissions: input.permissions,
       additionalContext: input.additionalContext,
       collaborationMode: normalizeCollaborationMode(input.collaborationMode)
@@ -2193,7 +2263,8 @@ export class CodexAppServerClient {
     return {
       model: settingsValue(config.model),
       modelProvider: settingsValue(config.model_provider),
-      reasoningEffort: settingsValue(config.model_reasoning_effort)
+      reasoningEffort: settingsValue(config.model_reasoning_effort),
+      reasoningSummary: settingsValue(config.model_reasoning_summary)
     };
   }
 
@@ -2251,6 +2322,7 @@ export class CodexAppServerClient {
       model: settingsValue(config.model),
       modelProvider: settingsValue(config.model_provider),
       reasoningEffort: settingsValue(config.model_reasoning_effort),
+      reasoningSummary: settingsValue(config.model_reasoning_summary),
       approvalPolicy: settingsValue(config.approval_policy),
       sandboxMode: settingsValue(config.sandbox_mode),
       loadedThreadIds: (loadedThreadsResponse as ThreadLoadedListResponse).data,

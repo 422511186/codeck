@@ -23,6 +23,7 @@ export type TimelineItem = {
   id: string;
   role: TimelineRole;
   text: string;
+  done?: boolean;
   imagePaths?: string[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   server?: string;
@@ -55,6 +56,7 @@ export type CodexSettings = {
   model: string | null;
   modelProvider: string | null;
   reasoningEffort: string | null;
+  reasoningSummary: string | null;
 };
 
 export type UploadedImage = {
@@ -127,6 +129,8 @@ export type CollaborationModePayload = {
     developer_instructions?: string | null;
   };
 };
+
+export type ReasoningSummary = "auto" | "concise" | "detailed" | "none";
 
 export const DEFAULT_COLLABORATION_MODEL = "gpt-5-codex";
 

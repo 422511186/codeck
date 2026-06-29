@@ -62,6 +62,7 @@ describe("codex turn start route", () => {
         body: JSON.stringify({
           threadId: "thread-1",
           text: "请规划",
+          reasoningSummary: "auto",
           additionalContext,
           collaborationMode: {
             mode: "plan",
@@ -80,6 +81,7 @@ describe("codex turn start route", () => {
       expect.objectContaining({
         threadId: "thread-1",
         text: "请规划",
+        reasoningSummary: "auto",
         additionalContext,
         collaborationMode: expect.objectContaining({ mode: "plan" })
       })
@@ -119,5 +121,38 @@ describe("codex turn start route", () => {
       timeline: [],
       lastTurnId: null
     });
+  });
+
+  it("同一个 clientUserMessageId 的并发重复请求只启动一次 turn", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    const requestBody = {
+      threadId: "thread-1",
+      text: "不要放大",
+      clientUserMessageId: "local-user-1"
+    };
+
+    const [first, second] = await Promise.all([
+      POST(
+        new Request("http://localhost/api/codex/turns/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody)
+        })
+      ),
+      POST(
+        new Request("http://localhost/api/codex/turns/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody)
+        })
+      )
+    ]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+    expect(mockReadThread).toHaveBeenCalledTimes(1);
+    await expect(first.json()).resolves.toMatchObject({ turnId: "turn-1" });
+    await expect(second.json()).resolves.toMatchObject({ turnId: "turn-1" });
   });
 });

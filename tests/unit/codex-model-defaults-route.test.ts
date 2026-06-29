@@ -30,7 +30,8 @@ describe("codex model defaults route", () => {
       settings: {
         model: null,
         modelProvider: null,
-        reasoningEffort: null
+        reasoningEffort: null,
+        reasoningSummary: null
       }
     });
   });
@@ -39,7 +40,8 @@ describe("codex model defaults route", () => {
     mockReadModelDefaults.mockResolvedValueOnce({
       model: "gpt-5.5",
       modelProvider: "openai",
-      reasoningEffort: "high"
+      reasoningEffort: "high",
+      reasoningSummary: "auto"
     });
 
     const { GET } = await import("../../src/app/api/codex/settings/model-defaults/route");
@@ -51,7 +53,8 @@ describe("codex model defaults route", () => {
       settings: {
         model: "gpt-5.5",
         modelProvider: "openai",
-        reasoningEffort: "high"
+        reasoningEffort: "high",
+        reasoningSummary: "auto"
       }
     });
   });

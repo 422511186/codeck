@@ -51,7 +51,8 @@ export async function readCodexSettings(): Promise<CodexSettings> {
   return {
     model: data.settings?.model ?? null,
     modelProvider: data.settings?.modelProvider ?? null,
-    reasoningEffort: data.settings?.reasoningEffort ?? null
+    reasoningEffort: data.settings?.reasoningEffort ?? null,
+    reasoningSummary: data.settings?.reasoningSummary ?? null
   };
 }
 
@@ -125,8 +126,10 @@ export type StartTurnInput = {
   threadId: string;
   text: string;
   imagePaths?: string[];
+  clientUserMessageId?: string;
   model?: string;
   reasoningEffort?: string;
+  reasoningSummary?: string;
   permissions?: string;
   additionalContext?: Record<string, { value: string; kind: "untrusted" | "application" }>;
   collaborationMode?: CollaborationModePayload;

@@ -134,6 +134,27 @@ describe("ChatInput", () => {
     expect(localStorage.getItem("codex-web:drafts")).toBe("{}");
   });
 
+  it("does not submit twice while the first send is still pending", async () => {
+    const user = userEvent.setup();
+    let resolveSend: (() => void) | null = null;
+    const onSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSend = resolve;
+        })
+    );
+    renderInput({ onSend });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "不要重复");
+    const sendButton = screen.getByLabelText("发送");
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    resolveSend?.();
+    await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
+  });
+
   it("does not send with Enter when the inline composer cannot send", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { container, rerender, props } = renderInput({ onSend });

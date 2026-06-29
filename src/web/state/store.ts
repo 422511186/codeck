@@ -34,6 +34,7 @@ type Actions = {
   setActiveThread: (threadId: string | null) => void;
   ensureThread: (threadId: string, init?: Partial<ThreadState>) => void;
   setThreadEntries: (threadId: string, entries: TimelineEntry[], cursor: string | null) => void;
+  mergeThreadEntries: (threadId: string, entries: TimelineEntry[], cursor: string | null) => void;
   prependEntries: (
     threadId: string,
     entries: TimelineEntry[],
@@ -43,6 +44,9 @@ type Actions = {
   appendEntries: (threadId: string, entries: TimelineEntry[]) => void;
   replaceOrAddEntry: (threadId: string, entry: TimelineEntry) => void;
   appendTextToEntry: (threadId: string, entry: TimelineEntry) => void;
+  startReasoningEntry: (threadId: string, turnId: string | null, itemId: string) => void;
+  appendReasoningDelta: (threadId: string, turnId: string | null, itemId: string, delta: string) => void;
+  removeEmptyPendingReasoningEntry: (threadId: string, turnId: string | null) => void;
   setRunning: (threadId: string, running: boolean) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
@@ -85,15 +89,33 @@ export const useStore = create<State & Actions>((set, get) => ({
   setThreadEntries: (threadId, entries, cursor) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const nextEntries = normalizeTimelineEntries(entries);
       return {
         threads: {
           ...state.threads,
           [threadId]: {
             ...prev,
-            entries,
+            entries: nextEntries,
             cursor,
             reachedBeginning: cursor === null,
-            lastSeenItemId: entries.length ? entries[entries.length - 1].id : prev.lastSeenItemId
+            lastSeenItemId: nextEntries.length ? nextEntries[nextEntries.length - 1].id : prev.lastSeenItemId
+          }
+        }
+      };
+    }),
+  mergeThreadEntries: (threadId, entries, cursor) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const nextEntries = mergeTimelineEntries(prev.entries, entries);
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            entries: nextEntries,
+            cursor,
+            reachedBeginning: cursor === null,
+            lastSeenItemId: nextEntries.length ? nextEntries[nextEntries.length - 1].id : prev.lastSeenItemId
           }
         }
       };
@@ -101,21 +123,23 @@ export const useStore = create<State & Actions>((set, get) => ({
   prependEntries: (threadId, entries, cursor, reachedBeginning) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const nextEntries = normalizeTimelineEntries([...entries, ...prev.entries]);
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, entries: [...entries, ...prev.entries], cursor, reachedBeginning }
+          [threadId]: { ...prev, entries: nextEntries, cursor, reachedBeginning }
         }
       };
     }),
   appendEntries: (threadId, entries) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const last = entries.length ? entries[entries.length - 1].id : prev.lastSeenItemId;
+      const nextEntries = normalizeTimelineEntries([...prev.entries, ...entries]);
+      const last = nextEntries.length ? nextEntries[nextEntries.length - 1].id : prev.lastSeenItemId;
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, entries: [...prev.entries, ...entries], lastSeenItemId: last }
+          [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: last }
         }
       };
     }),
@@ -127,8 +151,9 @@ export const useStore = create<State & Actions>((set, get) => ({
         idx >= 0
           ? prev.entries.map((e, i) => (i === idx ? entry : e))
           : [...prev.entries, entry];
+      const normalizedEntries = normalizeTimelineEntries(nextEntries);
       return {
-        threads: { ...state.threads, [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: entry.id } }
+        threads: { ...state.threads, [threadId]: { ...prev, entries: normalizedEntries, lastSeenItemId: entry.id } }
       };
     }),
   appendTextToEntry: (threadId, entry) =>
@@ -160,11 +185,105 @@ export const useStore = create<State & Actions>((set, get) => ({
                   }
                 };
               }
+              if (current.body.kind === "system" && entry.body.kind === "system") {
+                return {
+                  ...current,
+                  body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
+                };
+              }
               return entry;
             })
           : [...prev.entries, entry];
+      const normalizedEntries = normalizeTimelineEntries(nextEntries);
       return {
-        threads: { ...state.threads, [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: entry.id } }
+        threads: { ...state.threads, [threadId]: { ...prev, entries: normalizedEntries, lastSeenItemId: entry.id } }
+      };
+    }),
+  startReasoningEntry: (threadId, turnId, itemId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const pendingId = pendingReasoningId(threadId, turnId);
+      const entry: TimelineEntry = {
+        id: itemId,
+        createdAt: Date.now(),
+        body: { kind: "reasoning", text: "", done: false }
+      };
+      const existingIndex = prev.entries.findIndex((current) => current.id === itemId);
+      const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
+      const nextEntries =
+        existingIndex >= 0
+          ? prev.entries.map((current, index) => (index === existingIndex ? entry : current))
+          : pendingIndex >= 0
+            ? prev.entries.map((current, index) => (index === pendingIndex ? entry : current))
+            : [...prev.entries, entry];
+
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            entries: normalizeTimelineEntries(nextEntries),
+            lastSeenItemId: itemId
+          }
+        }
+      };
+    }),
+  appendReasoningDelta: (threadId, turnId, itemId, delta) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const pendingId = pendingReasoningId(threadId, turnId);
+      const deltaEntry: TimelineEntry = {
+        id: itemId,
+        createdAt: Date.now(),
+        body: { kind: "reasoning", text: delta, done: false }
+      };
+      const existingIndex = prev.entries.findIndex((current) => current.id === itemId);
+      const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
+      const nextEntries =
+        existingIndex >= 0
+          ? prev.entries.map((current, index) => {
+              if (index !== existingIndex || current.body.kind !== "reasoning") {
+                return current;
+              }
+              return {
+                ...current,
+                body: { ...current.body, text: `${current.body.text}${delta}` }
+              };
+            })
+          : pendingIndex >= 0
+            ? prev.entries.map((current, index) => (index === pendingIndex ? deltaEntry : current))
+            : [...prev.entries, deltaEntry];
+
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            entries: normalizeTimelineEntries(nextEntries),
+            lastSeenItemId: itemId
+          }
+        }
+      };
+    }),
+  removeEmptyPendingReasoningEntry: (threadId, turnId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const pendingId = pendingReasoningId(threadId, turnId);
+      const nextEntries = prev.entries.filter((entry) => {
+        return !(
+          entry.id === pendingId &&
+          entry.body.kind === "reasoning" &&
+          !entry.body.text.trim()
+        );
+      });
+      if (nextEntries.length === prev.entries.length) {
+        return state;
+      }
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: { ...prev, entries: normalizeTimelineEntries(nextEntries) }
+        }
       };
     }),
   setRunning: (threadId, running) =>
@@ -246,6 +365,11 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn.started":
         case "turn_started":
           get().setRunning(threadId, true);
+          get().startReasoningEntry(
+            threadId,
+            typeof ev.turnId === "string" ? ev.turnId : null,
+            pendingReasoningId(threadId, typeof ev.turnId === "string" ? ev.turnId : null)
+          );
           break;
         case "turn.completed":
         case "turn.failed":
@@ -254,10 +378,23 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn_failed":
         case "turn_interrupted":
           get().setRunning(threadId, false);
+          get().removeEmptyPendingReasoningEntry(threadId, typeof ev.turnId === "string" ? ev.turnId : null);
           break;
         case "plan.delta": {
           const plan = (ev.plan as Array<{ text: string; completed: boolean }>) ?? [];
           get().setPlan(threadId, plan);
+          break;
+        }
+        case "plan_delta": {
+          const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-plan-live`;
+          const delta = typeof ev.delta === "string" ? ev.delta : "";
+          if (delta) {
+            get().appendTextToEntry(threadId, {
+              id: itemId,
+              createdAt: Date.now(),
+              body: { kind: "system", text: delta }
+            });
+          }
           break;
         }
         case "agent_message_delta": {
@@ -276,26 +413,32 @@ export const useStore = create<State & Actions>((set, get) => ({
           const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-reasoning-live`;
           const delta = typeof ev.delta === "string" ? ev.delta : "";
           if (delta) {
-            get().appendTextToEntry(threadId, {
-              id: itemId,
-              createdAt: Date.now(),
-              body: { kind: "reasoning", text: delta, done: false }
-            });
+            get().appendReasoningDelta(threadId, typeof ev.turnId === "string" ? ev.turnId : null, itemId, delta);
           }
           break;
         }
+        case "reasoning_started": {
+          const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-reasoning-live`;
+          get().startReasoningEntry(threadId, typeof ev.turnId === "string" ? ev.turnId : null, itemId);
+          break;
+        }
         case "command_output_delta":
-        case "file_output_delta": {
+        case "file_output_delta":
+        case "tool_output_delta": {
           const itemId = typeof ev.itemId === "string" ? ev.itemId : `${threadId}-${ev.kind}`;
           const delta = typeof ev.delta === "string" ? ev.delta : "";
           if (delta) {
+            const defaultServer =
+              ev.kind === "command_output_delta" ? "command" : ev.kind === "file_output_delta" ? "file" : "tool";
+            const server = typeof ev.server === "string" ? ev.server : defaultServer;
+            const tool = typeof ev.tool === "string" ? ev.tool : defaultServer;
             get().appendTextToEntry(threadId, {
               id: itemId,
               createdAt: Date.now(),
               body: {
                 kind: "tool",
-                server: ev.kind === "command_output_delta" ? "command" : "file",
-                tool: ev.kind === "command_output_delta" ? "command" : "file",
+                server,
+                tool,
                 status: "running",
                 result: delta
               }
@@ -398,6 +541,130 @@ export const useStore = create<State & Actions>((set, get) => ({
       return { threads: next };
     })
 }));
+
+function mergeTimelineEntries(current: TimelineEntry[], snapshot: TimelineEntry[]): TimelineEntry[] {
+  if (!current.length) {
+    return normalizeTimelineEntries(snapshot);
+  }
+
+  const snapshotById = new Map(snapshot.map((entry) => [entry.id, entry]));
+  const usedSnapshotIds = new Set<string>();
+  const merged: TimelineEntry[] = [];
+  for (const entry of current) {
+    const snapshotEntry = snapshotById.get(entry.id);
+    if (!snapshotEntry) {
+      merged.push(entry);
+      continue;
+    }
+    usedSnapshotIds.add(entry.id);
+    merged.push(shouldReplaceLiveEntry(entry, snapshotEntry) ? snapshotEntry : entry);
+  }
+
+  for (const entry of snapshot) {
+    if (!usedSnapshotIds.has(entry.id)) {
+      merged.push(entry);
+    }
+  }
+
+  return normalizeTimelineEntries(merged);
+}
+
+function shouldReplaceLiveEntry(current: TimelineEntry, snapshot: TimelineEntry): boolean {
+  if (snapshot.body.kind === "reasoning" && current.body.kind === "reasoning") {
+    return snapshot.body.done || !current.body.text;
+  }
+  if (snapshot.body.kind === "tool" && current.body.kind === "tool") {
+    return snapshot.body.status !== "running" || !current.body.result;
+  }
+  if (snapshot.body.kind === "agent-message" && current.body.kind === "agent-message") {
+    return snapshot.body.text.length >= current.body.text.length;
+  }
+  return true;
+}
+
+function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  return removeAdjacentDuplicateUserMessages(
+    removeConfirmedLocalUserMessages(removeDuplicateLocalUserMessages(entries))
+  );
+}
+
+function pendingReasoningId(threadId: string, turnId: string | null): string {
+  return `${turnId ?? threadId}-reasoning-pending`;
+}
+
+function removeConfirmedLocalUserMessages(entries: TimelineEntry[]): TimelineEntry[] {
+  return entries.filter((entry, index) => {
+    if (!isLocalPendingUserMessage(entry)) {
+      return true;
+    }
+
+    const key = userMessageKey(entry);
+    return !entries.slice(index + 1).some((candidate) => {
+      return !candidate.id.startsWith("local-user-") && userMessageKey(candidate) === key;
+    });
+  });
+}
+
+function removeDuplicateLocalUserMessages(entries: TimelineEntry[]): TimelineEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (!isLocalPendingUserMessage(entry)) {
+      return true;
+    }
+
+    const key = userMessageKey(entry);
+    if (!key) {
+      return true;
+    }
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function removeAdjacentDuplicateUserMessages(entries: TimelineEntry[]): TimelineEntry[] {
+  const next: TimelineEntry[] = [];
+  let previousUserKey: string | null = null;
+
+  for (const entry of entries) {
+    const key = isNonFailedUserMessage(entry) ? userMessageKey(entry) : null;
+    if (key && previousUserKey === key) {
+      const previous = next[next.length - 1];
+      if (previous && isLocalPendingUserMessage(previous) && !entry.id.startsWith("local-user-")) {
+        next[next.length - 1] = entry;
+      }
+      continue;
+    }
+
+    next.push(entry);
+    previousUserKey = key;
+  }
+
+  return next;
+}
+
+function isLocalPendingUserMessage(entry: TimelineEntry): boolean {
+  return (
+    entry.id.startsWith("local-user-") &&
+    entry.body.kind === "user-message" &&
+    entry.body.status !== "failed"
+  );
+}
+
+function isNonFailedUserMessage(entry: TimelineEntry): boolean {
+  return entry.body.kind === "user-message" && entry.body.status !== "failed";
+}
+
+function userMessageKey(entry: TimelineEntry): string | null {
+  if (entry.body.kind !== "user-message") {
+    return null;
+  }
+
+  const imagePaths = [...(entry.body.imagePaths ?? [])].sort().join("\u0000");
+  return `${entry.body.text.trim()}\u0001${imagePaths}`;
+}
 
 export const useAppStore = useStore;
 

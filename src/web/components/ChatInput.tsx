@@ -26,6 +26,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const [image, setImage] = useState<ImageState | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -58,10 +59,11 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   }
 
   async function send(value = text): Promise<void> {
-    if (sending || props.running) return;
+    if (sendingRef.current || sending || props.running) return;
     const trimmed = value.trim();
     if (!trimmed) return;
     if (image && image.status !== "ready") return;
+    sendingRef.current = true;
     setSending(true);
     try {
       const paths = image?.serverPath ? [image.serverPath] : [];
@@ -76,6 +78,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
         console.warn("send failed", err.message);
       }
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }

@@ -94,6 +94,70 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 turn plan 更新映射为前端计划状态事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          explanation: null,
+          plan: [
+            { step: "检查事件", status: "completed" },
+            { step: "修复渲染", status: "inProgress" }
+          ]
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "plan.delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        plan: [
+          { text: "检查事件", completed: true },
+          { text: "修复渲染", completed: false }
+        ]
+      }
+    });
+  });
+
+  it("把 hook started/completed 映射为可见工具事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "hook/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            id: "hook-1",
+            eventName: "after-edit",
+            status: "running",
+            statusMessage: "正在运行 hook",
+            entries: []
+          }
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: expect.any(Number),
+        item: {
+          id: "hook-1",
+          role: "tool",
+          text: "正在运行 hook",
+          toolKind: "system",
+          server: "hook",
+          tool: "after-edit",
+          status: "running"
+        }
+      }
+    });
+  });
+
   it("把 file change output delta 映射为浏览器 timeline 事件", () => {
     expect(
       normalizeAppServerNotification({
@@ -113,6 +177,192 @@ describe("normalizeAppServerNotification", () => {
         turnId: "turn-1",
         itemId: "file-1",
         delta: "写入 src/app.ts"
+      }
+    });
+  });
+
+  it("把 command/process base64 output delta 映射为浏览器 timeline 事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "command/exec/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          processId: "cmd-1",
+          stream: "stdout",
+          deltaBase64: Buffer.from("命令输出\n", "utf8").toString("base64"),
+          capReached: false
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        delta: "命令输出\n"
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "process/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          processHandle: "proc-1",
+          stream: "stderr",
+          deltaBase64: Buffer.from("进程输出\n", "utf8").toString("base64"),
+          capReached: false
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "proc-1",
+        delta: "进程输出\n"
+      }
+    });
+  });
+
+  it("把 command terminal interaction 映射为命令输出", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "item/commandExecution/terminalInteraction",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          processId: "proc-1",
+          stdin: "y\n"
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        delta: "\n$ y\n"
+      }
+    });
+  });
+
+  it("忽略没有会话上下文的 command/process output delta", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "command/exec/outputDelta",
+        params: {
+          processId: "cmd-1",
+          stream: "stdout",
+          deltaBase64: Buffer.from("终端输出\n", "utf8").toString("base64"),
+          capReached: false
+        }
+      })
+    ).toBeNull();
+  });
+
+  it("把 reasoning summary part 事件映射为运行态占位", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "item/reasoning/summaryPartAdded",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          summaryIndex: 0
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1"
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "item/reasoning/summaryTextDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          summaryIndex: 0,
+          delta: "推理摘要"
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "推理摘要"
+      }
+    });
+  });
+
+  it("把 MCP 工具进度映射为类型保真的可见工具输出", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "item/mcpToolCall/progress",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "mcp-1",
+          message: "正在读取文件"
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "tool_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "mcp-1",
+        delta: "正在读取文件",
+        server: "mcp",
+        tool: "progress",
+        toolKind: "mcp"
+      }
+    });
+  });
+
+  it("把 raw response reasoning 完成项映射为完整 timeline item 更新", () => {
+    const event = normalizeAppServerNotification({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "分析路径" }],
+          content: [{ type: "text", text: "检查 UI" }],
+          encrypted_content: null,
+          metadata: { turn_id: "turn-1" }
+        }
+      }
+    });
+
+    expect(event).toMatchObject({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          role: "reasoning",
+          text: "分析路径\n检查 UI"
+        }
       }
     });
   });

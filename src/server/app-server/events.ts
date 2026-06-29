@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { MobileTimelineItem } from "../../shared/codex";
 import { timelineItem } from "./client";
 
@@ -62,11 +63,23 @@ export type BrowserCodexEvent =
       delta: string;
     }
   | {
+      kind: "reasoning_started";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+    }
+  | {
       kind: "plan_delta";
       threadId: string;
       turnId: string;
       itemId: string;
       delta: string;
+    }
+  | {
+      kind: "plan.delta";
+      threadId: string;
+      turnId: string;
+      plan: Array<{ text: string; completed: boolean }>;
     }
   | {
       kind: "command_output_delta";
@@ -81,6 +94,16 @@ export type BrowserCodexEvent =
       turnId: string;
       itemId: string;
       delta: string;
+    }
+  | {
+      kind: "tool_output_delta";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      delta: string;
+      server: string;
+      tool: string;
+      toolKind: NonNullable<MobileTimelineItem["toolKind"]>;
     }
   | {
       kind: "item_updated";
@@ -207,7 +230,10 @@ type DeltaParams = {
   delta: string;
 };
 
-type DeltaEventKind = Extract<BrowserCodexEvent, { turnId: string; itemId: string; delta: string }>["kind"];
+type DeltaEventKind = Exclude<
+  Extract<BrowserCodexEvent, { turnId: string; itemId: string; delta: string }>["kind"],
+  "tool_output_delta"
+>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -231,6 +257,225 @@ function deltaEvent(kind: DeltaEventKind, params: unknown): BrowserCodexEventEnv
       itemId: String(params.itemId),
       delta: String(params.delta)
     }
+  };
+}
+
+function base64Delta(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  try {
+    return Buffer.from(value, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function processDeltaEvent(
+  kind: "command" | "process",
+  params: unknown
+): BrowserCodexEventEnvelope | null {
+  if (!isRecord(params) || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
+    return null;
+  }
+
+  const itemId =
+    kind === "command"
+      ? typeof params.processId === "string"
+        ? params.processId
+        : null
+      : typeof params.processHandle === "string"
+        ? params.processHandle
+        : null;
+  if (!itemId) {
+    return null;
+  }
+
+  return {
+    type: "codex-event",
+    event: {
+      kind: "command_output_delta",
+      threadId: params.threadId,
+      turnId: params.turnId,
+      itemId,
+      delta: base64Delta(params.deltaBase64)
+    }
+  };
+}
+
+function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return null;
+  }
+
+  const metadata = isRecord(value.metadata) ? value.metadata : null;
+  const id = typeof value.call_id === "string" ? value.call_id : `${value.type}-${metadata?.turn_id ?? "item"}`;
+
+  if (value.type === "reasoning") {
+    const summary = Array.isArray(value.summary)
+      ? value.summary
+          .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+          .filter(Boolean)
+      : [];
+    const content = Array.isArray(value.content)
+      ? value.content
+          .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+          .filter(Boolean)
+      : [];
+    return {
+      id,
+      role: "reasoning",
+      text: [...summary, ...content].join("\n")
+    };
+  }
+
+  if (value.type === "local_shell_call" && isRecord(value.action)) {
+    const command = Array.isArray(value.action.command) ? value.action.command.join(" ") : "shell";
+    return {
+      id,
+      role: "tool",
+      text: command,
+      toolKind: "command",
+      server: typeof value.action.working_directory === "string" ? value.action.working_directory : "command",
+      tool: command,
+      status: typeof value.status === "string" && value.status === "in_progress" ? "running" : "success"
+    };
+  }
+
+  if (value.type === "function_call" || value.type === "custom_tool_call" || value.type === "tool_search_call") {
+    return {
+      id,
+      role: "tool",
+      text: typeof value.arguments === "string" ? value.arguments : stringifyForEvent(value),
+      toolKind: "dynamic",
+      server: typeof value.namespace === "string" ? value.namespace : "raw",
+      tool: typeof value.name === "string" ? value.name : value.type,
+      arguments: typeof value.arguments === "string" ? value.arguments : undefined,
+      status: "running"
+    };
+  }
+
+  if (
+    value.type === "function_call_output" ||
+    value.type === "custom_tool_call_output" ||
+    value.type === "tool_search_output"
+  ) {
+    return {
+      id,
+      role: "tool",
+      text: stringifyForEvent(value.output ?? value),
+      toolKind: "dynamic",
+      server: "raw",
+      tool: value.type,
+      status: "success"
+    };
+  }
+
+  if (value.type === "web_search_call") {
+    return {
+      id,
+      role: "tool",
+      text: stringifyForEvent(value.action ?? value),
+      toolKind: "web",
+      server: "web",
+      tool: "search",
+      status: "success"
+    };
+  }
+
+  if (value.type === "image_generation_call") {
+    return {
+      id,
+      role: "tool",
+      text: typeof value.revised_prompt === "string" ? value.revised_prompt : "",
+      toolKind: "image",
+      server: "image",
+      tool: "generation",
+      status: typeof value.status === "string" && value.status === "completed" ? "success" : "running"
+    };
+  }
+
+  if (value.type === "compaction" || value.type === "compaction_trigger" || value.type === "context_compaction") {
+    return {
+      id,
+      role: "system",
+      text: "压缩上下文已完成",
+      toolKind: "system"
+    };
+  }
+
+  return {
+    id,
+    role: "system",
+    text: stringifyForEvent(value),
+    toolKind: "system"
+  };
+}
+
+function stringifyForEvent(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(
+      value,
+      (_key, nested) => (typeof nested === "bigint" ? nested.toString() : nested),
+      2
+    );
+  } catch {
+    return String(value);
+  }
+}
+
+function eventStatus(value: unknown): "running" | "success" | "failed" {
+  const normalized = typeof value === "string" ? value.toLowerCase() : "";
+  if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("cancel")) {
+    return "failed";
+  }
+  if (normalized.includes("running") || normalized.includes("progress") || normalized.includes("started")) {
+    return "running";
+  }
+  return "success";
+}
+
+function normalizePlanSteps(value: unknown): Array<{ text: string; completed: boolean }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((step) => {
+    if (!isRecord(step) || typeof step.step !== "string") {
+      return [];
+    }
+    return [{ text: step.step, completed: step.status === "completed" }];
+  });
+}
+
+function hookRunTimelineItem(value: unknown): MobileTimelineItem | null {
+  if (!isRecord(value) || typeof value.id !== "string") {
+    return null;
+  }
+
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  const entryText = entries
+    .map((entry) => stringifyForEvent(entry))
+    .filter(Boolean)
+    .join("\n");
+  const statusMessage = typeof value.statusMessage === "string" ? value.statusMessage : "";
+  const text = [statusMessage, entryText].filter(Boolean).join("\n") || stringifyForEvent(value);
+
+  return {
+    id: value.id,
+    role: "tool",
+    text,
+    toolKind: "system",
+    server: "hook",
+    tool: typeof value.eventName === "string" ? value.eventName : "hook",
+    status: eventStatus(value.status)
   };
 }
 
@@ -364,12 +609,67 @@ export function normalizeAppServerNotification(
     };
   }
 
+  if (message.method === "turn/plan/updated") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; plan?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "plan.delta",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        plan: normalizePlanSteps(params.plan)
+      }
+    };
+  }
+
+  if (message.method === "hook/started" || message.method === "hook/completed") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; run?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string") {
+      return null;
+    }
+    const item = hookRunTimelineItem(params.run);
+    if (!item) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: params.threadId,
+        turnId: typeof params.turnId === "string" ? params.turnId : item.id,
+        completedAtMs: Date.now(),
+        item
+      }
+    };
+  }
+
   if (message.method === "item/agentMessage/delta") {
     return deltaEvent("agent_message_delta", message.params);
   }
 
   if (message.method === "item/reasoning/textDelta" || message.method === "item/reasoning/summaryTextDelta") {
     return deltaEvent("reasoning_delta", message.params);
+  }
+
+  if (message.method === "item/reasoning/summaryPartAdded") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; itemId?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string" || typeof params.itemId !== "string") {
+      return null;
+    }
+    return {
+      type: "codex-event",
+      event: {
+        kind: "reasoning_started",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId
+      }
+    };
   }
 
   if (message.method === "item/plan/delta") {
@@ -380,8 +680,66 @@ export function normalizeAppServerNotification(
     return deltaEvent("command_output_delta", message.params);
   }
 
+  if (message.method === "item/commandExecution/terminalInteraction") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; itemId?: unknown; stdin?: unknown } | null | undefined;
+    if (
+      !params ||
+      typeof params.threadId !== "string" ||
+      typeof params.turnId !== "string" ||
+      typeof params.itemId !== "string" ||
+      typeof params.stdin !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        delta: `\n$ ${params.stdin}`
+      }
+    };
+  }
+
+  if (message.method === "command/exec/outputDelta") {
+    return processDeltaEvent("command", message.params);
+  }
+
+  if (message.method === "process/outputDelta") {
+    return processDeltaEvent("process", message.params);
+  }
+
   if (message.method === "item/fileChange/outputDelta") {
     return deltaEvent("file_output_delta", message.params);
+  }
+
+  if (message.method === "item/mcpToolCall/progress") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; itemId?: unknown; message?: unknown } | null | undefined;
+    if (
+      !params ||
+      typeof params.threadId !== "string" ||
+      typeof params.turnId !== "string" ||
+      typeof params.itemId !== "string" ||
+      typeof params.message !== "string"
+    ) {
+      return null;
+    }
+    return {
+      type: "codex-event",
+      event: {
+        kind: "tool_output_delta",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        delta: params.message,
+        server: "mcp",
+        tool: "progress",
+        toolKind: "mcp"
+      }
+    };
   }
 
   if (message.method === "item/completed" || message.method === "item/started") {
@@ -394,6 +752,17 @@ export function normalizeAppServerNotification(
     }
     const item = params.item ? timelineItem(params.item as Parameters<typeof timelineItem>[0]) : null;
     if (!item) return null;
+    if (message.method === "item/started" && item.role === "reasoning") {
+      return {
+        type: "codex-event",
+        event: {
+          kind: "reasoning_started",
+          threadId: params.threadId,
+          turnId: params.turnId,
+          itemId: item.id
+        }
+      };
+    }
 
     return {
       type: "codex-event",
@@ -407,6 +776,26 @@ export function normalizeAppServerNotification(
             : typeof params.startedAtMs === "number"
               ? params.startedAtMs
               : Date.now(),
+        item
+      }
+    };
+  }
+
+  if (message.method === "rawResponseItem/completed") {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; item?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
+      return null;
+    }
+    const item = rawResponseTimelineItem(params.item);
+    if (!item) return null;
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        completedAtMs: Date.now(),
         item
       }
     };

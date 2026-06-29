@@ -34,7 +34,7 @@ export type AppServerConfig =
     };
 
 export function loadRuntimeEnvConfig(projectDir = process.cwd(), dev = process.env.NODE_ENV !== "production"): void {
-  nextEnv.loadEnvConfig(projectDir, dev);
+  nextEnv.loadEnvConfig(projectDir, dev, console, true);
 }
 
 function generateAccessToken(): string {

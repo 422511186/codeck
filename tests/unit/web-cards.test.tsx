@@ -5,6 +5,7 @@ import { CommandCard } from "../../src/web/components/cards/CommandCard";
 import { DiffCard } from "../../src/web/components/cards/DiffCard";
 import { ReasoningCard } from "../../src/web/components/cards/ReasoningCard";
 import { ToolCard } from "../../src/web/components/cards/ToolCard";
+import { imagePreviewSrc } from "../../src/web/components/ImagePreview";
 
 describe("CommandCard", () => {
   it("should render command text", () => {
@@ -141,7 +142,30 @@ describe("ReasoningCard", () => {
     expect(screen.getByText("思考中…")).toBeInTheDocument();
   });
 
-  it("should show reasoning preview when completed", () => {
+  it("should show streamed reasoning text while running", async () => {
+    const user = userEvent.setup();
+    const fullText = "先检查 timeline 数据流\n再定位 UI 渲染问题";
+    render(
+      <ReasoningCard
+        entry={{
+          text: fullText,
+          done: false
+        }}
+      />
+    );
+
+    expect(screen.getByText(/思考中/)).toBeInTheDocument();
+    expect(screen.getByText(/先检查 timeline 数据流/)).toBeInTheDocument();
+
+    const card = screen.getByText(/思考中/).closest("button");
+    await user.click(card!);
+
+    await waitFor(() => {
+      expect(screen.getByText(/再定位 UI 渲染问题/)).toBeInTheDocument();
+    });
+  });
+
+  it("should show a recognizable reasoning title when completed", () => {
     render(
       <ReasoningCard
         entry={{
@@ -151,6 +175,7 @@ describe("ReasoningCard", () => {
       />
     );
 
+    expect(screen.getByText("推理过程")).toBeInTheDocument();
     expect(screen.getByText(/Analysis of the problem/)).toBeInTheDocument();
   });
 
@@ -166,7 +191,7 @@ describe("ReasoningCard", () => {
       />
     );
 
-    const card = screen.getByText(/First, I need to check/).closest("button");
+    const card = screen.getByText("推理过程").closest("button");
     expect(screen.queryByText(/Then analyze the dependencies/)).not.toBeInTheDocument();
 
     await user.click(card!);
@@ -174,6 +199,25 @@ describe("ReasoningCard", () => {
     await waitFor(() => {
       expect(screen.getByText(/Then analyze the dependencies/)).toBeInTheDocument();
     });
+  });
+});
+
+describe("imagePreviewSrc", () => {
+  it("should route local paths through the preview API", () => {
+    expect(imagePreviewSrc("/home/hzy/workspace/codex-web-1/uploads/shot.jpg")).toBe(
+      "/api/codex/images/preview?path=%2Fhome%2Fhzy%2Fworkspace%2Fcodex-web-1%2Fuploads%2Fshot.jpg"
+    );
+    expect(imagePreviewSrc("C:/Users/huang/AppData/Local/Temp/shot.png")).toBe(
+      "/api/codex/images/preview?path=C%3A%2FUsers%2Fhuang%2FAppData%2FLocal%2FTemp%2Fshot.png"
+    );
+    expect(imagePreviewSrc("uploads/shot.webp")).toBe("/api/codex/images/preview?path=uploads%2Fshot.webp");
+  });
+
+  it("should keep browser-native image URLs unchanged", () => {
+    expect(imagePreviewSrc("blob:http://localhost/blob-id")).toBe("blob:http://localhost/blob-id");
+    expect(imagePreviewSrc("data:image/png;base64,abc")).toBe("data:image/png;base64,abc");
+    expect(imagePreviewSrc("http://example.test/shot.png")).toBe("http://example.test/shot.png");
+    expect(imagePreviewSrc("https://example.test/shot.png")).toBe("https://example.test/shot.png");
   });
 });
 

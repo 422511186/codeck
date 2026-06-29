@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ThreadPage from "../../src/app/threads/[threadId]/page";
 import { ApiError } from "../../src/web/api/client";
@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
 
 const mockEnsureThread = vi.fn();
 const mockSetThreadEntries = vi.fn();
+const mockMergeThreadEntries = vi.fn();
 const mockPrependEntries = vi.fn();
 const mockAppendEntries = vi.fn();
 const mockReplaceOrAddEntry = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("../../src/web/state/store", () => ({
     selector({
       ensureThread: mockEnsureThread,
       setThreadEntries: mockSetThreadEntries,
+      mergeThreadEntries: mockMergeThreadEntries,
       prependEntries: mockPrependEntries,
       appendEntries: mockAppendEntries,
       replaceOrAddEntry: mockReplaceOrAddEntry,
@@ -88,12 +90,18 @@ vi.mock("../../src/web/storage/settings", () => ({
 }));
 
 describe("ThreadPage", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     mockPush.mockClear();
     mockBack.mockClear();
     mockEnsureThread.mockClear();
     mockSetThreadEntries.mockClear();
+    mockMergeThreadEntries.mockClear();
     mockPrependEntries.mockClear();
     mockAppendEntries.mockClear();
     mockReplaceOrAddEntry.mockClear();
@@ -144,7 +152,7 @@ describe("ThreadPage", () => {
     mockInterruptTurn.mockResolvedValue({});
     mockListModels.mockResolvedValue([]);
     mockReadSettings.mockClear();
-    mockReadSettings.mockResolvedValue({ model: null, modelProvider: null, reasoningEffort: null });
+    mockReadSettings.mockResolvedValue({ model: null, modelProvider: null, reasoningEffort: null, reasoningSummary: null });
     mockCollaborationModes.mockClear();
     mockCollaborationModes.mockResolvedValue([
       { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
@@ -274,7 +282,21 @@ describe("ThreadPage", () => {
     expect(mockSetPendingRequests).toHaveBeenCalledWith([pendingQuestion]);
   });
 
-  it("should refresh running threads without a manual reload", async () => {
+  it("should refresh running threads after the fallback polling interval", async () => {
+    let intervalCallback: (() => void | Promise<void>) | null = null;
+    const originalSetInterval = window.setInterval.bind(window);
+    const originalClearInterval = window.clearInterval.bind(window);
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+      if (timeout === 2_000) {
+        intervalCallback = handler as () => void | Promise<void>;
+        return 1 as unknown as number;
+      }
+      return originalSetInterval(handler, timeout, ...args);
+    });
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation((id?: number) => {
+      if (id === (1 as unknown as number)) return;
+      return originalClearInterval(id);
+    });
     const activeThread = {
       id: "thread-1",
       cwd: "C:/test",
@@ -301,18 +323,80 @@ describe("ThreadPage", () => {
         status: "idle",
         timeline: [{ id: "agent-1", role: "agent", text: "done" }]
       });
+    const initialReadCalls = mockReadThread.mock.calls.length;
 
-    render(<ThreadPage />);
+    try {
+      render(<ThreadPage />);
 
-    await waitFor(() => {
-      expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+      await waitFor(() => {
+        expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+      });
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+      expect(intervalCallback).toBeTruthy();
+
+      await act(async () => {
+        await intervalCallback?.();
+      });
+
+      await waitFor(() => expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false));
+      expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(2);
+      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        [expect.objectContaining({ id: "agent-1" })],
+        null
+      );
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
+  it("should not immediately repeat readThread after opening an active thread", async () => {
+    const originalSetInterval = window.setInterval.bind(window);
+    const originalClearInterval = window.clearInterval.bind(window);
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+      if (timeout === 2_000) {
+        return 1 as unknown as number;
+      }
+      return originalSetInterval(handler, timeout, ...args);
     });
-    expect(mockReadThread.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(mockSetThreadEntries).toHaveBeenCalledWith(
-      "thread-1",
-      [expect.objectContaining({ id: "agent-1" })],
-      null
-    );
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation((id?: number) => {
+      if (id === (1 as unknown as number)) return;
+      return originalClearInterval(id);
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    try {
+      render(<ThreadPage />);
+
+      await waitFor(() => {
+        expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+      });
+      expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 
   it("should interrupt the active turn id instead of only toggling local running state", async () => {
@@ -790,11 +874,14 @@ describe("ThreadPage", () => {
         })
       ]
     );
-    expect(mockStartTurn).toHaveBeenCalledWith({
-      threadId: "thread-1",
-      text: "hello from mobile",
-      imagePaths: []
-    });
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "hello from mobile",
+        imagePaths: [],
+        reasoningSummary: "detailed"
+      })
+    );
     expect(mockReplaceOrAddEntry).toHaveBeenCalledWith(
       "thread-1",
       expect.objectContaining({
@@ -1097,7 +1184,7 @@ describe("ThreadPage", () => {
     expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("reasoningEffort");
   });
 
-  it("should refresh timeline from startTurn response after sending", async () => {
+  it("should refresh timeline from idle startTurn response after sending", async () => {
     const user = userEvent.setup();
     const now = Date.now();
     mockStartTurn.mockResolvedValue({
@@ -1139,6 +1226,41 @@ describe("ThreadPage", () => {
     expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", false);
   });
 
+  it("should merge running startTurn snapshots without clearing streamed entries", async () => {
+    const user = userEvent.setup();
+    mockStartTurn.mockResolvedValue({
+      turnId: "turn-2",
+      thread: {
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Test Thread",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        timeline: [{ id: "user-2", role: "user", text: "hello from mobile" }],
+        lastTurnId: "turn-2",
+        updatedAt: Date.now()
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "hello from mobile");
+    await user.click(screen.getByLabelText("发送"));
+
+    await waitFor(() => {
+      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        expect.arrayContaining([expect.objectContaining({ id: "user-2" })]),
+        null
+      );
+    });
+    expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", true);
+  });
+
   it("should let a freshly-created empty thread send the first user message", async () => {
     const user = userEvent.setup();
     mockReadThread.mockResolvedValue({
@@ -1162,11 +1284,13 @@ describe("ThreadPage", () => {
     await user.click(screen.getByLabelText("发送"));
 
     expect(mockResumeThread).not.toHaveBeenCalled();
-    expect(mockStartTurn).toHaveBeenCalledWith({
-      threadId: "thread-1",
-      text: "第一条消息",
-      imagePaths: []
-    });
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "第一条消息",
+        imagePaths: []
+      })
+    );
     expect(screen.queryByText(/is not materialized/)).not.toBeInTheDocument();
   });
 
@@ -1224,11 +1348,13 @@ describe("ThreadPage", () => {
     await user.click(screen.getByLabelText("发送"));
 
     expect(mockResumeThread).toHaveBeenCalledWith("thread-1");
-    expect(mockStartTurn).toHaveBeenCalledWith({
-      threadId: "thread-1",
-      text: "resume then send",
-      imagePaths: []
-    });
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "resume then send",
+        imagePaths: []
+      })
+    );
   });
 
   it("should resume and retry once when start turn reports thread not found", async () => {
@@ -1246,11 +1372,14 @@ describe("ThreadPage", () => {
 
     await waitFor(() => expect(mockStartTurn).toHaveBeenCalledTimes(2));
     expect(mockResumeThread).toHaveBeenCalledWith("thread-1");
-    expect(mockStartTurn).toHaveBeenNthCalledWith(2, {
-      threadId: "thread-1",
-      text: "retry after resume",
-      imagePaths: []
-    });
+    expect(mockStartTurn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "retry after resume",
+        imagePaths: []
+      })
+    );
   });
 
   it("should resend failed local user messages from retry button", async () => {
@@ -1279,11 +1408,13 @@ describe("ThreadPage", () => {
 
     await user.click(screen.getByRole("button", { name: "重试" }));
 
-    expect(mockStartTurn).toHaveBeenCalledWith({
-      threadId: "thread-1",
-      text: "retry me",
-      imagePaths: []
-    });
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "retry me",
+        imagePaths: []
+      })
+    );
   });
 
   it("should rollback and fill the previous user message for resend", async () => {

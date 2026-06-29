@@ -5,7 +5,8 @@ import { isRequestAuthenticated } from "../../../../../server/auth";
 const emptyDefaults = {
   model: null,
   modelProvider: null,
-  reasoningEffort: null
+  reasoningEffort: null,
+  reasoningSummary: null
 };
 
 export async function GET(request: Request): Promise<Response> {

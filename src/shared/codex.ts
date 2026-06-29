@@ -420,6 +420,7 @@ export type MobileModelDefaultsView = {
   model: string | null;
   modelProvider: string | null;
   reasoningEffort: string | null;
+  reasoningSummary: string | null;
 };
 
 export type MobileSkillView = {
@@ -587,6 +588,7 @@ export type MobileTimelineItem = {
   id: string;
   role: "user" | "agent" | "reasoning" | "plan" | "tool" | "system" | "error";
   text: string;
+  done?: boolean;
   imagePaths?: string[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   server?: string;
@@ -706,6 +708,7 @@ export type MobileSettingsView = {
   model: string | null;
   modelProvider: string | null;
   reasoningEffort: string | null;
+  reasoningSummary: string | null;
   approvalPolicy: string | null;
   sandboxMode: string | null;
   loadedThreadIds: string[];

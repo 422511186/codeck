@@ -1,7 +1,7 @@
 "use client";
 
 export function imagePreviewSrc(src: string): string {
-  if (/^(blob:|data:|https?:|\/)/i.test(src)) {
+  if (/^(blob:|data:|https?:)/i.test(src) || src.startsWith("/api/")) {
     return src;
   }
   return `/api/codex/images/preview?path=${encodeURIComponent(src)}`;

@@ -67,6 +67,18 @@ describe("timeline conversion", () => {
     expect((entry.body as any).done).toBe(true);
   });
 
+  it("should preserve running reasoning state from refreshed overlay items", () => {
+    const item: TimelineItem = {
+      id: "5b",
+      role: "reasoning",
+      text: "",
+      done: false
+    };
+    const entry = timelineItemToEntry(item, 5001);
+    expect(entry.body.kind).toBe("reasoning");
+    expect((entry.body as any).done).toBe(false);
+  });
+
   it("should convert plan", () => {
     const item: TimelineItem = {
       id: "9",

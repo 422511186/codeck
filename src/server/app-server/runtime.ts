@@ -56,6 +56,7 @@ import type {
   MobileThreadRealtimeStatusResult,
   MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
+  MobileTimelineItem,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -149,6 +150,73 @@ import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 
 type TextUserInput = { type: "text"; text: string };
+type TimelineOverlayEntry = {
+  item: MobileTimelineItem;
+  turnId: string | null;
+  updatedAtMs: number;
+};
+
+const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
+
+function pendingReasoningItemId(threadId: string, turnId: string | null): string {
+  return `${turnId ?? threadId}-reasoning-pending`;
+}
+
+function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem): MobileTimelineItem {
+  if (current.role !== next.role) {
+    return next;
+  }
+
+  return {
+    ...current,
+    ...next,
+    text: next.text || current.text,
+    imagePaths: next.imagePaths ?? current.imagePaths,
+    arguments: next.arguments ?? current.arguments,
+    status: next.status ?? current.status,
+    done: next.done ?? current.done
+  };
+}
+
+function shouldExposeOverlayTimelineItem(item: MobileTimelineItem): boolean {
+  if (item.role === "reasoning") {
+    return item.done === false || item.text.trim().length > 0;
+  }
+
+  if (item.role === "tool") {
+    return Boolean(item.text.trim() || item.arguments || item.imagePaths?.length || item.server || item.tool);
+  }
+
+  return item.text.trim().length > 0;
+}
+
+function shouldUseOverlayTimelineItem(base: MobileTimelineItem, overlay: MobileTimelineItem): boolean {
+  if (base.role !== overlay.role) {
+    return base.role === "system" && overlay.role !== "system";
+  }
+
+  if (base.role === "reasoning") {
+    if (overlay.done === false && !base.text.trim()) {
+      return true;
+    }
+    return overlay.text.length > base.text.length;
+  }
+
+  if (base.role === "tool") {
+    const baseFinal = base.status === "success" || base.status === "failed";
+    const overlayRunning = overlay.status === "running";
+    if (baseFinal && overlayRunning) {
+      return false;
+    }
+    if (!baseFinal && overlay.status && overlay.status !== base.status) {
+      return true;
+    }
+    return !base.text && Boolean(overlay.text) || (!baseFinal && overlay.text.length > base.text.length);
+  }
+
+  return overlay.text.length > base.text.length;
+}
+
 type MockFsNode = {
   type: "directory" | "file";
   createdAtMs: number;
@@ -2373,6 +2441,7 @@ export class AppServerGateway {
   private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
   private readonly terminalSessions = new Map<string, MobileTerminalSession>();
   private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
+  private readonly timelineOverlays = new Map<string, Map<string, TimelineOverlayEntry>>();
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
@@ -2387,6 +2456,7 @@ export class AppServerGateway {
       if (!event) {
         return;
       }
+      this.recordTimelineOverlay(event);
 
       for (const handler of this.browserEventHandlers) {
         handler(event);
@@ -2435,6 +2505,212 @@ export class AppServerGateway {
   private emitBrowserEvent(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent): void {
     for (const handler of this.browserEventHandlers) {
       handler(event);
+    }
+  }
+
+  private recordTimelineOverlay(envelope: BrowserCodexEventEnvelope): void {
+    const event = envelope.event;
+
+    switch (event.kind) {
+      case "turn_started":
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          id: pendingReasoningItemId(event.threadId, event.turnId),
+          role: "reasoning",
+          text: "",
+          done: false
+        });
+        break;
+      case "turn_completed":
+        this.finishTurnTimelineOverlay(event.threadId, event.turnId, event.status);
+        break;
+      case "reasoning_started":
+        this.removeTimelineOverlayItem(event.threadId, pendingReasoningItemId(event.threadId, event.turnId));
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          id: event.itemId,
+          role: "reasoning",
+          text: "",
+          done: false
+        });
+        break;
+      case "reasoning_delta":
+        this.removeTimelineOverlayItem(event.threadId, pendingReasoningItemId(event.threadId, event.turnId));
+        this.appendTimelineOverlayText(
+          event.threadId,
+          event.turnId,
+          event.itemId,
+          event.delta,
+          {
+            role: "reasoning",
+            text: "",
+            done: false
+          }
+        );
+        break;
+      case "command_output_delta":
+        this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
+          role: "tool",
+          text: "",
+          toolKind: "command",
+          server: "command",
+          tool: "command",
+          status: "running"
+        });
+        break;
+      case "file_output_delta":
+        this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
+          role: "tool",
+          text: "",
+          toolKind: "file",
+          server: "file",
+          tool: "change",
+          status: "running"
+        });
+        break;
+      case "tool_output_delta":
+        this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
+          role: "tool",
+          text: "",
+          toolKind: event.toolKind,
+          server: event.server,
+          tool: event.tool,
+          status: "running"
+        });
+        break;
+      case "item_updated":
+        if (event.item.role === "reasoning") {
+          this.removeTimelineOverlayItem(event.threadId, pendingReasoningItemId(event.threadId, event.turnId));
+        }
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          ...event.item,
+          ...(event.item.role === "reasoning" ? { done: true } : {})
+        });
+        break;
+      case "context_compacted":
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          id: `${event.turnId}-context-compacted`,
+          role: "system",
+          text: "压缩上下文已完成",
+          toolKind: "system"
+        });
+        break;
+      case "warning":
+        if (event.threadId) {
+          this.upsertTimelineOverlayItem(event.threadId, null, {
+            id: `${event.threadId}-warning-${Date.now()}`,
+            role: "error",
+            text: event.message
+          });
+        }
+        break;
+      case "turn_error":
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          id: `${event.turnId}-error`,
+          role: "error",
+          text: event.message
+        });
+        if (event.willRetry !== true) {
+          this.finishTurnTimelineOverlay(event.threadId, event.turnId, "failed");
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  private upsertTimelineOverlayItem(threadId: string, turnId: string | null, item: MobileTimelineItem): void {
+    const overlay = this.getTimelineOverlay(threadId);
+    const current = overlay.get(item.id);
+    overlay.set(item.id, {
+      item: current ? mergeOverlayItems(current.item, item) : item,
+      turnId,
+      updatedAtMs: Date.now()
+    });
+    this.trimTimelineOverlay(overlay);
+  }
+
+  private appendTimelineOverlayText(
+    threadId: string,
+    turnId: string | null,
+    itemId: string,
+    delta: string,
+    defaults: Omit<MobileTimelineItem, "id">
+  ): void {
+    if (!delta) {
+      return;
+    }
+
+    const overlay = this.getTimelineOverlay(threadId);
+    const current = overlay.get(itemId);
+    const currentItem = current?.item;
+    const nextItem: MobileTimelineItem = currentItem
+      ? { ...currentItem, text: `${currentItem.text}${delta}`, status: currentItem.status ?? defaults.status }
+      : { id: itemId, ...defaults, text: `${defaults.text}${delta}` };
+
+    overlay.set(itemId, {
+      item: nextItem,
+      turnId,
+      updatedAtMs: Date.now()
+    });
+    this.trimTimelineOverlay(overlay);
+  }
+
+  private finishTurnTimelineOverlay(threadId: string, turnId: string, status: string): void {
+    const overlay = this.timelineOverlays.get(threadId);
+    if (!overlay) {
+      return;
+    }
+
+    const failed = /fail|error|cancel|interrupt/i.test(status);
+    for (const [id, entry] of overlay) {
+      if (entry.turnId !== turnId) {
+        continue;
+      }
+
+      if (entry.item.role === "reasoning") {
+        if (!entry.item.text.trim()) {
+          overlay.delete(id);
+          continue;
+        }
+        overlay.set(id, {
+          ...entry,
+          item: { ...entry.item, done: true },
+          updatedAtMs: Date.now()
+        });
+        continue;
+      }
+
+      if (entry.item.role === "tool" && entry.item.status === "running") {
+        overlay.set(id, {
+          ...entry,
+          item: { ...entry.item, status: failed ? "failed" : "success" },
+          updatedAtMs: Date.now()
+        });
+      }
+    }
+
+    this.removeTimelineOverlayItem(threadId, pendingReasoningItemId(threadId, turnId));
+  }
+
+  private getTimelineOverlay(threadId: string): Map<string, TimelineOverlayEntry> {
+    let overlay = this.timelineOverlays.get(threadId);
+    if (!overlay) {
+      overlay = new Map();
+      this.timelineOverlays.set(threadId, overlay);
+    }
+    return overlay;
+  }
+
+  private removeTimelineOverlayItem(threadId: string, itemId: string): void {
+    this.timelineOverlays.get(threadId)?.delete(itemId);
+  }
+
+  private trimTimelineOverlay(overlay: Map<string, TimelineOverlayEntry>): void {
+    while (overlay.size > MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD) {
+      const firstKey = overlay.keys().next().value;
+      if (typeof firstKey !== "string") {
+        return;
+      }
+      overlay.delete(firstKey);
     }
   }
 
@@ -2531,7 +2807,34 @@ export class AppServerGateway {
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.client.readThread(threadId);
+    return this.applyTimelineOverlay(await this.client.readThread(threadId));
+  }
+
+  private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
+    const overlay = this.timelineOverlays.get(detail.id);
+    if (!overlay?.size) {
+      return detail;
+    }
+
+    const overlayById = new Map(overlay);
+    const usedOverlayIds = new Set<string>();
+    const timeline = detail.timeline.map((item) => {
+      const overlayEntry = overlayById.get(item.id);
+      if (!overlayEntry) {
+        return item;
+      }
+
+      usedOverlayIds.add(item.id);
+      return shouldUseOverlayTimelineItem(item, overlayEntry.item) ? overlayEntry.item : item;
+    });
+
+    for (const [id, entry] of overlayById) {
+      if (!usedOverlayIds.has(id) && shouldExposeOverlayTimelineItem(entry.item)) {
+        timeline.push(entry.item);
+      }
+    }
+
+    return { ...detail, timeline };
   }
 
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
