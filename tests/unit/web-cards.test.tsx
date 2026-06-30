@@ -123,7 +123,8 @@ describe("DiffCard", () => {
     await user.click(card!);
 
     await waitFor(() => {
-      expect(screen.getByText("+console.log('test');")).toBeInTheDocument();
+      expect(screen.getByText("console.log('test');")).toBeInTheDocument();
+      expect(screen.getByText("@@ -1,1 +1,2 @@")).toBeInTheDocument();
     });
   });
 });
@@ -222,6 +223,27 @@ describe("imagePreviewSrc", () => {
 });
 
 describe("ToolCard", () => {
+  it("should render file tool line stats", () => {
+    render(
+      <ToolCard
+        entry={{
+          kind: "tool",
+          server: "file",
+          tool: "src/app.ts",
+          diffPath: "src/app.ts",
+          added: 2,
+          removed: 1,
+          status: "success",
+          result: "--- a/src/app.ts\n+++ b/src/app.ts\n-old\n+new\n+added"
+        }}
+      />
+    );
+
+    expect(screen.getByText("file · src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(screen.getByText("-1")).toBeInTheDocument();
+  });
+
   it("should render image tool results as thumbnails", async () => {
     const user = userEvent.setup();
     render(

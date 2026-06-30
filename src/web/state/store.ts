@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import type { AppServerStatus, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
-import { timelineItemToEntry, type TimelineEntry } from "./timeline";
+import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
 export type { WsConnectionState };
@@ -11,6 +11,7 @@ export type ThreadState = {
   entries: TimelineEntry[];
   pendingApprovals: PendingServerRequest[];
   resolvedApprovals: Set<string>;
+  interruptedTurnIds: Set<string>;
   running: boolean;
   cursor: string | null;
   reachedBeginning: boolean;
@@ -18,6 +19,7 @@ export type ThreadState = {
   mode: ChatMode;
   model: string | null;
   modelEffort: string | null;
+  activeTurnId: string | null;
   lastSeenItemId: string | null;
 };
 
@@ -48,6 +50,8 @@ type Actions = {
   appendReasoningDelta: (threadId: string, turnId: string | null, itemId: string, delta: string) => void;
   removeEmptyPendingReasoningEntry: (threadId: string, turnId: string | null) => void;
   setRunning: (threadId: string, running: boolean) => void;
+  setActiveTurnId: (threadId: string, turnId: string | null) => void;
+  markTurnInterrupted: (threadId: string, turnId: string) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
@@ -62,6 +66,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => ({
   entries: [],
   pendingApprovals: [],
   resolvedApprovals: new Set<string>(),
+  interruptedTurnIds: new Set<string>(),
   running: false,
   cursor: null,
   reachedBeginning: false,
@@ -69,6 +74,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => ({
   mode: "build",
   model: null,
   modelEffort: null,
+  activeTurnId: null,
   lastSeenItemId: null,
   ...init
 });
@@ -149,7 +155,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       const idx = prev.entries.findIndex((e) => e.id === entry.id);
       const nextEntries =
         idx >= 0
-          ? prev.entries.map((e, i) => (i === idx ? entry : e))
+          ? prev.entries.map((current, i) => (i === idx ? mergeReplacementEntry(current, entry) : current))
           : [...prev.entries, entry];
       const normalizedEntries = normalizeTimelineEntries(nextEntries);
       return {
@@ -180,6 +186,9 @@ export const useStore = create<State & Actions>((set, get) => ({
                   ...current,
                   body: {
                     ...current.body,
+                    toolKind: entry.body.toolKind ?? current.body.toolKind,
+                    server: entry.body.server || current.body.server,
+                    tool: entry.body.tool || current.body.tool,
                     result: `${current.body.result ?? ""}${entry.body.result ?? ""}`,
                     status: entry.body.status
                   }
@@ -212,7 +221,15 @@ export const useStore = create<State & Actions>((set, get) => ({
       const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
       const nextEntries =
         existingIndex >= 0
-          ? prev.entries.map((current, index) => (index === existingIndex ? entry : current))
+          ? prev.entries.map((current, index) => {
+              if (index !== existingIndex || current.body.kind !== "reasoning") {
+                return current;
+              }
+              return {
+                ...current,
+                body: { ...current.body, done: false }
+              };
+            })
           : pendingIndex >= 0
             ? prev.entries.map((current, index) => (index === pendingIndex ? entry : current))
             : [...prev.entries, entry];
@@ -289,7 +306,19 @@ export const useStore = create<State & Actions>((set, get) => ({
   setRunning: (threadId, running) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      return { threads: { ...state.threads, [threadId]: { ...prev, running } } };
+      return { threads: { ...state.threads, [threadId]: { ...prev, running, activeTurnId: running ? prev.activeTurnId : null } } };
+    }),
+  setActiveTurnId: (threadId, turnId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return { threads: { ...state.threads, [threadId]: { ...prev, activeTurnId: turnId } } };
+    }),
+  markTurnInterrupted: (threadId, turnId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const interruptedTurnIds = new Set(prev.interruptedTurnIds);
+      interruptedTurnIds.add(turnId);
+      return { threads: { ...state.threads, [threadId]: { ...prev, interruptedTurnIds } } };
     }),
   setMode: (threadId, mode) =>
     set((state) => {
@@ -361,10 +390,14 @@ export const useStore = create<State & Actions>((set, get) => ({
       const threadId = ev.threadId;
       if (!threadId) return;
       get().ensureThread(threadId);
+      if (shouldIgnoreInterruptedTurnEvent(get().threads[threadId], ev)) {
+        return;
+      }
       switch (ev.kind) {
         case "turn.started":
         case "turn_started":
           get().setRunning(threadId, true);
+          get().setActiveTurnId(threadId, typeof ev.turnId === "string" ? ev.turnId : null);
           get().startReasoningEntry(
             threadId,
             typeof ev.turnId === "string" ? ev.turnId : null,
@@ -376,10 +409,15 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn.canceled":
         case "turn_completed":
         case "turn_failed":
-        case "turn_interrupted":
-          get().setRunning(threadId, false);
-          get().removeEmptyPendingReasoningEntry(threadId, typeof ev.turnId === "string" ? ev.turnId : null);
+        case "turn_interrupted": {
+          const eventTurnId = typeof ev.turnId === "string" ? ev.turnId : null;
+          const currentActiveTurnId = get().threads[threadId]?.activeTurnId ?? null;
+          if (!eventTurnId || !currentActiveTurnId || eventTurnId === currentActiveTurnId) {
+            get().setRunning(threadId, false);
+          }
+          get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
           break;
+        }
         case "plan.delta": {
           const plan = (ev.plan as Array<{ text: string; completed: boolean }>) ?? [];
           get().setPlan(threadId, plan);
@@ -432,11 +470,20 @@ export const useStore = create<State & Actions>((set, get) => ({
               ev.kind === "command_output_delta" ? "command" : ev.kind === "file_output_delta" ? "file" : "tool";
             const server = typeof ev.server === "string" ? ev.server : defaultServer;
             const tool = typeof ev.tool === "string" ? ev.tool : defaultServer;
+            const toolKind: ToolEntry["toolKind"] =
+              ev.kind === "command_output_delta"
+                ? "command"
+                : ev.kind === "file_output_delta"
+                  ? "file"
+                  : typeof ev.toolKind === "string"
+                    ? (ev.toolKind as ToolEntry["toolKind"])
+                    : undefined;
             get().appendTextToEntry(threadId, {
               id: itemId,
               createdAt: Date.now(),
               body: {
                 kind: "tool",
+                ...(toolKind ? { toolKind } : {}),
                 server,
                 tool,
                 status: "running",
@@ -448,17 +495,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         case "turn_diff_updated": {
           const diff = typeof ev.diff === "string" ? ev.diff : "";
-          get().replaceOrAddEntry(threadId, {
-            id: `${ev.turnId ?? threadId}-diff`,
-            createdAt: Date.now(),
-            body: {
-              kind: "diff",
-              path: "工作区变更",
-              added: 0,
-              removed: 0,
-              diff
-            }
-          });
+          get().replaceOrAddEntry(threadId, diffEntryFromText(`${ev.turnId ?? threadId}-diff`, diff, Date.now()));
           break;
         }
         case "context_compacted": {
@@ -590,6 +627,47 @@ function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
 
 function pendingReasoningId(threadId: string, turnId: string | null): string {
   return `${turnId ?? threadId}-reasoning-pending`;
+}
+
+function shouldIgnoreInterruptedTurnEvent(
+  state: ThreadState | undefined,
+  event: { kind: string; turnId?: unknown }
+): boolean {
+  const turnId = typeof event.turnId === "string" ? event.turnId : null;
+  if (!turnId || !state?.interruptedTurnIds.has(turnId)) {
+    return false;
+  }
+
+  return new Set([
+    "agent_message_delta",
+    "reasoning_delta",
+    "reasoning_started",
+    "plan_delta",
+    "plan.delta",
+    "command_output_delta",
+    "file_output_delta",
+    "tool_output_delta",
+    "turn_diff_updated",
+    "item.appended",
+    "item.updated",
+    "item_updated"
+  ]).has(event.kind);
+}
+
+function mergeReplacementEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry {
+  if (
+    current.body.kind === "reasoning" &&
+    next.body.kind === "reasoning" &&
+    current.body.text.trim() &&
+    !next.body.text.trim()
+  ) {
+    return {
+      ...next,
+      body: { ...next.body, text: current.body.text }
+    };
+  }
+
+  return next;
 }
 
 function removeConfirmedLocalUserMessages(entries: TimelineEntry[]): TimelineEntry[] {

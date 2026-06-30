@@ -18,12 +18,57 @@ describe("web store codex events", () => {
     });
 
     expect(useStore.getState().threads["thread-1"]?.running).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBe("turn-1");
 
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1" }
     });
 
+    expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
+    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBeNull();
+  });
+
+  it("does not stop a newer active turn when an older completion arrives late", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-old" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-new" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-old" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.running).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBe("turn-new");
+  });
+
+  it("ignores late visible output events after a turn is interrupted locally", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().markTurnInterrupted("thread-1", "turn-1");
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "不应继续出现"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
     expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
   });
 
@@ -155,6 +200,66 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("does not clear reasoning text when start arrives after deltas", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "已经收到的推理"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "reasoning-1",
+        body: { kind: "reasoning", text: "已经收到的推理", done: false }
+      })
+    ]);
+  });
+
+  it("does not clear reasoning text when a completed item has empty text", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "流式推理摘要"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: { id: "reasoning-1", role: "reasoning", text: "" }
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "reasoning-1",
+        createdAt: 1234,
+        body: { kind: "reasoning", text: "流式推理摘要", done: true }
+      })
+    ]);
+  });
+
   it("creates a pending reasoning placeholder when a turn starts", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -233,6 +338,9 @@ describe("web store codex events", () => {
         id: "cmd-1",
         body: expect.objectContaining({
           kind: "tool",
+          toolKind: "command",
+          server: "command",
+          tool: "command",
           result: "one\ntwo\n",
           status: "running"
         })
@@ -270,6 +378,7 @@ describe("web store codex events", () => {
           id: item.id,
           body: expect.objectContaining({
             kind: "tool",
+            toolKind: item.toolKind,
             server: item.server,
             tool: item.tool,
             result: `${item.server} 正在执行\n`,
@@ -481,6 +590,39 @@ describe("web store codex events", () => {
       expect.objectContaining({
         id: "turn-1-context-compacted",
         body: { kind: "system", text: "压缩上下文已完成" }
+      })
+    ]);
+  });
+
+  it("renders turn diff updates with computed line stats", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_diff_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diff: [
+          "diff --git a/src/app.ts b/src/app.ts",
+          "--- a/src/app.ts",
+          "+++ b/src/app.ts",
+          "@@ -1,2 +1,3 @@",
+          " unchanged",
+          "-old",
+          "+new",
+          "+added"
+        ].join("\n")
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "turn-1-diff",
+        body: expect.objectContaining({
+          kind: "diff",
+          path: "工作区变更",
+          added: 2,
+          removed: 1
+        })
       })
     ]);
   });

@@ -342,6 +342,34 @@ describe("createAppServerGateway", () => {
     expect(detail.timeline.some((item) => item.id === "turn-active-reasoning-pending")).toBe(false);
   });
 
+  it("刷新读取会保留 turn diff overlay 并带行数统计", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,3 @@\n-old\n+new\n+added"
+      }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        expect.objectContaining({
+          id: "turn-1-diff",
+          role: "diff",
+          diffPath: "工作区变更",
+          added: 2,
+          removed: 1,
+          text: expect.stringContaining("+added")
+        })
+      ])
+    });
+  });
+
   it("mock 模式发送消息时会广播规范化 realtime 事件", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     const events: unknown[] = [];

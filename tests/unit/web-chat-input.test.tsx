@@ -17,7 +17,6 @@ function renderInput(overrides: Partial<React.ComponentProps<typeof ChatInput>> 
     running: false,
     onSend: vi.fn().mockResolvedValue(undefined),
     onInterrupt: vi.fn().mockResolvedValue(undefined),
-    onResendLast: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
   return { ...render(<ChatInput {...props} />), props };
@@ -105,7 +104,7 @@ describe("ChatInput", () => {
   it("shows a running status bar with only the interrupt action while running", async () => {
     const user = userEvent.setup();
     const onInterrupt = vi.fn().mockResolvedValue(undefined);
-    renderInput({ running: true, onInterrupt, canResendLast: true });
+    renderInput({ running: true, onInterrupt });
 
     expect(screen.getByText("正在生成…")).toBeInTheDocument();
     expect(screen.getByLabelText("中断")).toBeInTheDocument();
@@ -215,17 +214,8 @@ describe("ChatInput", () => {
     await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
   });
 
-  it("resends the last user message only from the idle composer", async () => {
-    const user = userEvent.setup();
-    const onResendLast = vi.fn().mockResolvedValue("previous message");
-    const { rerender, props } = renderInput({ canResendLast: true, onResendLast });
-
-    await user.click(screen.getByLabelText("重发上一条"));
-
-    expect(onResendLast).toHaveBeenCalled();
-    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("previous message");
-
-    rerender(<ChatInput {...props} running />);
+  it("does not expose resend from the idle composer", () => {
+    renderInput();
 
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
   });

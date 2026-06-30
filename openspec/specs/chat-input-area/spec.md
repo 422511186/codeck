@@ -73,7 +73,7 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 底部发送区 MUST 显示运行态状态栏
 - **AND** MUST 显示「正在生成…」或等价状态提示
 - **AND** MUST 显示中断按钮
-- **AND** MUST 不显示普通输入框、图片入口、全屏编辑入口、发送按钮或重发入口
+- **AND** MUST 不显示普通输入框、图片入口、全屏编辑入口或发送按钮
 
 #### Scenario: 点击中断
 - **WHEN** 用户点击中断按钮
@@ -83,21 +83,6 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 #### Scenario: 不暴露 steer
 - **WHEN** thread 处于运行态
 - **THEN** UI MUST 不提供 steer 入口
-
-### Requirement: 「↺ 重发上一条」按钮
-底部输入区 SHALL 保留「重发上一条」能力，仅当 thread 静止且存在可重发的上一条 user 消息时可用。重发入口 SHALL 作为次级操作呈现，不得在运行态显示，也不得挤占发送按钮的主要位置。
-
-#### Scenario: 静止时点击
-- **WHEN** thread 静止且最后一条 turn 的 user 消息可获取
-- **AND** 用户触发「重发上一条」
-- **THEN** 前端 MUST 调用 `POST /api/codex/threads/:threadId/rollback`（默认 1 个 turn）
-- **AND** rollback 成功后 MUST 把原 user 消息文本充填到输入框
-- **AND** 用户 MUST 能在发送前修改文本
-
-#### Scenario: 运行中
-- **WHEN** thread 处于运行态
-- **THEN** 「重发上一条」入口 MUST 不显示
-- **AND** 用户 MUST 不可触发 rollback
 
 ### Requirement: 草稿按会话保存
 未发送的输入框内容 SHALL 按 `threadId` 保存到 `localStorage`，切换会话或刷新页面后恢复。

@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { useStore } from "../../../web/state/store";
-import { timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
+import { entriesBeforeEntry, rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
@@ -18,6 +18,7 @@ import {
   type ThreadDetail
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey } from "../../../web/storage/localStore";
+import { setDraft } from "../../../web/storage/drafts";
 import { settingsStore } from "../../../web/storage/settings";
 
 export default function ThreadPage(): JSX.Element {
@@ -34,6 +35,8 @@ export default function ThreadPage(): JSX.Element {
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
   const setRunning = useStore((s) => s.setRunning);
+  const setActiveTurnId = useStore((s) => s.setActiveTurnId);
+  const markTurnInterrupted = useStore((s) => s.markTurnInterrupted);
   const setPendingRequests = useStore((s) => s.setPendingRequests);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const threadState = useStore((s) => s.threads[threadId]);
@@ -91,21 +94,29 @@ export default function ThreadPage(): JSX.Element {
   }, []);
 
   const applyThreadDetail = useCallback(
-    (td: ThreadDetail, mode: "replace" | "merge" = "replace") => {
-      setDetail(td);
-      const entries: TimelineEntry[] = td.timeline.map((item, idx) =>
-        timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
-      );
+    (
+      td: ThreadDetail,
+      mode: "replace" | "merge" = "replace",
+      targetThreadId = threadId,
+      entriesOverride?: TimelineEntry[]
+    ) => {
+      if (targetThreadId === threadId) {
+        setDetail(td);
+      }
+      const entries: TimelineEntry[] =
+        entriesOverride ??
+        threadDetailEntries(td);
       if (mode === "merge") {
-        mergeThreadEntries(threadId, entries, null);
+        mergeThreadEntries(targetThreadId, entries, null);
       } else {
-        setThreadEntries(threadId, entries, null);
+        setThreadEntries(targetThreadId, entries, null);
       }
       if (td.model) {
-        setModel(threadId, td.model, td.reasoningEffort ?? null);
+        setModel(targetThreadId, td.model, td.reasoningEffort ?? null);
       }
+      setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
-    [threadId, setThreadEntries, mergeThreadEntries, setModel]
+    [threadId, setThreadEntries, mergeThreadEntries, setModel, setActiveTurnId]
   );
 
   useEffect(() => {
@@ -252,7 +263,9 @@ export default function ThreadPage(): JSX.Element {
           setDetail(resumed);
           started = await codex.startTurn(startInput);
         }
+        setActiveTurnId(threadId, started.turnId);
         applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
+        setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
         const serverHasUserMessage = started.thread.timeline.some(
           (item) => item.role === "user" && item.text.trim() === text.trim()
         );
@@ -313,14 +326,20 @@ export default function ThreadPage(): JSX.Element {
       appendEntries,
       applyThreadDetail,
       replaceOrAddEntry,
-      setRunning
+      setRunning,
+      setActiveTurnId
     ]
   );
 
   const onInterrupt = useCallback(async () => {
+    const turnId = threadState?.activeTurnId ?? detail?.lastTurnId ?? undefined;
     try {
-      await codex.interruptTurn(threadId, detail?.lastTurnId ?? undefined);
+      await codex.interruptTurn(threadId, turnId);
+      if (turnId) {
+        markTurnInterrupted(threadId, turnId);
+      }
       setRunning(threadId, false);
+      setActiveTurnId(threadId, null);
     } catch (err) {
       appendEntries(threadId, [
         {
@@ -330,7 +349,97 @@ export default function ThreadPage(): JSX.Element {
         }
       ]);
     }
-  }, [threadId, detail?.lastTurnId, appendEntries, setRunning]);
+  }, [
+    threadId,
+    threadState?.activeTurnId,
+    detail?.lastTurnId,
+    appendEntries,
+    setRunning,
+    setActiveTurnId,
+    markTurnInterrupted
+  ]);
+
+  const rewindToMessage = useCallback(
+    async (entry: TimelineEntry) => {
+      if (threadState?.running || entry.body.kind !== "user-message") return;
+      const entries = threadState?.entries ?? [];
+      const target = resolveCurrentUserMessage(entries, entry);
+      const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
+      const entriesBeforeTarget = target ? entriesBeforeEntry(entries, target) : null;
+      if (!numTurns) {
+        appendEntries(threadId, [
+          {
+            id: `rewind-error-${Date.now()}`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: "无法定位这条消息所属的 turn，请刷新后重试。" }
+          }
+        ]);
+        return;
+      }
+
+      try {
+        const rolledBack = await rollbackThreadWithResume(threadId, numTurns);
+        const rolledBackEntries = threadDetailEntries(rolledBack);
+        const visibleEntries = moreCompleteEntries(
+          target ? entriesBeforeEntry(rolledBackEntries, target) : null,
+          entriesBeforeTarget
+        );
+        applyThreadDetail(rolledBack, "replace", threadId, visibleEntries);
+        setDraft(threadId, target?.body.kind === "user-message" ? target.body.text : entry.body.text);
+      } catch (err) {
+        appendEntries(threadId, [
+          {
+            id: `rewind-error-${Date.now()}`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: `回滚失败：${errorMessage(err)}` }
+          }
+        ]);
+      }
+    },
+    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries]
+  );
+
+  const forkFromMessage = useCallback(
+    async (entry: TimelineEntry) => {
+      if (threadState?.running || entry.body.kind !== "user-message") return;
+      const entries = threadState?.entries ?? [];
+      const target = resolveCurrentUserMessage(entries, entry);
+      const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
+      const entriesBeforeTarget = target ? entriesBeforeEntry(entries, target) : null;
+      if (!numTurns) {
+        appendEntries(threadId, [
+          {
+            id: `fork-error-${Date.now()}`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: "无法定位这条消息所属的 turn，请刷新后重试。" }
+          }
+        ]);
+        return;
+      }
+
+      try {
+        const forked = await codex.forkThread(threadId);
+        const rolledBack = await rollbackThreadWithResume(forked.id, numTurns);
+        const rolledBackEntries = threadDetailEntries(rolledBack);
+        const visibleEntries = moreCompleteEntries(
+          target ? entriesBeforeEntry(rolledBackEntries, target) : null,
+          entriesBeforeTarget
+        );
+        applyThreadDetail(rolledBack, "replace", forked.id, visibleEntries);
+        setDraft(forked.id, target?.body.kind === "user-message" ? target.body.text : entry.body.text);
+        router.push(`/threads/${forked.id}`);
+      } catch (err) {
+        appendEntries(threadId, [
+          {
+            id: `fork-error-${Date.now()}`,
+            createdAt: Date.now(),
+            body: { kind: "error", text: `Fork 失败：${errorMessage(err)}` }
+          }
+        ]);
+      }
+    },
+    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, router]
+  );
 
   const openModelPicker = useCallback(async () => {
     setShowModelPicker(true);
@@ -421,8 +530,6 @@ export default function ThreadPage(): JSX.Element {
   const running = threadState?.running ?? false;
   const plan = threadState?.plan ?? [];
   const entries = threadState?.entries ?? [];
-  const lastUserEntry = entries.slice().reverse().find((item) => item.body.kind === "user-message");
-  const lastUserMessageText = lastUserEntry?.body.kind === "user-message" ? lastUserEntry.body.text : null;
 
   return (
     <main style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
@@ -464,9 +571,12 @@ export default function ThreadPage(): JSX.Element {
         <Timeline
           entries={entries}
           approvals={threadState?.pendingApprovals ?? []}
+          running={running}
           onResendUser={async (text) => {
             await onSend(text, []);
           }}
+          onRewindToMessage={rewindToMessage}
+          onForkFromMessage={forkFromMessage}
           onResolveApproval={async (req) => {
             resolvePendingRequest(req.requestId);
           }}
@@ -523,19 +633,8 @@ export default function ThreadPage(): JSX.Element {
       <ChatInput
         threadId={threadId}
         running={running}
-        canResendLast={Boolean(lastUserMessageText)}
         onSend={onSend}
         onInterrupt={onInterrupt}
-        onResendLast={async () => {
-          if (!lastUserMessageText) return null;
-          try {
-            await codex.rollbackThread(threadId, 1);
-            return lastUserMessageText;
-          } catch (err) {
-            console.warn("rollback failed", err);
-            return null;
-          }
-        }}
       />
 
       {showSheet ? (
@@ -558,15 +657,6 @@ export default function ThreadPage(): JSX.Element {
           onCompact={() => {
             setShowSheet(false);
             setCompactOpen(true);
-          }}
-          onFork={async () => {
-            setShowSheet(false);
-            try {
-              const forked = await codex.forkThread(threadId);
-              router.push(`/threads/${forked.id}`);
-            } catch (err) {
-              console.warn("fork failed", err);
-            }
           }}
         />
       ) : null}
@@ -666,22 +756,28 @@ function ActionSheet(props: {
   onRename: () => void;
   onArchive: () => void;
   onCompact: () => void;
-  onFork: () => void;
 }): JSX.Element {
   return (
     <Overlay onClose={props.onClose} align="bottom">
       <div style={sheetStyle}>
         <SheetItem label="重命名" onClick={props.onRename} />
-        <SheetItem label="归档" onClick={props.onArchive} />
-        <SheetItem label="压缩上下文" onClick={props.onCompact} />
-        <SheetItem label="Fork 会话" onClick={props.onFork} />
-        <SheetItem label="取消" onClick={props.onClose} />
+        <SheetItem label="归档" divided onClick={props.onArchive} />
+        <SheetItem label="压缩上下文" divided onClick={props.onCompact} />
+        <SheetItem label="取消" divided onClick={props.onClose} />
       </div>
     </Overlay>
   );
 }
 
-function SheetItem({ label, onClick }: { label: string; onClick: () => void }): JSX.Element {
+function SheetItem({
+  label,
+  divided = false,
+  onClick
+}: {
+  label: string;
+  divided?: boolean;
+  onClick: () => void;
+}): JSX.Element {
   return (
     <button
       type="button"
@@ -692,7 +788,8 @@ function SheetItem({ label, onClick }: { label: string; onClick: () => void }): 
         background: "transparent",
         textAlign: "left",
         fontSize: 16,
-        color: "var(--cw-fg)"
+        color: "var(--cw-fg)",
+        ...(divided ? { borderTop: "1px solid var(--cw-border)" } : {})
       }}
     >
       {label}
@@ -898,6 +995,65 @@ function sendPayloadKey(text: string, imagePaths: string[]): string {
   return `${text.trim()}\u0001${[...imagePaths].sort().join("\u0000")}`;
 }
 
+function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
+  return td.timeline.map((item, idx) =>
+    timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
+  );
+}
+
+async function rollbackThreadWithResume(threadId: string, numTurns: number): Promise<ThreadDetail> {
+  try {
+    return await codex.rollbackThread(threadId, numTurns);
+  } catch (err) {
+    if (!isThreadNotFoundError(err)) {
+      throw err;
+    }
+    await codex.resumeThread(threadId);
+    return codex.rollbackThread(threadId, numTurns);
+  }
+}
+
+function resolveCurrentUserMessage(entries: TimelineEntry[], candidate: TimelineEntry): TimelineEntry | null {
+  const byId = entries.find((entry) => entry.id === candidate.id && entry.body.kind === "user-message");
+  if (byId) {
+    return byId;
+  }
+
+  const candidateText = candidate.body.kind === "user-message" ? candidate.body.text.trim() : "";
+  if (candidate.turnId) {
+    const byTurn = entries.find(
+      (entry) =>
+        entry.turnId === candidate.turnId &&
+        entry.body.kind === "user-message" &&
+        (!candidateText || entry.body.text.trim() === candidateText)
+    );
+    if (byTurn) {
+      return byTurn;
+    }
+  }
+
+  if (!candidateText) {
+    return null;
+  }
+  const matches = entries.filter(
+    (entry) => entry.body.kind === "user-message" && entry.body.text.trim() === candidateText
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function moreCompleteEntries(
+  preferred: TimelineEntry[] | null,
+  fallback: TimelineEntry[] | null
+): TimelineEntry[] {
+  if (!preferred) {
+    return fallback ?? [];
+  }
+  if (!fallback) {
+    return preferred;
+  }
+  return preferred.length >= fallback.length ? preferred : fallback;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "未知错误";
 }
@@ -961,9 +1117,12 @@ const sheetStyle: React.CSSProperties = {
   borderTop: "1px solid var(--cw-border)",
   borderTopLeftRadius: 18,
   borderTopRightRadius: 18,
-  padding: 8,
+  padding: "8px 8px calc(8px + var(--safe-bottom))",
   display: "flex",
-  flexDirection: "column"
+  flexDirection: "column",
+  maxHeight: "50dvh",
+  overflowY: "auto",
+  boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
 };
 
 const dialogStyle: React.CSSProperties = {

@@ -178,6 +178,24 @@ function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem
   };
 }
 
+function diffStats(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      added += 1;
+    } else if (line.startsWith("-")) {
+      removed += 1;
+    }
+  }
+
+  return { added, removed };
+}
+
 function shouldExposeOverlayTimelineItem(item: MobileTimelineItem): boolean {
   if (item.role === "reasoning") {
     return item.done === false || item.text.trim().length > 0;
@@ -2585,6 +2603,19 @@ export class AppServerGateway {
           ...(event.item.role === "reasoning" ? { done: true } : {})
         });
         break;
+      case "turn_diff_updated": {
+        const stats = diffStats(event.diff);
+        this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
+          id: `${event.turnId}-diff`,
+          role: "diff",
+          text: event.diff,
+          toolKind: "file",
+          diffPath: "工作区变更",
+          added: stats.added,
+          removed: stats.removed
+        });
+        break;
+      }
       case "context_compacted":
         this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
           id: `${event.turnId}-context-compacted`,

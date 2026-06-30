@@ -16,11 +16,22 @@ import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 type Props = {
   entries: TimelineEntry[];
   approvals?: PendingServerRequest[];
+  running?: boolean;
   onResolveApproval?: (req: PendingServerRequest, value: string) => Promise<void>;
   onResendUser?: (text: string) => void;
+  onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
+  onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
 };
 
-export function Timeline({ entries, approvals, onResolveApproval, onResendUser }: Props): JSX.Element {
+export function Timeline({
+  entries,
+  approvals,
+  running = false,
+  onResolveApproval,
+  onResendUser,
+  onRewindToMessage,
+  onForkFromMessage
+}: Props): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   return (
     <>
@@ -29,7 +40,10 @@ export function Timeline({ entries, approvals, onResolveApproval, onResendUser }
           <TimelineRow
             key={entry.id}
             entry={entry}
+            running={running}
             onResendUser={onResendUser}
+            onRewindToMessage={onRewindToMessage}
+            onForkFromMessage={onForkFromMessage}
             onPreviewImage={setPreviewSrc}
           />
         ))}
@@ -50,11 +64,17 @@ export function Timeline({ entries, approvals, onResolveApproval, onResendUser }
 
 function TimelineRow({
   entry,
+  running,
   onResendUser,
+  onRewindToMessage,
+  onForkFromMessage,
   onPreviewImage
 }: {
   entry: TimelineEntry;
+  running: boolean;
   onResendUser?: (text: string) => void;
+  onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
+  onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onPreviewImage: (src: string) => void;
 }): JSX.Element {
   const body = entry.body;
@@ -63,7 +83,10 @@ function TimelineRow({
       return (
         <UserMessage
           entry={entry}
+          running={running}
           onResend={() => onResendUser?.(body.text)}
+          onRewind={() => onRewindToMessage?.(entry)}
+          onFork={() => onForkFromMessage?.(entry)}
           onPreviewImage={onPreviewImage}
         />
       );
@@ -92,11 +115,17 @@ function TimelineRow({
 
 function UserMessage({
   entry,
+  running,
   onResend,
+  onRewind,
+  onFork,
   onPreviewImage
 }: {
   entry: TimelineEntry;
+  running: boolean;
   onResend: () => void;
+  onRewind: () => void | Promise<void>;
+  onFork: () => void | Promise<void>;
   onPreviewImage: (src: string) => void;
 }): JSX.Element {
   const body = entry.body as Extract<TimelineEntry["body"], { kind: "user-message" }>;
@@ -151,40 +180,53 @@ function UserMessage({
       ) : null}
       {menuOpen ? (
         <div
+          role="presentation"
           onClick={() => setMenuOpen(false)}
+          onPointerDown={(e) => e.stopPropagation()}
           style={{
-            position: "absolute",
+            position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.05)",
+            background: "rgba(0,0,0,0.45)",
             display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
+            alignItems: "flex-end",
+            justifyContent: "center",
+            zIndex: 80
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--cw-card)",
-              border: "1px solid var(--cw-border)",
-              borderRadius: 10,
-              padding: 6,
-              display: "flex",
-              gap: 4
-            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={messageSheetStyle}
           >
-            <button
-              type="button"
+            <div style={sheetHandleStyle} aria-hidden="true" />
+            <MessageSheetItem
+              label="复制"
               onClick={() => {
                 navigator.clipboard?.writeText(body.text);
                 setMenuOpen(false);
               }}
-              style={menuBtn}
-            >
-              复制
-            </button>
-            <button type="button" onClick={() => setMenuOpen(false)} style={menuBtn}>
-              取消
-            </button>
+            />
+            {!running ? (
+              <>
+                <MessageSheetItem
+                  label="回滚到这里"
+                  divided
+                  onClick={() => {
+                    void onRewind();
+                    setMenuOpen(false);
+                  }}
+                />
+                <MessageSheetItem
+                  label="从这里 Fork"
+                  divided
+                  onClick={() => {
+                    void onFork();
+                    setMenuOpen(false);
+                  }}
+                />
+              </>
+            ) : null}
+            <MessageSheetItem label="取消" divided onClick={() => setMenuOpen(false)} />
           </div>
         </div>
       ) : null}
@@ -192,10 +234,59 @@ function UserMessage({
   );
 }
 
+function MessageSheetItem({
+  label,
+  divided = false,
+  onClick
+}: {
+  label: string;
+  divided?: boolean;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...menuBtn,
+        ...(divided ? { borderTop: "1px solid var(--cw-border)" } : {})
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 const menuBtn: React.CSSProperties = {
-  padding: "6px 12px",
-  fontSize: 13,
+  padding: "14px 12px",
+  fontSize: 16,
   border: "none",
   background: "transparent",
-  color: "var(--cw-fg)"
+  color: "var(--cw-fg)",
+  textAlign: "left",
+  width: "100%"
+};
+
+const messageSheetStyle: React.CSSProperties = {
+  width: "100%",
+  maxWidth: 480,
+  maxHeight: "50dvh",
+  background: "var(--cw-card)",
+  borderTop: "1px solid var(--cw-border)",
+  borderTopLeftRadius: 18,
+  borderTopRightRadius: 18,
+  padding: "8px 8px calc(8px + var(--safe-bottom))",
+  display: "flex",
+  flexDirection: "column",
+  overflowY: "auto",
+  boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+const sheetHandleStyle: React.CSSProperties = {
+  alignSelf: "center",
+  width: 38,
+  height: 4,
+  borderRadius: 999,
+  background: "var(--cw-border)",
+  margin: "2px 0 8px"
 };

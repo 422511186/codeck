@@ -612,6 +612,24 @@ function toolStatus(status: unknown, failed = false): "running" | "success" | "f
   return "success";
 }
 
+function diffStats(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      added += 1;
+    } else if (line.startsWith("-")) {
+      removed += 1;
+    }
+  }
+
+  return { added, removed };
+}
+
 function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): MobileTimelineItem {
   const imagePaths: string[] = [];
   const text = item.content
@@ -750,13 +768,19 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   }
 
   if (item.type === "fileChange") {
+    const diffs = item.changes.map((change) => change.diff).filter(Boolean);
+    const diff = diffs.join("\n");
+    const stats = diffStats(diff);
     return {
       id: item.id,
       role: "tool",
-      text: stringifyJson(item.changes),
+      text: diff || stringifyJson(item.changes),
       toolKind: "file",
       server: "file",
-      tool: "change",
+      tool: item.changes.length === 1 ? item.changes[0]?.path : "工作区变更",
+      diffPath: item.changes.length === 1 ? item.changes[0]?.path : "工作区变更",
+      added: stats.added,
+      removed: stats.removed,
       status: toolStatus(item.status)
     };
   }
@@ -827,26 +851,30 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   };
 }
 
-function turnErrorTimelineItem(turnId: string, error: TurnError): MobileTimelineItem {
+function turnErrorTimelineItem(turnId: string, turnIndex: number, error: TurnError): MobileTimelineItem {
   const details = error.additionalDetails?.trim() ? `：${error.additionalDetails}` : "";
   return {
     id: `${turnId}-error`,
+    turnId,
+    turnIndex,
     role: "error",
     text: `${error.message}${details}`
   };
+}
+
+function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex: number): MobileTimelineItem[] {
+  const items = turn.items.flatMap((item) => {
+    const mapped = timelineItem(item);
+    return mapped ? [{ ...mapped, turnId: turn.id, turnIndex }] : [];
+  });
+  return turn.error ? [...items, turnErrorTimelineItem(turn.id, turnIndex, turn.error)] : items;
 }
 
 function threadDetail(
   thread: Thread,
   extras: Pick<MobileThreadDetail, "model" | "reasoningEffort"> = {}
 ): MobileThreadDetail {
-  const timeline = thread.turns.flatMap((turn) => {
-    const items = turn.items.flatMap((item) => {
-      const mapped = timelineItem(item);
-      return mapped ? [mapped] : [];
-    });
-    return turn.error ? [...items, turnErrorTimelineItem(turn.id, turn.error)] : items;
-  });
+  const timeline = thread.turns.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex));
 
   return {
     ...threadSummary(thread),
@@ -2363,10 +2391,7 @@ export class CodexAppServerClient {
     const response = (await this.peer.request("thread/turns/list", params)) as ThreadTurnsListResponse;
 
     return {
-      items: response.data.flatMap((turn) => turn.items.flatMap((item) => {
-        const mapped = timelineItem(item);
-        return mapped ? [mapped] : [];
-      })),
+      items: response.data.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex)),
       nextCursor: response.nextCursor
     };
   }
@@ -2383,7 +2408,7 @@ export class CodexAppServerClient {
     return {
       items: response.data.flatMap((item) => {
         const mapped = timelineItem(item);
-        return mapped ? [mapped] : [];
+        return mapped ? [{ ...mapped, turnId: input.turnId }] : [];
       }),
       nextCursor: response.nextCursor
     };

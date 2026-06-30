@@ -62,12 +62,13 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 - **AND** 用户选定后 MUST 调用 `POST /api/codex/threads/:threadId/settings` 持久化
 
 ### Requirement: `⋮` 底部抽屉菜单
-点击 `⋮` SHALL 弹出底部抽屉，包含以下项：重命名、归档、压缩上下文、Fork。
+点击 `⋮` SHALL 弹出底部抽屉，包含以下会话级操作：重命名、归档、压缩上下文。
 
 #### Scenario: 弹出抽屉
 - **WHEN** 用户点击会话头部 `⋮`
 - **THEN** 系统 MUST 弹出底部抽屉
-- **AND** 抽屉 MUST 包含「重命名、归档、压缩上下文、Fork」四项
+- **AND** 抽屉 MUST 包含「重命名、归档、压缩上下文」三项
+- **AND** MUST 不包含「Fork」
 - **AND** MUST 不包含「删除」
 
 ### Requirement: 重命名通过弹窗输入
@@ -108,15 +109,6 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 #### Scenario: 完成插入系统消息
 - **WHEN** 压缩完成
 - **THEN** timeline MUST 插入一条「压缩上下文已完成」的系统消息（居中细线 + 灰色小字）
-
-### Requirement: Fork 即建即跳
-点击「Fork」SHALL 立即调用 `POST /api/codex/threads/:threadId/fork` 并跳转到新会话；新会话 MUST 继承原会话的 Plan/Build 和模型设置。
-
-#### Scenario: Fork
-- **WHEN** 用户在抽屉点击「Fork」
-- **THEN** 前端 MUST 调用 fork 接口
-- **AND** 新会话 MUST 继承原会话的 Plan/Build 模式和模型
-- **AND** 路由 MUST 跳转到新会话页
 
 ### Requirement: 会话级运行状态不在头部显式标记
 会话头部 SHALL 不额外显示运行/静止状态点；状态信息通过 timeline 中的微动效与底部按钮（发送/中断）已有的状态变化表达。

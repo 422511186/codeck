@@ -20,6 +20,8 @@ const mockReplaceOrAddEntry = vi.fn();
 const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
 const mockSetRunning = vi.fn();
+const mockSetActiveTurnId = vi.fn();
+const mockMarkTurnInterrupted = vi.fn();
 const mockSetPendingRequests = vi.fn();
 const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
@@ -36,6 +38,8 @@ vi.mock("../../src/web/state/store", () => ({
       setMode: mockSetMode,
       setModel: mockSetModel,
       setRunning: mockSetRunning,
+      setActiveTurnId: mockSetActiveTurnId,
+      markTurnInterrupted: mockMarkTurnInterrupted,
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
       threads: { "thread-1": mockThreadState() }
@@ -92,6 +96,7 @@ vi.mock("../../src/web/storage/settings", () => ({
 describe("ThreadPage", () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -108,12 +113,15 @@ describe("ThreadPage", () => {
     mockSetMode.mockClear();
     mockSetModel.mockClear();
     mockSetRunning.mockClear();
+    mockSetActiveTurnId.mockClear();
+    mockMarkTurnInterrupted.mockClear();
     mockSetPendingRequests.mockClear();
     mockResolvePendingRequest.mockClear();
     mockResumeThread.mockClear();
     mockListTurnsBefore.mockClear();
     mockUpdateThreadSettings.mockClear();
     mockForkThread.mockClear();
+    mockRollbackThread.mockClear();
     mockReadThread.mockResolvedValue({
       id: "thread-1",
       cwd: "C:/test",
@@ -431,6 +439,42 @@ describe("ThreadPage", () => {
 
     expect(mockInterruptTurn).toHaveBeenCalledWith("thread-1", "turn-running");
     expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+  });
+
+  it("should prefer the tracked active turn id when detail lastTurnId is stale", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-stale",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-current",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("中断"));
+
+    expect(mockInterruptTurn).toHaveBeenCalledWith("thread-1", "turn-current");
+    expect(mockInterruptTurn).not.toHaveBeenCalledWith("thread-1", "turn-stale");
+    expect(mockMarkTurnInterrupted).toHaveBeenCalledWith("thread-1", "turn-current");
   });
 
   it("should keep running state when interrupt fails", async () => {
@@ -754,7 +798,7 @@ describe("ThreadPage", () => {
     expect(screen.getByRole("button", { name: "重命名" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "压缩上下文" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Fork 会话" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fork 会话" })).not.toBeInTheDocument();
     expect(screen.queryByText("删除")).not.toBeInTheDocument();
   });
 
@@ -824,7 +868,7 @@ describe("ThreadPage", () => {
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("should fork and navigate to the new thread", async () => {
+  it("should not fork from the header sheet", async () => {
     const user = userEvent.setup();
 
     render(<ThreadPage />);
@@ -834,10 +878,9 @@ describe("ThreadPage", () => {
     });
 
     await user.click(screen.getByLabelText("更多"));
-    await user.click(screen.getByRole("button", { name: "Fork 会话" }));
 
-    await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
-    expect(mockPush).toHaveBeenCalledWith("/threads/forked-thread");
+    expect(screen.queryByRole("button", { name: "Fork 会话" })).not.toBeInTheDocument();
+    expect(mockForkThread).not.toHaveBeenCalled();
   });
 
   it("should hide resend button when no previous user message exists", async () => {
@@ -1417,12 +1460,199 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should rollback and fill the previous user message for resend", async () => {
-    const user = userEvent.setup();
+  it("should rewind from a long-pressed user message", async () => {
+    mockRollbackThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" },
+        { id: "target-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+      ],
+      lastTurnId: "turn-2",
+      updatedAt: Date.now()
+    });
     mockThreadState.mockReturnValue({
       entries: [
         {
-          id: "1",
+          id: "older-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 2,
+          body: { kind: "user-message", text: "older prompt", status: "sent" }
+        },
+        {
+          id: "older-agent",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 1,
+          body: { kind: "agent-message", text: "older response" }
+        },
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "previous prompt", status: "sent" }
+        },
+        {
+          id: "target-agent",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now() + 1,
+          body: { kind: "agent-message", text: "old response" }
+        },
+        {
+          id: "latest-user",
+          turnId: "turn-3",
+          turnIndex: 2,
+          createdAt: Date.now() + 2,
+          body: { kind: "user-message", text: "latest prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("previous prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
+
+    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", 2);
+    await waitFor(() => {
+      const lastCall = mockSetThreadEntries.mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("thread-1");
+      expect(lastCall?.[1].map((entry: { id: string }) => entry.id)).toEqual(["older-user", "older-agent"]);
+    });
+    expect(JSON.parse(localStorage.getItem("codex-web:drafts") ?? "{}")).toMatchObject({
+      "thread-1": "previous prompt"
+    });
+  });
+
+  it("should fork from a long-pressed user message and prepare draft in the fork", async () => {
+    mockForkThread.mockResolvedValue({ id: "forked-thread" });
+    mockRollbackThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" },
+        { id: "target-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+      ],
+      lastTurnId: "turn-2",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "older-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 1,
+          body: { kind: "user-message", text: "older prompt", status: "sent" }
+        },
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "previous prompt", status: "sent" }
+        },
+        {
+          id: "latest-user",
+          turnId: "turn-3",
+          turnIndex: 2,
+          createdAt: Date.now() + 1,
+          body: { kind: "user-message", text: "latest prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("previous prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
+
+    await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
+    expect(mockRollbackThread).toHaveBeenCalledWith("forked-thread", 2);
+    await waitFor(() => expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      "forked-thread",
+      [expect.objectContaining({ id: "older-user" })],
+      null
+    ));
+    expect(mockSetThreadEntries.mock.calls.at(-1)).toEqual([
+      "forked-thread",
+      [expect.objectContaining({ id: "older-user" })],
+      null
+    ]);
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/threads/forked-thread"));
+    expect(JSON.parse(localStorage.getItem("codex-web:drafts") ?? "{}")).toMatchObject({
+      "forked-thread": "previous prompt"
+    });
+  });
+
+  it("should resume forked threads and retry when rollback reports thread not found", async () => {
+    mockForkThread.mockResolvedValue({ id: "forked-thread" });
+    mockRollbackThread
+      .mockRejectedValueOnce(new ApiError("thread not found: forked-thread", 502))
+      .mockResolvedValueOnce({
+        id: "forked-thread",
+        cwd: "C:/test",
+        title: "Forked Thread",
+        modelProvider: "claude-opus-4",
+        status: "idle",
+        timeline: [
+          { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" }
+        ],
+        lastTurnId: "turn-1",
+        updatedAt: Date.now()
+      });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "older-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 1,
+          body: { kind: "user-message", text: "older prompt", status: "sent" }
+        },
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
           createdAt: Date.now(),
           body: { kind: "user-message", text: "previous prompt", status: "sent" }
         }
@@ -1441,9 +1671,18 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByLabelText("重发上一条"));
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("previous prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
-    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", 1);
-    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("previous prompt");
+    await waitFor(() => expect(mockRollbackThread).toHaveBeenCalledTimes(2));
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(1, "forked-thread", 1);
+    expect(mockResumeThread).toHaveBeenCalledWith("forked-thread");
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(2, "forked-thread", 1);
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/threads/forked-thread"));
   });
 });

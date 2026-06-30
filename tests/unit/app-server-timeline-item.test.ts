@@ -64,6 +64,33 @@ describe("timelineItem", () => {
     });
   });
 
+  it("maps file changes into visible tool items with line stats", () => {
+    expect(
+      timelineItem({
+        type: "fileChange",
+        id: "file-1",
+        status: "completed",
+        changes: [
+          {
+            path: "src/app.ts",
+            kind: { type: "update", move_path: null },
+            diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,3 @@\n-old\n+new\n+added"
+          }
+        ]
+      })
+    ).toMatchObject({
+      id: "file-1",
+      role: "tool",
+      toolKind: "file",
+      server: "file",
+      tool: "src/app.ts",
+      diffPath: "src/app.ts",
+      added: 2,
+      removed: 1,
+      text: expect.stringContaining("+added")
+    });
+  });
+
   it("falls back to a visible system item for unknown thread items", () => {
     expect(timelineItem({ type: "futureItem", id: "future-1", value: "visible" } as unknown as ThreadItem)).toMatchObject({
       id: "future-1",

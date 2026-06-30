@@ -1418,11 +1418,15 @@ describe("CodexAppServerClient", () => {
     expect(detail.timeline).toEqual([
       {
         id: "item-user-1",
+        turnId: "turn-1",
+        turnIndex: 0,
         role: "user",
         text: "请检查登录逻辑"
       },
       {
         id: "item-agent-1",
+        turnId: "turn-1",
+        turnIndex: 0,
         role: "agent",
         text: "我会先阅读认证相关代码。"
       }
@@ -1720,8 +1724,8 @@ describe("CodexAppServerClient", () => {
       lastTurnId: "turn-resume-1",
       goal: expect.objectContaining({ objective: "完成移动端 Codex Web" }),
       timeline: [
-        { id: "item-resume-user-1", role: "user", text: "恢复这个会话" },
-        { id: "item-resume-agent-1", role: "agent", text: "已恢复会话。" }
+        { id: "item-resume-user-1", turnId: "turn-resume-1", turnIndex: 0, role: "user", text: "恢复这个会话" },
+        { id: "item-resume-agent-1", turnId: "turn-resume-1", turnIndex: 0, role: "agent", text: "已恢复会话。" }
       ]
     });
     expect(peer.calls).toContainEqual({
@@ -2889,7 +2893,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient(peer);
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
-      items: [{ id: "item-page-agent-1", role: "agent", text: "分页 turn" }],
+      items: [{ id: "item-page-agent-1", turnId: "turn-page-1", turnIndex: 0, role: "agent", text: "分页 turn" }],
       nextCursor: "turn-next"
     });
     expect(peer.calls.at(-1)).toEqual({
@@ -2905,7 +2909,7 @@ describe("CodexAppServerClient", () => {
     await expect(
       client.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-page-1", cursor: "cursor-2", limit: 20 })
     ).resolves.toEqual({
-      items: [{ id: "item-page-agent-2", role: "agent", text: "分页 item" }],
+      items: [{ id: "item-page-agent-2", turnId: "turn-page-1", role: "agent", text: "分页 item" }],
       nextCursor: "item-next"
     });
     expect(peer.calls.at(-1)).toEqual({

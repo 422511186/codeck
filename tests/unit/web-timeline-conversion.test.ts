@@ -1,21 +1,60 @@
 import { describe, it, expect } from "vitest";
-import { timelineItemToEntry } from "../../src/web/state/timeline";
+import { entriesBeforeEntry, rollbackTurnsForEntry, timelineItemToEntry } from "../../src/web/state/timeline";
 import type { TimelineItem, TimelineRole } from "../../src/web/api/types";
 
 describe("timeline conversion", () => {
   it("should convert user message", () => {
     const item: TimelineItem = {
       id: "1",
+      turnId: "turn-1",
+      turnIndex: 3,
       role: "user",
       text: "hello",
       imagePaths: ["C:/shot.png"]
     };
     const entry = timelineItemToEntry(item, 1000);
     expect(entry.id).toBe("1");
+    expect(entry.turnId).toBe("turn-1");
+    expect(entry.turnIndex).toBe(3);
     expect(entry.createdAt).toBe(1000);
     expect(entry.body.kind).toBe("user-message");
     expect((entry.body as any).text).toBe("hello");
     expect((entry.body as any).imagePaths).toEqual(["C:/shot.png"]);
+  });
+
+  it("should compute rollback turn count from target entry turn metadata", () => {
+    const entries = [
+      { id: "u1", turnId: "turn-1", turnIndex: 0, createdAt: 1, body: { kind: "user-message", text: "one" } },
+      { id: "a1", turnId: "turn-1", turnIndex: 0, createdAt: 2, body: { kind: "agent-message", text: "one reply" } },
+      { id: "u2", turnId: "turn-2", turnIndex: 1, createdAt: 3, body: { kind: "user-message", text: "two" } },
+      { id: "a2", turnId: "turn-2", turnIndex: 1, createdAt: 4, body: { kind: "agent-message", text: "two reply" } },
+      { id: "u3", turnId: "turn-3", turnIndex: 2, createdAt: 5, body: { kind: "user-message", text: "three" } }
+    ] as const;
+
+    expect(rollbackTurnsForEntry([...entries], entries[2])).toBe(2);
+    expect(rollbackTurnsForEntry([...entries], entries[4])).toBe(1);
+  });
+
+  it("should keep only entries before the target turn for rewind draft semantics", () => {
+    const entries = [
+      { id: "u1", turnId: "turn-1", turnIndex: 0, createdAt: 1, body: { kind: "user-message", text: "one" } },
+      { id: "a1", turnId: "turn-1", turnIndex: 0, createdAt: 2, body: { kind: "agent-message", text: "one reply" } },
+      { id: "u2", turnId: "turn-2", turnIndex: 1, createdAt: 3, body: { kind: "user-message", text: "two" } },
+      { id: "a2", turnId: "turn-2", turnIndex: 1, createdAt: 4, body: { kind: "agent-message", text: "two reply" } }
+    ] as const;
+
+    expect(entriesBeforeEntry([...entries], entries[2])?.map((entry) => entry.id)).toEqual(["u1", "a1"]);
+    expect(entriesBeforeEntry([...entries], entries[0])).toEqual([]);
+  });
+
+  it("should not compute rollback count without reliable turn metadata", () => {
+    const entries = [
+      { id: "u1", createdAt: 1, body: { kind: "user-message", text: "one" } },
+      { id: "u2", turnId: "turn-2", createdAt: 2, body: { kind: "user-message", text: "two" } }
+    ] as const;
+
+    expect(rollbackTurnsForEntry([...entries], entries[0])).toBeNull();
+    expect(rollbackTurnsForEntry([...entries], { ...entries[1], turnId: "missing" })).toBeNull();
   });
 
   it("should convert historical file mention blocks into image thumbnails", () => {
@@ -128,6 +167,20 @@ describe("timeline conversion", () => {
     expect((entry.body as any).server).toBe("filesystem");
     expect((entry.body as any).tool).toBe("read_file");
     expect((entry.body as any).arguments).toContain("README.md");
+  });
+
+  it("should convert diff items and compute line stats", () => {
+    const item: TimelineItem = {
+      id: "diff-1",
+      role: "diff" as TimelineRole,
+      text: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,3 @@\n-old\n+new\n+added",
+      diffPath: "src/app.ts"
+    };
+    const entry = timelineItemToEntry(item, 7000);
+    expect(entry.body.kind).toBe("diff");
+    expect((entry.body as any).path).toBe("src/app.ts");
+    expect((entry.body as any).added).toBe(2);
+    expect((entry.body as any).removed).toBe(1);
   });
 
   it("should handle unknown role as system", () => {

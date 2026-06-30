@@ -17,10 +17,12 @@ export type ThreadPage = {
   nextCursor: string | null;
 };
 
-export type TimelineRole = "user" | "agent" | "reasoning" | "plan" | "tool" | "system" | "error";
+export type TimelineRole = "user" | "agent" | "reasoning" | "plan" | "tool" | "diff" | "system" | "error";
 
 export type TimelineItem = {
   id: string;
+  turnId?: string;
+  turnIndex?: number;
   role: TimelineRole;
   text: string;
   done?: boolean;
@@ -30,6 +32,9 @@ export type TimelineItem = {
   tool?: string;
   arguments?: string;
   status?: "running" | "success" | "failed";
+  diffPath?: string;
+  added?: number;
+  removed?: number;
 };
 
 export type ThreadDetail = ThreadSummary & {

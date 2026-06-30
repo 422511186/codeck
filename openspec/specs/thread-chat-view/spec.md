@@ -47,12 +47,13 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 - **THEN** 头部 MUST 恢复该会话上次的 Plan/Build 选中态
 
 ### Requirement: 头部右侧 ⋮ 菜单使用底部抽屉
-⋮ 次级菜单 SHALL 以底部抽屉形式弹出，包含重命名、归档、压缩上下文、Fork 四项。
+⋮ 次级菜单 SHALL 以底部抽屉形式弹出，包含重命名、归档、压缩上下文三项。Fork SHALL 不在会话头部抽屉中出现。
 
 #### Scenario: 打开菜单
 - **WHEN** 用户点击 ⋮
 - **THEN** 系统 MUST 从底部弹出抽屉
-- **AND** 抽屉 MUST 包含「重命名」「归档」「压缩上下文」「Fork」四项
+- **AND** 抽屉 MUST 包含「重命名」「归档」「压缩上下文」三项
+- **AND** 抽屉 MUST 不包含「Fork」
 
 #### Scenario: 不显示删除
 - **WHEN** ⋮ 菜单展开
@@ -96,16 +97,6 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 - **THEN** 系统 MUST 调用 `POST /api/codex/threads/:threadId/compact`
 - **AND** 输入框 MUST 在压缩进行中禁用
 - **AND** 压缩完成后 timeline MUST 在末尾插入一条「上下文已压缩」系统消息
-
-### Requirement: Fork 点即创建并跳转
-Fork SHALL 在用户点击后立即创建新会话并跳转，无需额外确认，且新会话继承原会话的 Plan/Build 与模型。
-
-#### Scenario: 触发 Fork
-- **WHEN** 用户在底部抽屉点击「Fork」
-- **THEN** 系统 MUST 调用 `POST /api/codex/threads/:threadId/fork`
-- **AND** 新会话的 Plan/Build MUST 与原会话一致
-- **AND** 新会话的模型 MUST 与原会话一致
-- **AND** 系统 MUST 自动跳转到新会话的聊天页
 
 ### Requirement: 进入会话默认滚到最新
 进入会话聊天页时 SHALL 默认将 timeline 滚动到最新一条消息位置。

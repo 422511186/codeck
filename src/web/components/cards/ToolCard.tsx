@@ -15,8 +15,12 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
         icon="🛠️"
         accentColor={accent}
         title={
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
-            {entry.server} · {entry.tool}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
+              {entry.server} · {entry.diffPath ?? entry.tool}
+            </span>
+            {typeof entry.added === "number" ? <span style={{ color: "var(--cw-success)" }}>+{entry.added}</span> : null}
+            {typeof entry.removed === "number" ? <span style={{ color: "var(--cw-danger)" }}>-{entry.removed}</span> : null}
           </span>
         }
         right={entry.status === "running" ? <span style={{ color: "var(--cw-fg-muted)" }}>运行中</span> : null}

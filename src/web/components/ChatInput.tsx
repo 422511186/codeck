@@ -10,8 +10,6 @@ export type ChatInputProps = {
   running: boolean;
   onSend: (text: string, imagePaths: string[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
-  onResendLast: () => Promise<string | null | void>;
-  canResendLast?: boolean;
 };
 
 type ImageState = {
@@ -86,15 +84,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const disabled = sending || props.running || image?.status === "uploading";
   const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
 
-  async function resendLast(): Promise<void> {
-    if (props.running) return;
-    const value = await props.onResendLast();
-    if (typeof value === "string") {
-      setText(value);
-      setDraft(props.threadId, value);
-    }
-  }
-
   function onInlineKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -151,17 +140,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
           <button type="button" onClick={() => setFullscreen(true)} aria-label="全屏编辑" style={iconBtn}>
             <ExpandIcon />
           </button>
-          {props.canResendLast ? (
-            <button
-              type="button"
-              onClick={resendLast}
-              aria-label="重发上一条"
-              style={{ ...iconBtn, opacity: props.running ? 0.3 : 1 }}
-              disabled={props.running}
-            >
-              <RefreshIcon />
-            </button>
-          ) : null}
           <button
             type="button"
             onClick={() => send()}
@@ -437,15 +415,6 @@ function ExpandIcon(): JSX.Element {
     <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M5 9l5-5M19 9l-5-5M5 15l5 5M19 15l-5 5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function RefreshIcon(): JSX.Element {
-  return (
-    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M20 12a8 8 0 1 1-2.3-5.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-      <path d="M20 5v5h-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

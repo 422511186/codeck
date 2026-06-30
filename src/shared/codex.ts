@@ -586,7 +586,9 @@ export type MobileExperimentalFeatureView = {
 
 export type MobileTimelineItem = {
   id: string;
-  role: "user" | "agent" | "reasoning" | "plan" | "tool" | "system" | "error";
+  turnId?: string;
+  turnIndex?: number;
+  role: "user" | "agent" | "reasoning" | "plan" | "tool" | "diff" | "system" | "error";
   text: string;
   done?: boolean;
   imagePaths?: string[];
@@ -595,6 +597,9 @@ export type MobileTimelineItem = {
   tool?: string;
   arguments?: string;
   status?: "running" | "success" | "failed";
+  diffPath?: string;
+  added?: number;
+  removed?: number;
 };
 
 export type MobileThreadGoalView = {
