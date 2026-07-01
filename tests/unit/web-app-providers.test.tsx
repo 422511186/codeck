@@ -22,9 +22,9 @@ vi.mock("../../src/web/api/endpoints", () => ({
   }
 }));
 
-const mockConnectBrowserWs = vi.fn();
-vi.mock("../../src/web/ws/client", () => ({
-  connectBrowserWs: (...args: unknown[]) => mockConnectBrowserWs(...args)
+const mockConnectBrowserEventStream = vi.fn();
+vi.mock("../../src/web/events/client", () => ({
+  connectBrowserEventStream: (...args: unknown[]) => mockConnectBrowserEventStream(...args)
 }));
 
 const mockLoad = vi.fn();
@@ -59,7 +59,7 @@ describe("AppProviders", () => {
     mockPathname.mockReturnValue("/projects");
     mockSetSessionInvalidHandler.mockClear();
     mockSession.mockResolvedValue({ authenticated: true });
-    mockConnectBrowserWs.mockReturnValue({ close: vi.fn() });
+    mockConnectBrowserEventStream.mockReturnValue({ close: vi.fn() });
     mockLoad.mockClear();
     mockLoad.mockReturnValue({ defaultMode: "build", defaultModel: null, theme: "system" });
     mockApplyTheme.mockClear();

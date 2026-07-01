@@ -588,6 +588,9 @@ export type MobileTimelineItem = {
   id: string;
   turnId?: string;
   turnIndex?: number;
+  clientUserMessageId?: string;
+  generation?: number;
+  snapshotSequence?: number;
   role: "user" | "agent" | "reasoning" | "plan" | "tool" | "diff" | "system" | "error";
   text: string;
   done?: boolean;
@@ -615,6 +618,8 @@ export type MobileThreadGoalView = {
 
 export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
+  generation?: number;
+  snapshotSequence?: number;
   timeline: MobileTimelineItem[];
   model?: string | null;
   reasoningEffort?: string | null;

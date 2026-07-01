@@ -13,10 +13,13 @@ export async function POST(
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json().catch(() => ({}))) as { numTurns?: number };
+    const body = (await request.json().catch(() => ({}))) as { numTurns?: number; expectedDeletedTurnIds?: unknown };
     const numTurns = body.numTurns || 1;
-    await audit("thread.rollback", { threadId, numTurns });
-    const thread = await getAppServerGateway().rollbackThread(threadId, numTurns);
+    const expectedDeletedTurnIds = Array.isArray(body.expectedDeletedTurnIds)
+      ? body.expectedDeletedTurnIds.filter((turnId): turnId is string => typeof turnId === "string" && turnId.length > 0)
+      : undefined;
+    await audit("thread.rollback", { threadId, numTurns, expectedDeletedTurnIds });
+    const thread = await getAppServerGateway().rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
     return NextResponse.json({ ok: true, thread });
   } catch (error) {
     return NextResponse.json(

@@ -200,8 +200,231 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
       return { goal: null };
     }
 
+    if (method === "thread/rollback") {
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "overlay test",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 3,
+          status: { type: "idle" },
+          path: null,
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "Overlay",
+          turns: []
+        }
+      };
+    }
+
     throw new Error(`unexpected method ${method}`);
   }
+}
+
+class PartialRollbackPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  emitNotification(message: AppServerNotificationMessage): void {
+    for (const handler of this.notificationHandlers) {
+      handler(message);
+    }
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+
+    if (method === "thread/read") {
+      return { thread: threadWithTurns(["turn-1", "turn-2"]) };
+    }
+
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+
+    if (method === "thread/rollback") {
+      return { thread: threadWithTurns(["turn-1"]) };
+    }
+
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class SnapshotReasoningPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  emitNotification(message: AppServerNotificationMessage): void {
+    for (const handler of this.notificationHandlers) {
+      handler(message);
+    }
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+
+    if (method === "thread/read") {
+      return {
+        thread: {
+          ...(threadWithTurns(["turn-1"]) as Record<string, unknown>),
+          turns: [
+            {
+              id: "turn-1",
+              itemsView: "full",
+              status: "completed",
+              error: null,
+              startedAt: 1,
+              completedAt: 2,
+              durationMs: 1,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "user-turn-1",
+                  clientId: "client-turn-1",
+                  content: [{ type: "text", text: "看一下当前工作目录的位置", text_elements: [] }]
+                },
+                {
+                  type: "reasoning",
+                  id: "reasoning-snapshot",
+                  summary: ["Checking working directory in Chinese"],
+                  content: []
+                }
+              ]
+            }
+          ]
+        }
+      };
+    }
+
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
+function threadWithTurns(turnIds: string[]): unknown {
+  return {
+    id: "thread-1",
+    sessionId: "session-1",
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: "partial rollback",
+    ephemeral: false,
+    modelProvider: "openai",
+    createdAt: 1,
+    updatedAt: 3,
+    status: { type: "idle" },
+    path: null,
+    cwd: "/tmp/workspace",
+    cliVersion: "0.141.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: "Partial",
+    turns: turnIds.map((turnId, index) => ({
+      id: turnId,
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: index + 1,
+      completedAt: index + 2,
+      durationMs: 1,
+      items: [
+        {
+          type: "userMessage",
+          id: `user-${turnId}`,
+          clientId: `client-${turnId}`,
+          content: [{ type: "text", text: `消息 ${turnId}`, text_elements: [] }]
+        }
+      ]
+    }))
+  };
 }
 
 describe("createAppServerGateway", () => {
@@ -276,28 +499,30 @@ describe("createAppServerGateway", () => {
       }
     });
 
-    expect(await gateway.readThread("thread-1")).toMatchObject({
-      timeline: expect.arrayContaining([
-        {
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
           id: "process-1",
+          turnId: "turn-1",
           role: "tool",
           text: "npm test\n",
           toolKind: "command",
           server: "command",
           tool: "command",
           status: "running"
-        },
-        {
+        }),
+        expect.objectContaining({
           id: "mcp-1",
+          turnId: "turn-1",
           role: "tool",
           text: "正在读取资源",
           toolKind: "mcp",
           server: "mcp",
           tool: "progress",
           status: "running"
-        }
+        })
       ])
-    });
+    );
 
     peer.emitNotification({
       method: "turn/completed",
@@ -312,6 +537,217 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("overlay 替换已 materialized item 时保留 turn 元数据", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "user-1",
+          clientId: "client-user-1",
+          content: [{ type: "text", text: "覆盖后的用户消息", text_elements: [] }]
+        },
+        startedAtMs: 1234
+      }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        expect.objectContaining({
+          id: "user-1",
+          turnId: "turn-1",
+          turnIndex: 0,
+          role: "user",
+          text: "覆盖后的用户消息"
+        })
+      ])
+    });
+  });
+
+  it("rollback 后清理被删除 turn 的 overlay", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-deleted",
+        delta: "旧命令输出\n"
+      }
+    });
+
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "cmd-deleted" })])
+    );
+
+    await gateway.rollbackThread("thread-1", 1);
+
+    const detail = await gateway.readThread("thread-1");
+    expect(detail.timeline.some((item) => item.id === "cmd-deleted")).toBe(false);
+  });
+
+  it("rollback 后清理尚未 materialized 的 live turn overlay 和 backlog", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const seen: ReturnType<typeof gateway.listBrowserEventBacklog>["events"] = [];
+    gateway.onBrowserEvent((event) => seen.push(event));
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-live",
+        itemId: "reasoning-live",
+        delta: "旧思考"
+      }
+    });
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-live",
+        itemId: "cmd-live",
+        delta: "旧工具输出\n"
+      }
+    });
+
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "reasoning-live", turnId: "turn-live" }),
+        expect.objectContaining({ id: "cmd-live", turnId: "turn-live" })
+      ])
+    );
+    const oldEvent = seen.find(
+      (event) => event.type === "codex-event" && event.event.kind === "reasoning_delta"
+    );
+    const oldEventId = oldEvent?.type === "codex-event" ? oldEvent.event.eventId : null;
+
+    const rolledBack = await gateway.rollbackThread("thread-1", 1, { expectedDeletedTurnIds: ["turn-live"] });
+
+    expect(rolledBack.timeline.some((item) => item.turnId === "turn-live")).toBe(false);
+    if (oldEventId) {
+      expect(gateway.listBrowserEventBacklog(oldEventId).events).toEqual([]);
+    }
+
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-live",
+        itemId: "agent-live-late",
+        delta: "不应回流"
+      }
+    });
+
+    expect((await gateway.readThread("thread-1")).timeline.some((item) => item.turnId === "turn-live")).toBe(false);
+  });
+
+  it("rollback 不会信任 expectedDeletedTurnIds 屏蔽仍存在的 turn", async () => {
+    const peer = new PartialRollbackPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    const rolledBack = await gateway.rollbackThread("thread-1", 1, {
+      expectedDeletedTurnIds: ["turn-1", "turn-2"]
+    });
+
+    expect(rolledBack.timeline).toEqual(expect.arrayContaining([expect.objectContaining({ turnId: "turn-1" })]));
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-still-valid",
+        delta: "仍然有效"
+      }
+    });
+
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "cmd-still-valid", turnId: "turn-1", text: "仍然有效" })
+      ])
+    );
+  });
+
+  it("刷新读取合并 snapshot 与 overlay 中同 turn 等价 reasoning，避免重复卡片", async () => {
+    const peer = new SnapshotReasoningPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-overlay",
+        delta: "Checking working directory in Chinese"
+      }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+    const reasoningItems = detail.timeline.filter((item) => item.role === "reasoning");
+
+    expect(reasoningItems).toHaveLength(1);
+    expect(reasoningItems[0]).toMatchObject({
+      turnId: "turn-1",
+      text: "Checking working directory in Chinese"
+    });
+  });
+
+  it("rollback 后旧 generation 的 backlog 可见事件不会重新进入 timeline", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const seen: ReturnType<typeof gateway.listBrowserEventBacklog>["events"] = [];
+    const unsubscribe = gateway.onBrowserEvent((event) => {
+      seen.push(event);
+    });
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-old",
+        delta: "旧输出\n"
+      }
+    });
+
+    const oldEvent = seen.find(
+      (event) => event.type === "codex-event" && event.event.kind === "command_output_delta"
+    );
+    const oldEventId = oldEvent?.type === "codex-event" ? oldEvent.event.eventId : null;
+
+    await gateway.rollbackThread("thread-1", 1);
+
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-old-late",
+        delta: "不应回流\n"
+      }
+    });
+
+    expect((await gateway.readThread("thread-1")).timeline.some((item) => item.id === "cmd-old-late")).toBe(false);
+    if (oldEventId) {
+      const replay = gateway.listBrowserEventBacklog(oldEventId);
+      expect(replay.events).toEqual([]);
+    }
+    unsubscribe();
+  });
+
   it("刷新读取会保留运行中的 reasoning 占位，并在空内容完成后清理", async () => {
     const peer = new NotificationOverlayPeer();
     const gateway = new AppServerGateway(peer);
@@ -324,12 +760,13 @@ describe("createAppServerGateway", () => {
 
     expect(await gateway.readThread("thread-1")).toMatchObject({
       timeline: expect.arrayContaining([
-        {
+        expect.objectContaining({
           id: "turn-active-reasoning-pending",
+          turnId: "turn-active",
           role: "reasoning",
           text: "",
           done: false
-        }
+        })
       ])
     });
 
@@ -381,66 +818,84 @@ describe("createAppServerGateway", () => {
 
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "agent_message_delta",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
         itemId: "mock-live-4",
-        delta: "实时事件：实时流测试"
-      }
+        delta: "实时事件：实时流测试",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "reasoning_delta",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
         itemId: "mock-reasoning-4",
-        delta: "思考：实时流测试"
-      }
+        delta: "思考：实时流测试",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "plan_delta",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
         itemId: "mock-plan-4",
-        delta: "计划：整理请求并生成回复"
-      }
+        delta: "计划：整理请求并生成回复",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "command_output_delta",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
         itemId: "mock-command-4",
-        delta: "命令输出：mock 完成"
-      }
+        delta: "命令输出：mock 完成",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "turn_diff_updated",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
-        diff: "diff --git a/mock.txt b/mock.txt"
-      }
+        diff: "diff --git a/mock.txt b/mock.txt",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "file_output_delta",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
         itemId: "mock-file-4",
-        delta: "文件输出：mock.txt 已更新"
-      }
+        delta: "文件输出：mock.txt 已更新",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "token_usage_updated",
         threadId: "mock-thread-1",
         turnId: "mock-turn-2",
@@ -448,8 +903,11 @@ describe("createAppServerGateway", () => {
         inputTokens: 48,
         outputTokens: 64,
         reasoningOutputTokens: 16,
-        modelContextWindow: 200000
-      }
+        modelContextWindow: 200000,
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
   });
 
@@ -776,11 +1234,14 @@ describe("createAppServerGateway", () => {
 
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "fs_changed",
         watchId: "mobile-watch-1",
-        paths: ["C:\\Users\\huang\\workspace\\README.md"]
-      }
+        paths: ["C:\\Users\\huang\\workspace\\README.md"],
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
 
     events.length = 0;
@@ -969,11 +1430,14 @@ describe("createAppServerGateway", () => {
 
     expect(events).toContainEqual({
       type: "codex-event",
-      event: {
+      event: expect.objectContaining({
         kind: "context_compacted",
         threadId: "mock-thread-1",
-        turnId: "mock-turn-1"
-      }
+        turnId: "mock-turn-1",
+        eventId: expect.any(String),
+        sequence: expect.any(Number),
+        revision: expect.any(Number)
+      })
     });
   });
 

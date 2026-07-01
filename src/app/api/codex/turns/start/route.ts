@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import type { StartTurnInput } from "../../../../../server/app-server/client";
-import type { MobileThreadDetail } from "../../../../../shared/codex";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
 
 type StartTurnRouteResult = {
   turnId: string;
-  thread: MobileThreadDetail;
 };
 
 const START_TURN_CACHE_TTL_MS = 60_000;
@@ -55,7 +53,7 @@ export async function POST(request: Request): Promise<Response> {
       additionalContext: body.additionalContext,
       collaborationMode: body.collaborationMode
     });
-    const start = () => startTurnAndReadThread({
+    const start = () => startTurnOnly({
       threadId: body.threadId!,
       text: body.text!,
       imagePaths,
@@ -68,9 +66,9 @@ export async function POST(request: Request): Promise<Response> {
       collaborationMode: body.collaborationMode
     });
     const cacheKey = startTurnCacheKey(body.threadId, body.clientUserMessageId);
-    const { turnId, thread } = cacheKey ? await cachedStartTurn(cacheKey, start) : await start();
+    const { turnId } = cacheKey ? await cachedStartTurn(cacheKey, start) : await start();
 
-    return NextResponse.json({ ok: true, turnId, thread });
+    return NextResponse.json({ ok: true, turnId });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "无法发送消息" },
@@ -79,11 +77,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-async function startTurnAndReadThread(input: StartTurnInput): Promise<StartTurnRouteResult> {
+async function startTurnOnly(input: StartTurnInput): Promise<StartTurnRouteResult> {
   const gateway = getAppServerGateway();
   const result = await gateway.startTurn(input);
-  const thread = await gateway.readThread(input.threadId);
-  return { turnId: result.turnId, thread };
+  return { turnId: result.turnId };
 }
 
 async function cachedStartTurn(

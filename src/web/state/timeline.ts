@@ -75,6 +75,9 @@ export type TimelineEntry = {
   id: string;
   turnId?: string;
   turnIndex?: number;
+  clientUserMessageId?: string;
+  generation?: number;
+  snapshotSequence?: number;
   createdAt: number;
   body:
     | UserMessageEntry
@@ -205,10 +208,15 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
   }
 }
 
-function timelineEntryMeta(item: TimelineItem): Pick<TimelineEntry, "turnId" | "turnIndex"> {
+function timelineEntryMeta(
+  item: TimelineItem
+): Pick<TimelineEntry, "turnId" | "turnIndex" | "clientUserMessageId" | "generation" | "snapshotSequence"> {
   return {
     ...(item.turnId ? { turnId: item.turnId } : {}),
-    ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {})
+    ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {}),
+    ...(item.clientUserMessageId ? { clientUserMessageId: item.clientUserMessageId } : {}),
+    ...(typeof item.generation === "number" ? { generation: item.generation } : {}),
+    ...(typeof item.snapshotSequence === "number" ? { snapshotSequence: item.snapshotSequence } : {})
   };
 }
 

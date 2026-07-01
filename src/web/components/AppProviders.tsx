@@ -4,7 +4,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { setSessionInvalidHandler } from "../api/client";
 import { auth } from "../api/endpoints";
-import { connectBrowserWs } from "../ws/client";
+import { connectBrowserEventStream } from "../events/client";
 import { useStore } from "../state/store";
 import { applyTheme, settingsStore } from "../storage/settings";
 
@@ -31,7 +31,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     if (typeof window === "undefined") return;
     if (pathname?.startsWith("/login")) return;
 
-    const conn = connectBrowserWs({
+    const conn = connectBrowserEventStream({
       onState: setWsState,
       onMessage: (event) => {
         switch (event.type) {
@@ -46,6 +46,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
             break;
           case "server-request-resolved":
             resolvePendingRequest(event.requestId);
+            break;
+          case "timeline-gap":
+            dispatchEvent(event);
             break;
         }
       }

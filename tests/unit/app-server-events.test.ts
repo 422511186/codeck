@@ -345,6 +345,7 @@ describe("normalizeAppServerNotification", () => {
         turnId: "turn-1",
         item: {
           type: "reasoning",
+          id: "reasoning-1",
           summary: [{ type: "summary_text", text: "分析路径" }],
           content: [{ type: "text", text: "检查 UI" }],
           encrypted_content: null,
@@ -360,8 +361,10 @@ describe("normalizeAppServerNotification", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         item: {
+          id: "reasoning-1",
           role: "reasoning",
-          text: "分析路径\n检查 UI"
+          text: "分析路径\n检查 UI",
+          done: true
         }
       }
     });

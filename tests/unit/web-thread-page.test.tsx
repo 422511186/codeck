@@ -21,14 +21,26 @@ const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
 const mockSetRunning = vi.fn();
 const mockSetActiveTurnId = vi.fn();
+const mockBindLocalUserMessageTurn = vi.fn();
+const mockSetTimelineGeneration = vi.fn();
 const mockMarkTurnInterrupted = vi.fn();
+const mockMarkTurnDeleted = vi.fn();
+const mockSetActiveThread = vi.fn();
+const mockRequestSnapshotRepair = vi.fn();
+const mockClearSnapshotRepair = vi.fn();
 const mockSetPendingRequests = vi.fn();
 const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
 
 vi.mock("../../src/web/state/store", () => ({
-  useStore: (selector: (state: unknown) => unknown) =>
-    selector({
+  useStore: Object.assign(
+    (selector: (state: unknown) => unknown) => selector(mockStoreState()),
+    { getState: () => mockStoreState() }
+  )
+}));
+
+function mockStoreState(): unknown {
+  return {
       ensureThread: mockEnsureThread,
       setThreadEntries: mockSetThreadEntries,
       mergeThreadEntries: mockMergeThreadEntries,
@@ -39,12 +51,18 @@ vi.mock("../../src/web/state/store", () => ({
       setModel: mockSetModel,
       setRunning: mockSetRunning,
       setActiveTurnId: mockSetActiveTurnId,
+      bindLocalUserMessageTurn: mockBindLocalUserMessageTurn,
+      setTimelineGeneration: mockSetTimelineGeneration,
       markTurnInterrupted: mockMarkTurnInterrupted,
+      markTurnDeleted: mockMarkTurnDeleted,
+      setActiveThread: mockSetActiveThread,
+      requestSnapshotRepair: mockRequestSnapshotRepair,
+      clearSnapshotRepair: mockClearSnapshotRepair,
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
       threads: { "thread-1": mockThreadState() }
-    })
-}));
+  };
+}
 
 const mockReadThread = vi.fn();
 const mockResumeThread = vi.fn();
@@ -114,7 +132,13 @@ describe("ThreadPage", () => {
     mockSetModel.mockClear();
     mockSetRunning.mockClear();
     mockSetActiveTurnId.mockClear();
+    mockBindLocalUserMessageTurn.mockClear();
+    mockSetTimelineGeneration.mockClear();
     mockMarkTurnInterrupted.mockClear();
+    mockMarkTurnDeleted.mockClear();
+    mockSetActiveThread.mockClear();
+    mockRequestSnapshotRepair.mockClear();
+    mockClearSnapshotRepair.mockClear();
     mockSetPendingRequests.mockClear();
     mockResolvePendingRequest.mockClear();
     mockResumeThread.mockClear();
@@ -174,7 +198,20 @@ describe("ThreadPage", () => {
     mockArchiveThread.mockResolvedValue({});
     mockUnarchiveThread.mockResolvedValue({});
     mockCompactThread.mockResolvedValue({});
-    mockForkThread.mockResolvedValue({ id: "forked-thread" });
+    mockForkThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "fork-turn-3",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" },
+        { id: "target-user-fork", turnId: "fork-turn-2", turnIndex: 1, role: "user", text: "previous prompt" },
+        { id: "latest-user-fork", turnId: "fork-turn-3", turnIndex: 2, role: "user", text: "latest prompt" }
+      ]
+    });
     mockSettingsGet.mockReturnValue({ defaultMode: "build" });
     mockThreadState.mockReturnValue({
       entries: [],
@@ -224,6 +261,162 @@ describe("ThreadPage", () => {
 
     const scroller = container.querySelector('[style*="overflow"]');
     expect(scroller).toBeTruthy();
+  });
+
+  it("should keep sending available while cached idle timeline is visible and thread detail is still loading", async () => {
+    mockReadThread.mockReturnValue(new Promise(() => undefined));
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "cached-1",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Cached message" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    expect(await screen.findByText("Cached message")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).not.toBeDisabled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+  });
+
+  it("should ignore a stale initial read that resolves after a cached send", async () => {
+    const user = userEvent.setup();
+    let resolveInitialRead: (value: unknown) => void = () => undefined;
+    mockReadThread.mockReturnValue(new Promise((resolve) => {
+      resolveInitialRead = resolve;
+    }));
+    mockStartTurn.mockResolvedValue({ turnId: "turn-new" });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "cached-1",
+          turnId: "turn-old",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Cached message", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await user.type(await screen.findByPlaceholderText("输入消息"), "new message");
+    await user.click(screen.getByLabelText("发送"));
+    await waitFor(() => {
+      expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
+        "thread-1",
+        expect.stringMatching(/^local-user-/),
+        "turn-new"
+      );
+    });
+
+    resolveInitialRead({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Old Snapshot",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [{ id: "cached-1", turnId: "turn-old", role: "user", text: "Cached message" }],
+      lastTurnId: "turn-old",
+      updatedAt: Date.now()
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockSetThreadEntries).not.toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ id: "cached-1" })],
+      null
+    );
+  });
+
+  it("should requeue snapshot repair instead of clearing it when a send changes the mutation epoch", async () => {
+    const user = userEvent.setup();
+    let resolveRepair: (value: unknown) => void = () => undefined;
+    const initialDetail = {
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Initial",
+        modelProvider: "claude-opus-4",
+        status: "idle",
+        timeline: [{ id: "cached-1", turnId: "turn-old", role: "user", text: "Cached message" }],
+        lastTurnId: "turn-old",
+        updatedAt: Date.now()
+    };
+    const repairPromise = new Promise((resolve) => {
+      resolveRepair = resolve;
+    });
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return readCount === 1 ? Promise.resolve(initialDetail) : repairPromise;
+    });
+    mockStartTurn.mockResolvedValue({ turnId: "turn-new" });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "cached-1",
+          turnId: "turn-old",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Cached message", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => expect(mockReadThread.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await user.type(await screen.findByPlaceholderText("输入消息"), "new message");
+    await user.click(screen.getByLabelText("发送"));
+    await waitFor(() => expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
+      "thread-1",
+      expect.stringMatching(/^local-user-/),
+      "turn-new"
+    ));
+    mockSetThreadEntries.mockClear();
+    mockClearSnapshotRepair.mockClear();
+
+    resolveRepair({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Stale Repair",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [{ id: "cached-1", turnId: "turn-old", role: "user", text: "Cached message" }],
+      lastTurnId: "turn-old",
+      updatedAt: Date.now()
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+    expect(mockClearSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
   it("should render timeline with multiple entries", async () => {
@@ -290,15 +483,10 @@ describe("ThreadPage", () => {
     expect(mockSetPendingRequests).toHaveBeenCalledWith([pendingQuestion]);
   });
 
-  it("should refresh running threads after the fallback polling interval", async () => {
-    let intervalCallback: (() => void | Promise<void>) | null = null;
+  it("should not poll full thread details while the event stream is the running path", async () => {
     const originalSetInterval = window.setInterval.bind(window);
     const originalClearInterval = window.clearInterval.bind(window);
     const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation((handler: TimerHandler, timeout?: number, ...args: any[]) => {
-      if (timeout === 2_000) {
-        intervalCallback = handler as () => void | Promise<void>;
-        return 1 as unknown as number;
-      }
       return originalSetInterval(handler, timeout, ...args);
     });
     const clearIntervalSpy = vi.spyOn(window, "clearInterval").mockImplementation((id?: number) => {
@@ -339,20 +527,8 @@ describe("ThreadPage", () => {
       await waitFor(() => {
         expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
       });
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
-      expect(intervalCallback).toBeTruthy();
-
-      await act(async () => {
-        await intervalCallback?.();
-      });
-
-      await waitFor(() => expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false));
-      expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(2);
-      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
-        "thread-1",
-        [expect.objectContaining({ id: "agent-1" })],
-        null
-      );
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 2_000);
+      expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     } finally {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
@@ -400,7 +576,7 @@ describe("ThreadPage", () => {
         expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
       });
       expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 2_000);
     } finally {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
@@ -1469,9 +1645,9 @@ describe("ThreadPage", () => {
       status: "idle",
       timeline: [
         { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" },
-        { id: "target-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+        { id: "older-agent", turnId: "turn-1", turnIndex: 0, role: "agent", text: "older response" }
       ],
-      lastTurnId: "turn-2",
+      lastTurnId: "turn-1",
       updatedAt: Date.now()
     });
     mockThreadState.mockReturnValue({
@@ -1534,7 +1710,9 @@ describe("ThreadPage", () => {
     vi.useRealTimers();
     fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
 
-    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", 2);
+    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", 2, {
+      expectedDeletedTurnIds: ["turn-2", "turn-3"]
+    });
     await waitFor(() => {
       const lastCall = mockSetThreadEntries.mock.calls.at(-1);
       expect(lastCall?.[0]).toBe("thread-1");
@@ -1545,8 +1723,137 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should bind turn id to a freshly sent local user message so it can rewind without refresh", async () => {
+    const user = userEvent.setup();
+    mockStartTurn.mockResolvedValue({ turnId: "turn-new" });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "send then rewind");
+    await user.click(screen.getByLabelText("发送"));
+
+    await waitFor(() => {
+      expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
+        "thread-1",
+        expect.stringMatching(/^local-user-/),
+        "turn-new"
+      );
+    });
+    expect(mockReplaceOrAddEntry).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        turnId: "turn-new",
+        body: expect.objectContaining({ kind: "user-message", status: "sent" })
+      })
+    );
+  });
+
+  it("should not mark a fast completed turn running again when startTurn resolves after completion", async () => {
+    const user = userEvent.setup();
+    mockStartTurn.mockImplementation(async () => {
+      mockThreadState.mockReturnValue({
+        entries: [],
+        pendingApprovals: [],
+        mode: "build",
+        running: false,
+        activeTurnId: null,
+        plan: [],
+        cursor: null,
+        reachedBeginning: false
+      });
+      return { turnId: "turn-fast" };
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "fast turn");
+    await user.click(screen.getByLabelText("发送"));
+
+    await waitFor(() => {
+      expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
+        "thread-1",
+        expect.stringMatching(/^local-user-/),
+        "turn-fast"
+      );
+    });
+    expect(mockSetActiveTurnId).not.toHaveBeenCalledWith("thread-1", "turn-fast");
+    expect(mockSetRunning.mock.calls.filter((call) => call[0] === "thread-1" && call[1] === true)).toHaveLength(1);
+  });
+
+  it("should fill the visible input immediately after a rewind succeeds", async () => {
+    const user = userEvent.setup();
+    mockRollbackThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "target-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "edit this prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("edit this prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("输入消息")).toHaveValue("edit this prompt");
+    });
+    await user.type(screen.getByPlaceholderText("输入消息"), " updated");
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("edit this prompt updated");
+  });
+
   it("should fork from a long-pressed user message and prepare draft in the fork", async () => {
-    mockForkThread.mockResolvedValue({ id: "forked-thread" });
+    mockForkThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "fork-turn-3",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" },
+        { id: "target-user-fork", turnId: "fork-turn-2", turnIndex: 1, role: "user", text: "previous prompt" },
+        { id: "latest-user-fork", turnId: "fork-turn-3", turnIndex: 2, role: "user", text: "latest prompt" }
+      ]
+    });
     mockRollbackThread.mockResolvedValue({
       id: "forked-thread",
       cwd: "C:/test",
@@ -1554,10 +1861,9 @@ describe("ThreadPage", () => {
       modelProvider: "claude-opus-4",
       status: "idle",
       timeline: [
-        { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" },
-        { id: "target-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+        { id: "older-user", turnId: "turn-1", turnIndex: 0, role: "user", text: "older prompt" }
       ],
-      lastTurnId: "turn-2",
+      lastTurnId: "turn-1",
       updatedAt: Date.now()
     });
     mockThreadState.mockReturnValue({
@@ -1607,7 +1913,9 @@ describe("ThreadPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
-    expect(mockRollbackThread).toHaveBeenCalledWith("forked-thread", 2);
+    expect(mockRollbackThread).toHaveBeenCalledWith("forked-thread", 2, {
+      expectedDeletedTurnIds: ["fork-turn-2", "fork-turn-3"]
+    });
     await waitFor(() => expect(mockSetThreadEntries).toHaveBeenCalledWith(
       "forked-thread",
       [expect.objectContaining({ id: "older-user" })],
@@ -1625,7 +1933,19 @@ describe("ThreadPage", () => {
   });
 
   it("should resume forked threads and retry when rollback reports thread not found", async () => {
-    mockForkThread.mockResolvedValue({ id: "forked-thread" });
+    mockForkThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "fork-turn-2",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" },
+        { id: "target-user-fork", turnId: "fork-turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+      ]
+    });
     mockRollbackThread
       .mockRejectedValueOnce(new ApiError("thread not found: forked-thread", 502))
       .mockResolvedValueOnce({
@@ -1680,9 +2000,153 @@ describe("ThreadPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockRollbackThread).toHaveBeenCalledTimes(2));
-    expect(mockRollbackThread).toHaveBeenNthCalledWith(1, "forked-thread", 1);
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(1, "forked-thread", 1, {
+      expectedDeletedTurnIds: ["fork-turn-2"]
+    });
     expect(mockResumeThread).toHaveBeenCalledWith("forked-thread");
-    expect(mockRollbackThread).toHaveBeenNthCalledWith(2, "forked-thread", 1);
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(2, "forked-thread", 1, {
+      expectedDeletedTurnIds: ["fork-turn-2"]
+    });
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/threads/forked-thread"));
+  });
+
+  it("should not rollback a fork when the fork-local target cannot be resolved", async () => {
+    mockForkThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "fork-turn-1",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" }
+      ]
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "older-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 1,
+          body: { kind: "user-message", text: "older prompt", status: "sent" }
+        },
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "previous prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("previous prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
+
+    await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
+    expect(mockRollbackThread).not.toHaveBeenCalled();
+    expect(mockAppendEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ body: expect.objectContaining({ kind: "error" }) })]
+    );
+  });
+
+  it("should still apply a pending initial snapshot after fork-local target resolution fails", async () => {
+    let resolveInitialRead: (value: unknown) => void = () => undefined;
+    mockReadThread.mockReturnValue(new Promise((resolve) => {
+      resolveInitialRead = resolve;
+    }));
+    mockForkThread.mockResolvedValue({
+      id: "forked-thread",
+      cwd: "C:/test",
+      title: "Forked Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "fork-turn-1",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" }
+      ]
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "older-user",
+          turnId: "turn-1",
+          turnIndex: 0,
+          createdAt: Date.now() - 1,
+          body: { kind: "user-message", text: "older prompt", status: "sent" }
+        },
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "previous prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await screen.findByText("previous prompt");
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("previous prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
+
+    await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
+    expect(mockRollbackThread).not.toHaveBeenCalled();
+    mockSetThreadEntries.mockClear();
+
+    resolveInitialRead({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Authoritative",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      lastTurnId: "turn-2",
+      updatedAt: Date.now(),
+      timeline: [
+        { id: "auth-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+      ]
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ id: "auth-user" })],
+      null
+    );
   });
 });

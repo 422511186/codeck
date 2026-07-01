@@ -10,7 +10,7 @@ export type WsHelloEvent = { type: "hello"; status: "connected" };
 export type WsHealthEvent = { type: "health"; appServer: AppServerHealth; detail?: string };
 export type WsCodexEvent = {
   type: "codex-event";
-  event: { kind: string; threadId?: string; turnId?: string; [k: string]: unknown };
+  event: { kind: string; threadId?: string; turnId?: string; eventId?: string; revision?: number; sequence?: number; [k: string]: unknown };
 };
 export type WsServerRequestEvent = {
   type: "server-request";
@@ -25,13 +25,19 @@ export type WsServerRequestResolvedEvent = {
   type: "server-request-resolved";
   requestId: string;
 };
+export type WsTimelineGapEvent = {
+  type: "timeline-gap";
+  threadId?: string | null;
+  lastEventId?: string;
+};
 
 export type WsEvent =
   | WsHelloEvent
   | WsHealthEvent
   | WsCodexEvent
   | WsServerRequestEvent
-  | WsServerRequestResolvedEvent;
+  | WsServerRequestResolvedEvent
+  | WsTimelineGapEvent;
 
 export type WsConnectionState = "connecting" | "open" | "closed" | "reconnecting";
 

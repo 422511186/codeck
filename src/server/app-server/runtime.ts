@@ -156,7 +156,10 @@ type TimelineOverlayEntry = {
   updatedAtMs: number;
 };
 
+export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequestEvent;
+
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
+const MAX_BROWSER_EVENT_BACKLOG = 500;
 
 function pendingReasoningItemId(threadId: string, turnId: string | null): string {
   return `${turnId ?? threadId}-reasoning-pending`;
@@ -176,6 +179,53 @@ function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem
     status: next.status ?? current.status,
     done: next.done ?? current.done
   };
+}
+
+function overlayItemWithTurnMeta(item: MobileTimelineItem, turnId: string | null): MobileTimelineItem {
+  return {
+    ...item,
+    ...(turnId ? { turnId } : {})
+  };
+}
+
+function mergeTimelineTurnMeta(base: MobileTimelineItem, overlay: MobileTimelineItem): MobileTimelineItem {
+  return {
+    ...overlay,
+    ...(overlay.turnId || !base.turnId ? {} : { turnId: base.turnId }),
+    ...(typeof overlay.turnIndex === "number" || typeof base.turnIndex !== "number" ? {} : { turnIndex: base.turnIndex })
+  };
+}
+
+export function browserEventId(event: BrowserTimelineEvent): string {
+  if (event.type === "codex-event") {
+    return event.event.eventId ?? `${browserCodexEventThreadKey(event)}:${event.event.kind}`;
+  }
+  if (event.type === "server-request") {
+    return `server-request:${event.request.requestId}`;
+  }
+  return `server-request-resolved:${event.requestId}`;
+}
+
+function browserCodexEventThreadKey(envelope: BrowserCodexEventEnvelope): string {
+  const threadId = "threadId" in envelope.event ? envelope.event.threadId : null;
+  return typeof threadId === "string" && threadId ? threadId : "_global";
+}
+
+function timelineTurnIds(timeline: MobileTimelineItem[]): string[] {
+  const turnIds: string[] = [];
+  const seen = new Set<string>();
+  for (const item of timeline) {
+    if (!item.turnId || seen.has(item.turnId)) {
+      continue;
+    }
+    seen.add(item.turnId);
+    turnIds.push(item.turnId);
+  }
+  return turnIds;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.length > 0)));
 }
 
 function diffStats(diff: string): { added: number; removed: number } {
@@ -233,6 +283,33 @@ function shouldUseOverlayTimelineItem(base: MobileTimelineItem, overlay: MobileT
   }
 
   return overlay.text.length > base.text.length;
+}
+
+function equivalentTimelineOutput(base: MobileTimelineItem, overlay: MobileTimelineItem): boolean {
+  if (!base.turnId || !overlay.turnId || base.turnId !== overlay.turnId || base.role !== overlay.role) {
+    return false;
+  }
+
+  if (base.role === "tool") {
+    return (
+      base.toolKind === overlay.toolKind &&
+      base.server === overlay.server &&
+      base.tool === overlay.tool &&
+      equivalentTimelineText(base.text, overlay.text)
+    );
+  }
+
+  if (base.role === "agent" || base.role === "reasoning") {
+    return equivalentTimelineText(base.text, overlay.text);
+  }
+
+  return false;
+}
+
+function equivalentTimelineText(left: string, right: string): boolean {
+  const a = left.trim();
+  const b = right.trim();
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
 type MockFsNode = {
@@ -2455,15 +2532,20 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
 export class AppServerGateway {
   private initialized: Promise<void> | null = null;
   private readonly client: CodexAppServerClient;
-  private readonly browserEventHandlers = new Set<(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void>();
+  private readonly browserEventHandlers = new Set<(event: BrowserTimelineEvent) => void>();
+  private readonly browserEventBacklog: BrowserTimelineEvent[] = [];
+  private readonly threadEventRevisions = new Map<string, number>();
+  private readonly threadTimelineGenerations = new Map<string, number>();
   private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
   private readonly terminalSessions = new Map<string, MobileTerminalSession>();
   private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
   private readonly timelineOverlays = new Map<string, Map<string, TimelineOverlayEntry>>();
+  private readonly deletedTurnIdsByThread = new Map<string, Set<string>>();
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
   private fileSearchSessionCounter = 0;
+  private browserEventSequence = 0;
 
   constructor(private readonly peer: ManagedAppServerPeer) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
@@ -2474,10 +2556,14 @@ export class AppServerGateway {
       if (!event) {
         return;
       }
-      this.recordTimelineOverlay(event);
+      if (this.isDeletedTurnEvent(event)) {
+        return;
+      }
+      const timelineEvent = this.enrichCodexEvent(event);
+      this.recordTimelineOverlay(timelineEvent);
 
       for (const handler of this.browserEventHandlers) {
-        handler(event);
+        handler(timelineEvent);
       }
     });
     this.peer.onServerRequest((message) => {
@@ -2491,9 +2577,25 @@ export class AppServerGateway {
     return this.peer.getStatus();
   }
 
-  onBrowserEvent(handler: (event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void): () => void {
+  onBrowserEvent(handler: (event: BrowserTimelineEvent) => void): () => void {
     this.browserEventHandlers.add(handler);
     return () => this.browserEventHandlers.delete(handler);
+  }
+
+  listBrowserEventBacklog(afterEventId?: string | null): { events: BrowserTimelineEvent[]; gap: boolean } {
+    if (!afterEventId) {
+      return { events: [], gap: false };
+    }
+
+    const index = this.browserEventBacklog.findIndex((event) => browserEventId(event) === afterEventId);
+    if (index < 0) {
+      return { events: [], gap: true };
+    }
+
+    return {
+      events: this.browserEventBacklog.slice(index + 1).filter((event) => !this.isBlockedBacklogEvent(event)),
+      gap: false
+    };
   }
 
   listPendingServerRequests(): PendingServerRequestView[] {
@@ -2520,14 +2622,127 @@ export class AppServerGateway {
     this.emitBrowserEvent({ type: "server-request-resolved", requestId });
   }
 
-  private emitBrowserEvent(event: BrowserCodexEventEnvelope | BrowserServerRequestEvent): void {
+  private emitBrowserEvent(event: BrowserTimelineEvent): void {
+    this.recordBrowserEvent(event);
     for (const handler of this.browserEventHandlers) {
       handler(event);
     }
   }
 
+  private enrichCodexEvent(envelope: BrowserCodexEventEnvelope): BrowserCodexEventEnvelope {
+    const threadId = browserCodexEventThreadKey(envelope);
+    const revision = this.nextThreadEventRevision(threadId);
+    const sequence = ++this.browserEventSequence;
+    const eventId = envelope.event.eventId ?? `${threadId}:${revision}:${sequence}:${envelope.event.kind}`;
+    const generation = this.currentTimelineGeneration(threadId);
+    const event = {
+      ...envelope.event,
+      eventId,
+      sequence,
+      revision,
+      generation
+    };
+    const next = { ...envelope, event };
+    this.recordBrowserEvent(next);
+    return next;
+  }
+
+  private nextThreadEventRevision(threadId: string): number {
+    const nextRevision = (this.threadEventRevisions.get(threadId) ?? 0) + 1;
+    this.threadEventRevisions.set(threadId, nextRevision);
+    return nextRevision;
+  }
+
+  private recordBrowserEvent(event: BrowserTimelineEvent): void {
+    this.browserEventBacklog.push(event);
+    while (this.browserEventBacklog.length > MAX_BROWSER_EVENT_BACKLOG) {
+      this.browserEventBacklog.shift();
+    }
+  }
+
+  private currentTimelineGeneration(threadId: string): number {
+    return this.threadTimelineGenerations.get(threadId) ?? 0;
+  }
+
+  private bumpTimelineGeneration(threadId: string): number {
+    const next = this.currentTimelineGeneration(threadId) + 1;
+    this.threadTimelineGenerations.set(threadId, next);
+    this.threadEventRevisions.set(threadId, 0);
+    this.pruneBrowserEventBacklogForThread(threadId);
+    return next;
+  }
+
+  private resetTimelineGeneration(threadId: string): void {
+    this.threadTimelineGenerations.set(threadId, 0);
+    this.threadEventRevisions.set(threadId, 0);
+    this.pruneBrowserEventBacklogForThread(threadId);
+  }
+
+  private isBlockedBacklogEvent(event: BrowserTimelineEvent): boolean {
+    if (event.type !== "codex-event") {
+      return false;
+    }
+    const threadId = browserCodexEventThreadKey(event);
+    const generation = event.event.generation;
+    if (typeof generation === "number" && generation < this.currentTimelineGeneration(threadId) && this.isVisibleCodexEvent(event)) {
+      return true;
+    }
+    return this.isDeletedTurnEvent(event);
+  }
+
+  private pruneBrowserEventBacklogForThread(threadId: string): void {
+    for (let index = this.browserEventBacklog.length - 1; index >= 0; index -= 1) {
+      const event = this.browserEventBacklog[index];
+      if (event.type !== "codex-event" || browserCodexEventThreadKey(event) !== threadId) {
+        continue;
+      }
+      if (this.isBlockedBacklogEvent(event)) {
+        this.browserEventBacklog.splice(index, 1);
+      }
+    }
+  }
+
+  private isVisibleCodexEvent(envelope: BrowserCodexEventEnvelope): boolean {
+    return new Set([
+      "agent_message_delta",
+      "reasoning_delta",
+      "reasoning_started",
+      "plan_delta",
+      "plan.delta",
+      "command_output_delta",
+      "file_output_delta",
+      "tool_output_delta",
+      "turn_diff_updated",
+      "item_updated"
+    ]).has(envelope.event.kind);
+  }
+
+  private isDeletedTurnEvent(envelope: BrowserCodexEventEnvelope): boolean {
+    const event = envelope.event;
+    if (!("threadId" in event) || typeof event.threadId !== "string" || !("turnId" in event)) {
+      return false;
+    }
+    const turnId = typeof event.turnId === "string" ? event.turnId : null;
+    return Boolean(turnId && this.deletedTurnIdsByThread.get(event.threadId)?.has(turnId));
+  }
+
+  private markDeletedTurns(threadId: string, turnIds: string[]): void {
+    if (!turnIds.length) {
+      return;
+    }
+    const deleted = this.deletedTurnIdsByThread.get(threadId) ?? new Set<string>();
+    for (const turnId of turnIds) {
+      deleted.add(turnId);
+    }
+    this.deletedTurnIdsByThread.set(threadId, deleted);
+    this.bumpTimelineGeneration(threadId);
+  }
+
   private recordTimelineOverlay(envelope: BrowserCodexEventEnvelope): void {
     const event = envelope.event;
+    if (this.isBlockedBacklogEvent(envelope)) {
+      return;
+    }
 
     switch (event.kind) {
       case "turn_started":
@@ -2627,7 +2842,7 @@ export class AppServerGateway {
       case "warning":
         if (event.threadId) {
           this.upsertTimelineOverlayItem(event.threadId, null, {
-            id: `${event.threadId}-warning-${Date.now()}`,
+            id: `${event.threadId}-warning-${event.eventId ?? this.browserEventSequence}`,
             role: "error",
             text: event.message
           });
@@ -2651,8 +2866,9 @@ export class AppServerGateway {
   private upsertTimelineOverlayItem(threadId: string, turnId: string | null, item: MobileTimelineItem): void {
     const overlay = this.getTimelineOverlay(threadId);
     const current = overlay.get(item.id);
+    const itemWithMeta = overlayItemWithTurnMeta(item, turnId);
     overlay.set(item.id, {
-      item: current ? mergeOverlayItems(current.item, item) : item,
+      item: current ? mergeOverlayItems(current.item, itemWithMeta) : itemWithMeta,
       turnId,
       updatedAtMs: Date.now()
     });
@@ -2674,8 +2890,11 @@ export class AppServerGateway {
     const current = overlay.get(itemId);
     const currentItem = current?.item;
     const nextItem: MobileTimelineItem = currentItem
-      ? { ...currentItem, text: `${currentItem.text}${delta}`, status: currentItem.status ?? defaults.status }
-      : { id: itemId, ...defaults, text: `${defaults.text}${delta}` };
+      ? overlayItemWithTurnMeta(
+          { ...currentItem, text: `${currentItem.text}${delta}`, status: currentItem.status ?? defaults.status },
+          turnId
+        )
+      : overlayItemWithTurnMeta({ id: itemId, ...defaults, text: `${defaults.text}${delta}` }, turnId);
 
     overlay.set(itemId, {
       item: nextItem,
@@ -2733,6 +2952,22 @@ export class AppServerGateway {
 
   private removeTimelineOverlayItem(threadId: string, itemId: string): void {
     this.timelineOverlays.get(threadId)?.delete(itemId);
+  }
+
+  private clearTimelineOverlayTurns(threadId: string, turnIds: string[]): void {
+    const overlay = this.timelineOverlays.get(threadId);
+    if (!overlay || !turnIds.length) {
+      return;
+    }
+    const deleted = new Set(turnIds);
+    for (const [itemId, entry] of overlay) {
+      if (entry.turnId && deleted.has(entry.turnId)) {
+        overlay.delete(itemId);
+      }
+    }
+    if (!overlay.size) {
+      this.timelineOverlays.delete(threadId);
+    }
   }
 
   private trimTimelineOverlay(overlay: Map<string, TimelineOverlayEntry>): void {
@@ -2838,7 +3073,7 @@ export class AppServerGateway {
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.applyTimelineOverlay(await this.client.readThread(threadId));
+    return this.withTimelineGeneration(this.applyTimelineOverlay(await this.client.readThread(threadId)));
   }
 
   private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
@@ -2850,13 +3085,21 @@ export class AppServerGateway {
     const overlayById = new Map(overlay);
     const usedOverlayIds = new Set<string>();
     const timeline = detail.timeline.map((item) => {
-      const overlayEntry = overlayById.get(item.id);
+      const directOverlayEntry = overlayById.get(item.id);
+      const equivalentOverlayEntry = directOverlayEntry
+        ? null
+        : [...overlayById.entries()].find(
+            ([overlayId, entry]) => !usedOverlayIds.has(overlayId) && equivalentTimelineOutput(item, entry.item)
+          ) ?? null;
+      const overlayEntry = directOverlayEntry ?? equivalentOverlayEntry?.[1] ?? null;
       if (!overlayEntry) {
         return item;
       }
 
-      usedOverlayIds.add(item.id);
-      return shouldUseOverlayTimelineItem(item, overlayEntry.item) ? overlayEntry.item : item;
+      usedOverlayIds.add(directOverlayEntry ? item.id : equivalentOverlayEntry![0]);
+      return shouldUseOverlayTimelineItem(item, overlayEntry.item)
+        ? mergeTimelineTurnMeta(item, overlayEntry.item)
+        : item;
     });
 
     for (const [id, entry] of overlayById) {
@@ -2868,9 +3111,20 @@ export class AppServerGateway {
     return { ...detail, timeline };
   }
 
+  private withTimelineGeneration(detail: MobileThreadDetail): MobileThreadDetail {
+    const generation = this.currentTimelineGeneration(detail.id);
+    const snapshotSequence = this.browserEventSequence;
+    return {
+      ...detail,
+      generation,
+      snapshotSequence,
+      timeline: detail.timeline.map((item) => ({ ...item, generation, snapshotSequence }))
+    };
+  }
+
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.client.resumeThread(threadId);
+    return this.withTimelineGeneration(this.applyTimelineOverlay(await this.client.resumeThread(threadId)));
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -2885,12 +3139,41 @@ export class AppServerGateway {
 
   async forkThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.client.forkThread(threadId);
+    const detail = await this.client.forkThread(threadId);
+    this.timelineOverlays.delete(detail.id);
+    this.deletedTurnIdsByThread.delete(detail.id);
+    this.resetTimelineGeneration(detail.id);
+    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
   }
 
-  async rollbackThread(threadId: string, numTurns: number): Promise<MobileThreadDetail> {
+  async rollbackThread(
+    threadId: string,
+    numTurns: number,
+    options: { expectedDeletedTurnIds?: string[] } = {}
+  ): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.client.rollbackThread(threadId, numTurns);
+    const before = await this.client.readThread(threadId).catch(() => null);
+    const detail = await this.client.rollbackThread(threadId, numTurns);
+    const beforeTurnIds = before ? timelineTurnIds(before.timeline) : [];
+    const afterTurnIds = new Set(timelineTurnIds(detail.timeline));
+    const expectedDeletedTurnIds = uniqueStrings(options.expectedDeletedTurnIds ?? []);
+    const snapshotDeletedTurnIds = beforeTurnIds.filter((turnId) => !afterTurnIds.has(turnId));
+    const overlay = this.timelineOverlays.get(threadId);
+    const overlayTurnIds = new Set(
+      overlay ? [...overlay.values()].map((entry) => entry.turnId).filter((turnId): turnId is string => Boolean(turnId)) : []
+    );
+    const validExpectedDeletedTurnIds = expectedDeletedTurnIds.filter((turnId) => {
+      return !afterTurnIds.has(turnId) && (snapshotDeletedTurnIds.includes(turnId) || overlayTurnIds.has(turnId));
+    });
+    const deletedTurnIds = expectedDeletedTurnIds.length
+      ? uniqueStrings([...snapshotDeletedTurnIds, ...validExpectedDeletedTurnIds])
+      : snapshotDeletedTurnIds.slice(-numTurns);
+    this.markDeletedTurns(threadId, deletedTurnIds);
+    this.clearTimelineOverlayTurns(threadId, deletedTurnIds);
+    if (!deletedTurnIds.length && numTurns > 0) {
+      this.bumpTimelineGeneration(threadId);
+    }
+    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
   }
 
   async setThreadName(threadId: string, name: string): Promise<MobileThreadDetail> {

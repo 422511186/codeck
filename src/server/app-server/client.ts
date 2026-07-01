@@ -655,6 +655,7 @@ function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): Mo
 
   return {
     id: item.id,
+    ...(item.clientId ? { clientUserMessageId: item.clientId } : {}),
     role: "user",
     text,
     ...(imagePaths.length ? { imagePaths } : {})

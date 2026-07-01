@@ -1,0 +1,136 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockListBrowserEventBacklog = vi.fn();
+const mockOnBrowserEvent = vi.fn();
+
+vi.mock("../../src/server/auth", () => ({
+  isRequestAuthenticated: () => true
+}));
+
+vi.mock("../../src/server/app-server/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/server/app-server/runtime")>();
+  return {
+    ...actual,
+    getAppServerGateway: () => ({
+      listBrowserEventBacklog: (...args: unknown[]) => mockListBrowserEventBacklog(...args),
+      onBrowserEvent: (...args: unknown[]) => mockOnBrowserEvent(...args)
+    })
+  };
+});
+
+describe("codex events route", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockListBrowserEventBacklog.mockReset();
+    mockOnBrowserEvent.mockReset();
+    mockOnBrowserEvent.mockReturnValue(() => undefined);
+    mockListBrowserEventBacklog.mockReturnValue({ events: [], gap: false });
+  });
+
+  it("返回 SSE 响应并支持 Last-Event-ID 补发", async () => {
+    mockListBrowserEventBacklog.mockReturnValue({
+      gap: false,
+      events: [
+        {
+          type: "codex-event",
+          event: {
+            kind: "agent_message_delta",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "agent-1",
+            delta: "hello",
+            eventId: "thread-1:1:1:agent_message_delta",
+            sequence: 1,
+            revision: 1
+          }
+        }
+      ]
+    });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(
+      new Request("http://localhost/api/codex/events", {
+        headers: { "Last-Event-ID": "thread-1:0:0:turn_started" },
+        signal: abort.signal
+      })
+    );
+    abort.abort();
+    const body = await response.text();
+
+    expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(response.headers.get("Cache-Control")).toContain("no-cache");
+    expect(mockListBrowserEventBacklog).toHaveBeenCalledWith("thread-1:0:0:turn_started");
+    expect(body).toContain("id: thread-1:1:1:agent_message_delta");
+    expect(body).toContain('"kind":"agent_message_delta"');
+  });
+
+  it("补发不可用时发送 timeline-gap 信号", async () => {
+    mockListBrowserEventBacklog.mockReturnValue({ events: [], gap: true });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(
+      new Request("http://localhost/api/codex/events?lastEventId=thread-1:9:9:agent_message_delta", { signal: abort.signal })
+    );
+    abort.abort();
+    const body = await response.text();
+
+    expect(mockListBrowserEventBacklog).toHaveBeenCalledWith("thread-1:9:9:agent_message_delta");
+    expect(body).toContain('"type":"timeline-gap"');
+    expect(body).toContain('"lastEventId":"thread-1:9:9:agent_message_delta"');
+    expect(body).toContain('"threadId":"thread-1"');
+  });
+
+  it("先订阅实时事件再读取 backlog，避免重连窗口丢事件", async () => {
+    const order: string[] = [];
+    mockOnBrowserEvent.mockImplementation((handler: (event: unknown) => void) => {
+      order.push("subscribe");
+      handler({
+        type: "codex-event",
+        event: {
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "agent-live",
+          delta: "live",
+          eventId: "thread-1:2:2:agent_message_delta",
+          sequence: 2,
+          revision: 2
+        }
+      });
+      return () => undefined;
+    });
+    mockListBrowserEventBacklog.mockImplementation(() => {
+      order.push("backlog");
+      return {
+        gap: false,
+        events: [
+          {
+            type: "codex-event",
+            event: {
+              kind: "agent_message_delta",
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "agent-replay",
+              delta: "replay",
+              eventId: "thread-1:1:1:agent_message_delta",
+              sequence: 1,
+              revision: 1
+            }
+          }
+        ]
+      };
+    });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(new Request("http://localhost/api/codex/events", { signal: abort.signal }));
+    abort.abort();
+    const body = await response.text();
+
+    expect(order).toEqual(["subscribe", "backlog"]);
+    expect(body).toContain("id: thread-1:1:1:agent_message_delta");
+    expect(body).toContain("id: thread-1:2:2:agent_message_delta");
+  });
+});

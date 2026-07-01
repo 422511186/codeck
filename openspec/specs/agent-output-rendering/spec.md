@@ -256,24 +256,30 @@ Web timeline SHALL render every app-server execution-related historical item and
 - **AND** the event MUST NOT disappear without any timeline representation
 
 ### Requirement: Live timeline snapshots preserve streamed output
-running 会话中，HTTP thread snapshot SHALL NOT 无条件覆盖已经通过 WebSocket 追加到 timeline 的 live entries。系统 SHALL 在 running 状态使用 merge 策略，让 agent message、reasoning、command/tool output 按 delta 追加持续可见。
+running 会话中，HTTP thread snapshot SHALL NOT 无条件覆盖已经通过 timeline event stream 追加到 timeline 的 live entries。系统 SHALL 以事件流作为运行中输出主路径；snapshot 仅用于初始化、显式 repair、断线缺口恢复或 turn 完成后的权威替换。任何 snapshot 与事件流合并都 MUST 保留 turn 元数据并遵守幂等规则，避免重复追加 agent message、reasoning、command/tool output。
 
-#### Scenario: startTurn snapshot does not erase live deltas
-- **WHEN** 用户发送消息后 WebSocket 已经追加 agent/reasoning/tool delta
-- **AND** `startTurn` HTTP 响应随后返回一个不包含这些 delta 的 thread snapshot
+#### Scenario: startTurn response does not erase live deltas
+- **WHEN** 用户发送消息后 timeline event stream 已经追加 agent/reasoning/tool delta
+- **AND** `startTurn` HTTP 响应随后返回一个不包含这些 delta 的 thread snapshot 或轻量 turn 状态
 - **THEN** timeline MUST 保留已经追加的 live entries
 - **AND** MUST NOT 通过全量 `setThreadEntries` 清空或回退这些输出
 
-#### Scenario: polling snapshot does not erase live deltas
-- **WHEN** running 会话 polling 返回一个滞后的 thread snapshot
-- **AND** 本地 timeline 已经有更新的 WebSocket delta
-- **THEN** timeline MUST 保留本地 live delta
-- **AND** snapshot 中的新完成项 MAY 替换同 id 的 running entry
+#### Scenario: polling snapshot is not the running main path
+- **WHEN** 会话处于 running 状态且 timeline event stream 正常连接
+- **THEN** 客户端 MUST NOT 高频轮询 `readThread` 来获取完整 timeline
+- **AND** 运行中输出 MUST 由事件流增量更新
+
+#### Scenario: repair snapshot does not duplicate live deltas
+- **WHEN** 断线恢复或事件缺口触发 snapshot repair
+- **AND** 本地 timeline 已经有更新的 event stream delta
+- **THEN** repair 结果 MUST replace 或按 revision 合并当前 timeline
+- **AND** MUST NOT 将 snapshot 已包含的文本与后到旧 delta 重复拼接
 
 #### Scenario: completed snapshot can finalize live entries
 - **WHEN** turn 完成后 snapshot 或 `item_updated` 返回同 id 的完整 agent/reasoning/tool item
 - **THEN** timeline MUST 用完整 item 更新对应 live entry
 - **AND** MUST 保持该 entry 的相对位置稳定
+- **AND** MUST 保留该 entry 的 `turnId` 或等价 turn 标识
 
 ### Requirement: Opening a running thread avoids duplicate immediate reads
 打开会话页时，系统 SHALL 避免对同一个 thread 在首屏 `readThread` 之后立即发起重复 `readThread` polling。running fallback polling SHALL 做去抖或延迟，以 WebSocket 作为实时主路径。
@@ -287,4 +293,117 @@ running 会话中，HTTP thread snapshot SHALL NOT 无条件覆盖已经通过 W
 - **WHEN** 会话仍处于 running 状态且 WebSocket 没有完成 turn
 - **THEN** polling MAY 在后续 interval 触发 `readThread`
 - **AND** polling 结果 MUST 遵守 live timeline merge 规则
+
+### Requirement: Reasoning display is consistent across live and historical paths
+Web timeline SHALL 展示 app-server 已公开发送的 reasoning summary、content 和 delta。实时 reasoning、完成后的 reasoning item、raw response reasoning 和历史 `thread/read` reasoning MUST 映射到同一条 timeline entry 或按稳定 id 合并，不得在刷新、完成或重连后无故消失或重复。
+
+#### Scenario: Live reasoning survives completion
+- **WHEN** reasoning delta 已通过 event stream 显示在 timeline 中
+- **AND** 后续收到 reasoning item completion
+- **THEN** 系统 MUST 用完成项更新同一 reasoning entry
+- **AND** MUST NOT 因完成项文本为空而清空已有公开 reasoning 文本
+
+#### Scenario: Historical reasoning remains visible after reload
+- **WHEN** 用户刷新页面或重新进入会话
+- **AND** app-server 历史中存在公开 reasoning summary/content 或可见 raw response reasoning
+- **THEN** `thread/read` 返回的 timeline MUST 包含可展示的 reasoning entry
+- **AND** 前端 MUST 继续以 reasoning card 展示该内容
+
+#### Scenario: Raw response reasoning does not create duplicates
+- **WHEN** 同一 reasoning 同时通过 reasoning delta 和 raw response completion 到达
+- **THEN** 系统 MUST 使用稳定 item identity 合并它们
+- **AND** timeline MUST NOT 展示两张语义相同的 thinking/reasoning 卡片
+
+### Requirement: Reasoning remains stable across live, completion and repair
+reasoning 输出 SHALL 在 live delta、reasoning started、item completion、raw response completion 和 snapshot repair 之间使用稳定 item identity 合并。完成项文本为空时 MUST NOT 清空已公开显示的 reasoning 文本；repair 后旧 reasoning delta MUST NOT 重复追加。
+
+#### Scenario: Empty reasoning completion preserves live text
+- **WHEN** reasoning delta 已显示文本
+- **AND** 后续 completion item 的 reasoning 文本为空
+- **THEN** timeline MUST 保留已显示 reasoning 文本
+- **AND** reasoning card MAY 标记为完成
+
+#### Scenario: Historical repair keeps reasoning once
+- **WHEN** snapshot repair 返回已完成 reasoning item
+- **AND** 旧 generation 的 reasoning delta 后到
+- **THEN** 前端 MUST 忽略旧 delta
+- **AND** timeline MUST 只显示一张对应 reasoning card
+
+### Requirement: Tool output remains stable across live, completion and repair
+命令、MCP、dynamic tool、file output 等工具输出 SHALL 在 delta、completion item 和 snapshot repair 之间按稳定 item identity 合并。completion item 没有聚合输出时 MUST NOT 清空已流式显示的输出；snapshot 已覆盖的工具输出 delta MUST NOT 重复追加。
+
+#### Scenario: Empty tool completion preserves streamed output
+- **WHEN** command/tool output delta 已显示输出
+- **AND** 后续 completion item 没有聚合输出
+- **THEN** timeline MUST 保留已显示输出
+- **AND** 工具卡片状态 MUST 根据 completion 更新为 success 或 failed
+
+#### Scenario: Replayed tool output is not duplicated
+- **WHEN** snapshot repair 已包含工具输出 `one\ntwo\n`
+- **AND** 补发 delta 再次包含 `two\n`
+- **THEN** timeline MUST NOT 把输出变成 `one\ntwo\ntwo\n`
+
+### Requirement: Completed items update in place
+agent message、reasoning、tool 和 diff 的完成项 SHALL 更新对应 live entry 的内容和状态，不得因为 completion 到达较晚而追加到 timeline 错误位置。
+
+#### Scenario: Agent completion updates live entry
+- **WHEN** agent message delta 已创建 live entry
+- **AND** 后续收到同 item id 的 completed agent message
+- **THEN** 前端 MUST 原位更新该 entry
+- **AND** entry 的 turn metadata MUST 保留
+
+### Requirement: Reasoning and tool output survive snapshot races
+agent reasoning、tool output 和 agent message 在 live stream、snapshot repair、historical reload 之间 SHALL 保持稳定。旧 snapshot 或误触发 repair MUST NOT 删除已经显示且属于当前历史的 reasoning/tool 输出；补发 delta 也 MUST NOT 造成重复显示。
+
+#### Scenario: Historical reasoning is present before stale snapshot returns
+- **WHEN** 页面已从 cache 或 live event 显示当前历史中的 reasoning entry
+- **AND** 一个旧的 initial snapshot 随后返回且不包含该 reasoning entry
+- **THEN** 客户端 MUST NOT 用该旧 snapshot 删除当前历史中的 reasoning entry
+- **AND** historical reload 或后续 repair MUST 仍能显示该 reasoning 内容
+
+#### Scenario: Tool output replay after repair
+- **WHEN** snapshot repair 已包含某 tool output 的完整文本
+- **AND** SSE replay 又补发该 tool output 的旧 delta
+- **THEN** 客户端 MUST 忽略 snapshot 已覆盖的旧 delta
+- **AND** MUST 保留后续真正的新 tail delta
+
+### Requirement: Agent output idempotency does not suppress new history
+agent message、reasoning 和 tool output 的重复抑制 SHALL 区分当前历史 generation。客户端 MUST 保留同一 generation 内 snapshot replay 和 duplicate event 的幂等保护，但 MUST NOT 让 rollback/fork 前旧历史的 revision、event ordering 或 snapshot suppression 状态删除新历史中的合法输出。
+
+#### Scenario: Reasoning item id reused in new generation
+- **WHEN** rewind 或 fork rollback 后新 turn 产生与旧历史相同 `itemId` 的 reasoning output
+- **AND** 新 output 的 revision 小于或等于旧历史记录的 revision
+- **THEN** timeline MUST 显示新 reasoning output
+- **AND** MUST NOT 因旧历史 revision 将其判断为 stale
+
+#### Scenario: Tool output after snapshot generation changes
+- **WHEN** snapshot repair 已覆盖旧 generation 中某 tool output
+- **AND** 新 generation 中同 item id 的 tool output delta 到达
+- **THEN** 客户端 MUST 保留该新 tool delta
+- **AND** MUST NOT 用旧 snapshot suppression 把它当作 replay 丢弃
+
+#### Scenario: Agent message replay in same generation
+- **WHEN** 同一 generation 内 snapshot 已包含某 agent message 的完整文本
+- **AND** SSE replay 补发该 snapshot 已覆盖的旧 delta
+- **THEN** 客户端 MUST 继续忽略该旧 delta
+- **AND** MUST NOT 产生重复输出
+
+### Requirement: Agent output cards are deduplicated within a turn
+agent message、reasoning card 和 tool card SHALL 在同一 turn 内按稳定身份和等价内容去重。不同 turn 中内容相同的输出 MUST 保留为不同 entry。
+
+#### Scenario: Duplicate reasoning card in same turn
+- **WHEN** 同一 turn 产生两条 reasoning entries
+- **AND** 两条 entries 的文本相同或一条文本包含另一条
+- **THEN** timeline MUST 只显示一张 reasoning card
+- **AND** 该 card MUST 使用更完整的文本和完成状态
+
+#### Scenario: Identical agent reply in different turns
+- **WHEN** 两个不同 turn 都回复 `1 + 1 = 2`
+- **THEN** timeline MUST 保留两条 agent message
+- **AND** MUST NOT 因文本相同跨 turn 去重
+
+#### Scenario: Tool output duplicate in same turn
+- **WHEN** 同一 turn 的 tool output 通过 live overlay 和 snapshot 同时出现
+- **AND** `toolKind`、`server`、`tool` 和 output 文本等价
+- **THEN** timeline MUST 只显示一张 tool card
 

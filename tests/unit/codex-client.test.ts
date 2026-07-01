@@ -1418,6 +1418,7 @@ describe("CodexAppServerClient", () => {
     expect(detail.timeline).toEqual([
       {
         id: "item-user-1",
+        clientUserMessageId: "client-user-1",
         turnId: "turn-1",
         turnIndex: 0,
         role: "user",

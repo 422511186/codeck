@@ -88,19 +88,8 @@ describe("codex turn start route", () => {
     );
   });
 
-  it("turn/start 后返回 readThread 提供的空会话详情", async () => {
+  it("turn/start 后不再立即读取完整会话详情", async () => {
     const { POST } = await import("../../src/app/api/codex/turns/start/route");
-    mockReadThread.mockResolvedValueOnce({
-      id: "thread-1",
-      title: "新会话",
-      preview: "",
-      cwd: "C:\\repo",
-      modelProvider: "custom",
-      status: "idle",
-      updatedAt: 1,
-      lastTurnId: null,
-      timeline: []
-    });
 
     const response = await POST(
       new Request("http://localhost/api/codex/turns/start", {
@@ -115,12 +104,9 @@ describe("codex turn start route", () => {
     const json = await response.json();
 
     expect(response.status).toBe(200);
-    expect(mockReadThread).toHaveBeenCalledWith("thread-1");
-    expect(json.thread).toMatchObject({
-      id: "thread-1",
-      timeline: [],
-      lastTurnId: null
-    });
+    expect(mockReadThread).not.toHaveBeenCalled();
+    expect(json).toMatchObject({ ok: true, turnId: "turn-1" });
+    expect(json.thread).toBeUndefined();
   });
 
   it("同一个 clientUserMessageId 的并发重复请求只启动一次 turn", async () => {
@@ -151,7 +137,7 @@ describe("codex turn start route", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(mockStartTurn).toHaveBeenCalledTimes(1);
-    expect(mockReadThread).toHaveBeenCalledTimes(1);
+    expect(mockReadThread).not.toHaveBeenCalled();
     await expect(first.json()).resolves.toMatchObject({ turnId: "turn-1" });
     await expect(second.json()).resolves.toMatchObject({ turnId: "turn-1" });
   });

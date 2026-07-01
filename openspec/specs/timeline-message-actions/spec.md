@@ -84,3 +84,141 @@ timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作
 - **WHEN** 用户触发「回滚到这里」或「从这里 Fork」
 - **THEN** 系统 MUST NOT 承诺或暗示本地工作区文件变更会自动还原
 - **AND** 若界面展示确认或说明文案，MUST 明确该操作只回滚对话历史
+
+### Requirement: Message actions require reliable live turn metadata
+消息级「回滚到这里」和「从这里 Fork」SHALL 只在前端能可靠定位目标 user message 所属 turn，并能可靠计算目标 turn 到当前尾部 turns 数时启用。实时事件、overlay 和 snapshot 混合后的 timeline entries MUST 保留 `turnId`，否则不得执行 rollback/fork。
+
+#### Scenario: Newly streamed turn remains rewind-addressable after completion
+- **WHEN** 用户发送消息并通过 timeline event stream 收到该 turn 的 user、agent、reasoning 或 tool entries
+- **AND** turn 完成后 thread 静止
+- **THEN** 该 turn 的 user message entry MUST 保留 `turnId`
+- **AND** 用户无需刷新页面即可对该 user message 执行「回滚到这里」或「从这里 Fork」
+
+#### Scenario: Missing turn metadata blocks action
+- **WHEN** 用户长按某条 user message 并选择 rewind/fork
+- **AND** 前端无法可靠获得该 user message 的 `turnId` 或无法确认已知尾部范围
+- **THEN** 系统 MUST NOT 调用 rollback 或 fork
+- **AND** MUST 提示用户重新加载或稍后重试
+
+### Requirement: Rewind and fork discard old local tail state
+消息级 rewind/fork 成功后，前端 SHALL 以服务端返回的 thread detail 作为唯一 timeline 来源。旧本地 entries、旧 overlay、旧 event stream delta 和 rollback 前的本地切片 MUST NOT 被重新写入回滚后的 thread timeline。
+
+#### Scenario: Rewind replace ignores local fallback
+- **WHEN** 「回滚到这里」调用 rollback 成功
+- **THEN** 前端 MUST 用 rollback 返回的 thread detail replace 当前 timeline
+- **AND** MUST 仅把目标 user message 文本写入 draft
+- **AND** MUST NOT 把 rollback 前的本地 entriesBeforeTarget 作为 timeline fallback
+
+#### Scenario: Fork rollback initializes new thread from server result
+- **WHEN** 「从这里 Fork」先 fork 后 rollback 成功
+- **THEN** 新 thread 的初始 timeline MUST 来自 rollback 后服务端 thread detail
+- **AND** 原 thread timeline MUST 保持不变
+- **AND** 新 thread MUST 不包含被回滚删除的旧 tail entries
+
+#### Scenario: Deleted tail does not reappear after resend
+- **WHEN** 用户 rewind 成功并修改 draft 后再次发送
+- **THEN** 新 turn 的 event stream MUST 只显示新历史上的输出
+- **AND** 被 rewind 删除的旧 user/agent/reasoning/tool entries MUST NOT 通过 late event 或 overlay 再次显示
+
+### Requirement: Freshly sent user message is rewind-addressable
+用户发送消息后，前端 SHALL 在 `turn/start` 成功返回时把返回的 `turnId` 绑定到对应 optimistic user message。该 user message 在无需刷新页面的情况下 MUST 可参与消息级 rewind/fork 的 turn 计数。
+
+#### Scenario: Rewind immediately after send completes
+- **WHEN** 用户发送消息
+- **AND** `turn/start` 返回 `turnId`
+- **AND** thread 之后进入静止态
+- **THEN** 刚发送的 user message entry MUST 保留该 `turnId`
+- **AND** 用户 MUST 能直接对该消息执行「回滚到这里」
+
+#### Scenario: Server user item confirms local message in place
+- **WHEN** 本地 optimistic user message 已绑定 `turnId`
+- **AND** 后续收到同一 turn 的 server user item
+- **THEN** 前端 MUST 原位替换本地 entry 的 id 和 metadata
+- **AND** MUST NOT 删除本地 entry 后把 server user item 追加到 agent 输出之后
+
+### Requirement: Rewind updates visible input draft immediately
+消息级 rewind 成功后，系统 SHALL 同步更新当前 `ChatInput` 的可见文本状态和持久化草稿。只写 localStorage 但不更新当前输入框 SHALL NOT be sufficient。
+
+#### Scenario: Rewind fills current input
+- **WHEN** 用户点击「回滚到这里」且 rollback 成功
+- **THEN** 底部输入框 MUST 立即显示目标 user message 文本
+- **AND** 用户 MUST 能在不刷新页面的情况下编辑并重新发送
+
+### Requirement: Message actions are disabled without reliable turn metadata
+消息级 rewind/fork 菜单 SHALL 仅在目标 user message 有可靠 `turnId` 且当前已知 timeline 能计算尾部 turns 时启用历史操作。缺少元数据时，UI MUST 不呈现可执行的 rollback/fork 入口，或必须将入口置为不可用并给出反馈。
+
+#### Scenario: Local message has no turn id yet
+- **WHEN** user message 仍是未绑定 `turnId` 的 optimistic entry
+- **THEN** 「回滚到这里」和「从这里 Fork」MUST 不可执行
+- **AND** 系统 MUST NOT 调用 rollback 或 fork API
+
+### Requirement: Fork rollback uses fork-local history metadata
+消息级 fork SHALL 在 fork 后以新 thread 的服务端历史为准计算和标记 rollback 屏障。系统 MUST NOT 假设新 thread 的 turnId 与原 thread 完全相同，除非 app-server 明确保证。
+
+#### Scenario: Forked thread has different turn ids
+- **WHEN** 原 thread fork 后新 thread 的 turnId 与原 thread 不同
+- **AND** 客户端需要在新 thread 上 rollback 到目标消息之前
+- **THEN** 客户端 MUST 使用 fork 返回或新 thread read/resume 结果定位等价目标 turn
+- **AND** MUST NOT 用原 thread 的 turnId 作为新 thread 的唯一删除屏障
+
+### Requirement: Same-text user turns remain distinct
+消息级 rewind/fork 所依赖的 user message 身份 SHALL 以 `clientUserMessageId`、`turnId`、server item id 或等价稳定身份为准。系统 MUST NOT 仅因两个 user message 文本和图片相同，就在不同 turn 之间合并、去重或替换其中任意一条。
+
+#### Scenario: User sends identical prompts in consecutive turns
+- **WHEN** 用户连续两轮发送相同文本
+- **AND** 每轮 `turn/start` 都返回不同 `turnId`
+- **THEN** timeline MUST 同时保留两条 user message
+- **AND** 每条 user message MUST 绑定各自的 `turnId`
+- **AND** rewind/fork MUST 能定位用户实际选择的那一条
+
+### Requirement: Server confirmation does not cross turn boundaries
+server user item 确认 optimistic local user message 时，客户端 SHALL 优先按 `clientUserMessageId` 或 `turnId` 映射原位替换。纯文本 fallback MUST 仅用于未绑定 turn、仍处于 sending 且候选唯一的本地消息；MUST NOT 匹配已经绑定其他 turn 的 sent local message。
+
+#### Scenario: Confirmation for repeated text arrives late
+- **WHEN** timeline 中存在两条相同文本的 local user message
+- **AND** 它们已经绑定不同 `turnId`
+- **AND** 服务端只确认其中一个 turn 的 user item
+- **THEN** 客户端 MUST 只替换同 `turnId` 或同 `clientUserMessageId` 的 local entry
+- **AND** MUST NOT 删除或覆盖另一条相同文本 user message
+
+### Requirement: Fork rollback fails closed when fork-local target is unavailable
+消息级 fork SHALL 在 fork 后基于新 thread 的服务端历史定位等价目标 turn。若无法可靠定位 fork-local 目标，系统 MUST NOT 使用原 thread 的 `numTurns` 猜测 rollback 范围。
+
+#### Scenario: Fork target cannot be resolved
+- **WHEN** fork API 返回的新 thread timeline 无法匹配原目标 user message
+- **THEN** 客户端 MUST NOT 调用 rollback API 删除 forked thread 的 turns
+- **AND** MUST 向用户提示无法定位目标消息，请刷新或稍后重试
+
+### Requirement: Message action rollback barriers use reliable tail turns
+消息级 rewind/fork 传给 rollback 的 deleted-turn hint SHALL 来自当前可验证的尾部 turn 范围。系统 MUST NOT 允许不属于实际 rollback 删除范围的 turn id 成为当前 thread 的 deleted barrier。
+
+#### Scenario: Client hint contains unrelated turn
+- **WHEN** rewind 或 fork rollback 请求携带 `expectedDeletedTurnIds`
+- **AND** 其中某个 turn id 不在本次 rollback 删除的尾部范围内
+- **THEN** 服务端 MUST 忽略该 id 或拒绝请求
+- **AND** 后续该 turn 的合法 timeline event MUST 仍能显示
+
+#### Scenario: Tail live turn is included in rollback hint
+- **WHEN** user message action 删除了包含 live overlay 的尾部 turn
+- **AND** 客户端提供该 turn id 作为 `expectedDeletedTurnIds`
+- **THEN** 服务端 MUST 使用该 id 清理 overlay 和 late-event barrier
+- **AND** 被删除尾部 MUST NOT 在 resend 后重新出现在 timeline
+
+### Requirement: Failed message actions preserve repair opportunities
+消息级 rewind/fork 在本地或 fork-local 目标解析失败时 SHALL 失败关闭，并且 MUST NOT 破坏正在进行的权威 snapshot 或 repair 机会。错误提示可以追加到 timeline，但不得使用户必须刷新页面才能拿回本来即将到达的 turn metadata。
+
+#### Scenario: Local failure while snapshot is pending
+- **WHEN** 初始 `readThread` 或 snapshot repair 正在进行
+- **AND** 用户触发的 rewind/fork 在本地解析阶段失败
+- **THEN** 系统 MUST 显示失败提示
+- **AND** 正在进行的 snapshot/repair MUST 仍可在返回后用于补齐 turn metadata
+
+### Requirement: Rewind resend does not duplicate new turn output
+用户 rewind 后重新发送新消息时，新 turn 的输出 SHALL 按当前历史合并显示。旧 turn 的 late event MUST 被屏蔽；新 turn 中来自 live stream、completion 和 refresh snapshot 的同一输出 MUST NOT 重复显示。
+
+#### Scenario: Rewind then resend same prompt
+- **WHEN** 用户 rewind 到某条消息后重新发送一个新消息
+- **AND** 新 turn 产生 reasoning、tool output 和 agent message
+- **THEN** 每个等价输出 MUST 只显示一次
+- **AND** 刷新页面后 timeline MUST 仍保持不重复
+

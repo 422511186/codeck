@@ -8,6 +8,8 @@ import { getDraft, setDraft } from "../storage/drafts";
 export type ChatInputProps = {
   threadId: string;
   running: boolean;
+  disabled?: boolean;
+  draftOverride?: { text: string; version: number };
   onSend: (text: string, imagePaths: string[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
@@ -31,6 +33,13 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     setText(getDraft(props.threadId));
     setImage(null);
   }, [props.threadId]);
+
+  useEffect(() => {
+    if (!props.draftOverride) {
+      return;
+    }
+    setText(props.draftOverride.text);
+  }, [props.draftOverride?.version]);
 
   useEffect(() => {
     setDraft(props.threadId, text);
@@ -57,7 +66,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   }
 
   async function send(value = text): Promise<void> {
-    if (sendingRef.current || sending || props.running) return;
+    if (sendingRef.current || sending || props.running || props.disabled) return;
     const trimmed = value.trim();
     if (!trimmed) return;
     if (image && image.status !== "ready") return;
@@ -81,7 +90,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
   }
 
-  const disabled = sending || props.running || image?.status === "uploading";
+  const disabled = Boolean(props.disabled) || sending || props.running || image?.status === "uploading";
   const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
 
   function onInlineKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
@@ -137,7 +146,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
             style={textareaStyle}
             disabled={disabled}
           />
-          <button type="button" onClick={() => setFullscreen(true)} aria-label="全屏编辑" style={iconBtn}>
+          <button type="button" onClick={() => setFullscreen(true)} aria-label="全屏编辑" style={iconBtn} disabled={disabled}>
             <ExpandIcon />
           </button>
           <button

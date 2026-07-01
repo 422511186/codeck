@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { useStore } from "../../../web/state/store";
-import { entriesBeforeEntry, rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
+import { rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
@@ -36,7 +36,13 @@ export default function ThreadPage(): JSX.Element {
   const setModel = useStore((s) => s.setModel);
   const setRunning = useStore((s) => s.setRunning);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
+  const bindLocalUserMessageTurn = useStore((s) => s.bindLocalUserMessageTurn);
+  const setTimelineGeneration = useStore((s) => s.setTimelineGeneration);
   const markTurnInterrupted = useStore((s) => s.markTurnInterrupted);
+  const markTurnDeleted = useStore((s) => s.markTurnDeleted);
+  const setActiveThread = useStore((s) => s.setActiveThread);
+  const requestSnapshotRepair = useStore((s) => s.requestSnapshotRepair);
+  const clearSnapshotRepair = useStore((s) => s.clearSnapshotRepair);
   const setPendingRequests = useStore((s) => s.setPendingRequests);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const threadState = useStore((s) => s.threads[threadId]);
@@ -61,16 +67,23 @@ export default function ThreadPage(): JSX.Element {
   const [compactOpen, setCompactOpen] = useState(false);
   const [archiveToast, setArchiveToast] = useState<{ visible: boolean } | null>(null);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
+  const [draftOverride, setDraftOverride] = useState<{ text: string; version: number } | null>(null);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
   const pendingSendKeysRef = useRef(new Set<string>());
+  const mutationEpochRef = useRef(0);
 
   const configuredModel = threadState?.model ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
   const configuredReasoningEffort = threadState?.modelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
   const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
+
+  const bumpMutationEpoch = useCallback(() => {
+    mutationEpochRef.current += 1;
+    return mutationEpochRef.current;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,26 +124,32 @@ export default function ThreadPage(): JSX.Element {
       } else {
         setThreadEntries(targetThreadId, entries, null);
       }
+      if (typeof td.generation === "number") {
+        setTimelineGeneration(targetThreadId, td.generation);
+      }
       if (td.model) {
         setModel(targetThreadId, td.model, td.reasoningEffort ?? null);
       }
       setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
-    [threadId, setThreadEntries, mergeThreadEntries, setModel, setActiveTurnId]
+    [threadId, setThreadEntries, mergeThreadEntries, setTimelineGeneration, setModel, setActiveTurnId]
   );
 
   useEffect(() => {
+    setActiveThread(threadId);
     ensureThread(threadId);
     const savedMode = loadJson<ChatMode | null>(threadModeKey(threadId), null);
     if (savedMode) {
       setMode(threadId, savedMode);
     }
     let cancelled = false;
+    const requestEpoch = mutationEpochRef.current;
     setLoading(true);
     (async () => {
       try {
         const td = await codex.readThread(threadId);
         if (cancelled) return;
+        if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail(td, "replace");
         setRunning(threadId, isThreadRunningStatus(td.status));
       } catch (err) {
@@ -143,8 +162,33 @@ export default function ThreadPage(): JSX.Element {
     })();
     return () => {
       cancelled = true;
+      setActiveThread(null);
     };
-  }, [threadId, ensureThread, applyThreadDetail, setMode, setRunning]);
+  }, [threadId, ensureThread, applyThreadDetail, setMode, setRunning, setActiveThread]);
+
+  useEffect(() => {
+    if (!threadState?.repairRequestedAt) return;
+    let cancelled = false;
+    const requestEpoch = mutationEpochRef.current;
+    (async () => {
+      try {
+        const td = await codex.readThread(threadId);
+        if (cancelled) return;
+        if (requestEpoch !== mutationEpochRef.current) {
+          requestSnapshotRepair(threadId);
+          return;
+        }
+        applyThreadDetail(td, "replace");
+        setRunning(threadId, isThreadRunningStatus(td.status));
+        clearSnapshotRepair(threadId);
+      } catch {
+        // Keep the current cache visible; the next stream gap or manual refresh can retry.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, threadState?.repairRequestedAt, applyThreadDetail, setRunning, requestSnapshotRepair, clearSnapshotRepair]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -170,28 +214,6 @@ export default function ThreadPage(): JSX.Element {
     };
   }, [threadId, setPendingRequests]);
 
-  useEffect(() => {
-    if (!threadState?.running) return;
-
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const td = await codex.readThread(threadId);
-        if (cancelled) return;
-        applyThreadDetail(td, "merge");
-        setRunning(threadId, isThreadRunningStatus(td.status));
-      } catch {
-        // WebSocket remains the primary live path; polling is only a fallback.
-      }
-    };
-
-    const interval = window.setInterval(refresh, 2_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [threadId, threadState?.running, applyThreadDetail, setRunning]);
-
   const onScroll = useCallback(
     async (event: React.UIEvent<HTMLDivElement>) => {
       const el = event.currentTarget;
@@ -216,12 +238,19 @@ export default function ThreadPage(): JSX.Element {
 
   const onSend = useCallback(
     async (text: string, imagePaths: string[]) => {
-      if (!detail) return;
+      const currentDetail =
+        detail ??
+        (threadState?.entries.length
+          ? cachedThreadDetail(threadId, threadState.running, threadState.activeTurnId)
+          : null);
+      if (!currentDetail) return;
       const sendKey = sendPayloadKey(text, imagePaths);
       if (pendingSendKeysRef.current.has(sendKey)) return;
       pendingSendKeysRef.current.add(sendKey);
+      const localUserMessageId = uniqueTimelineId("local-user");
       const optimisticEntry: TimelineEntry = {
-        id: `local-user-${Date.now()}`,
+        id: localUserMessageId,
+        clientUserMessageId: localUserMessageId,
         createdAt: Date.now(),
         body: {
           kind: "user-message",
@@ -231,9 +260,11 @@ export default function ThreadPage(): JSX.Element {
         }
       };
       appendEntries(threadId, [optimisticEntry]);
+      bumpMutationEpoch();
       setRunning(threadId, true);
       try {
-        if (detail.status === "notLoaded") {
+        const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
+        if (currentDetail.status === "notLoaded") {
           const resumed = await codex.resumeThread(threadId);
           setDetail(resumed);
         }
@@ -244,7 +275,7 @@ export default function ThreadPage(): JSX.Element {
             : undefined;
         const startInput = {
           threadId,
-          clientUserMessageId: optimisticEntry.id,
+          clientUserMessageId,
           text,
           imagePaths,
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
@@ -263,15 +294,21 @@ export default function ThreadPage(): JSX.Element {
           setDetail(resumed);
           started = await codex.startTurn(startInput);
         }
-        setActiveTurnId(threadId, started.turnId);
-        applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
-        setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
-        const serverHasUserMessage = started.thread.timeline.some(
+        bindLocalUserMessageTurn(threadId, clientUserMessageId, started.turnId);
+        if (started.thread) {
+          applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
+          setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
+        } else if (useStore.getState().threads[threadId]?.running) {
+          setActiveTurnId(threadId, started.turnId);
+        }
+        const serverHasUserMessage = started.thread?.timeline.some(
           (item) => item.role === "user" && item.text.trim() === text.trim()
-        );
+        ) ?? false;
         if (!serverHasUserMessage) {
           replaceOrAddEntry(threadId, {
             ...optimisticEntry,
+            turnId: started.turnId,
+            clientUserMessageId,
             body: {
               kind: "user-message",
               text,
@@ -280,9 +317,11 @@ export default function ThreadPage(): JSX.Element {
             }
           });
         }
-        setRunning(threadId, isThreadRunningStatus(started.thread.status));
+        if (started.thread) {
+          setRunning(threadId, isThreadRunningStatus(started.thread.status));
+        }
         // Auto-name thread after first user message
-        if ((!detail.title || detail.title === "新会话") && text.trim()) {
+        if ((!currentDetail.title || currentDetail.title === "新会话") && text.trim()) {
           try {
             const firstLine = text.split("\n")[0].slice(0, 80);
             const updated = await codex.renameThread(threadId, firstLine);
@@ -317,6 +356,9 @@ export default function ThreadPage(): JSX.Element {
     [
       detail,
       threadId,
+      threadState?.entries,
+      threadState?.running,
+      threadState?.activeTurnId,
       effectiveModel,
       effectiveReasoningEffort,
       effectiveReasoningSummary,
@@ -327,7 +369,9 @@ export default function ThreadPage(): JSX.Element {
       applyThreadDetail,
       replaceOrAddEntry,
       setRunning,
-      setActiveTurnId
+      setActiveTurnId,
+      bindLocalUserMessageTurn,
+      bumpMutationEpoch
     ]
   );
 
@@ -343,7 +387,7 @@ export default function ThreadPage(): JSX.Element {
     } catch (err) {
       appendEntries(threadId, [
         {
-          id: `interrupt-error-${Date.now()}`,
+          id: uniqueTimelineId("interrupt-error"),
           createdAt: Date.now(),
           body: { kind: "error", text: `中断失败：${errorMessage(err)}` }
         }
@@ -365,11 +409,10 @@ export default function ThreadPage(): JSX.Element {
       const entries = threadState?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
       const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
-      const entriesBeforeTarget = target ? entriesBeforeEntry(entries, target) : null;
-      if (!numTurns) {
+      if (!target || !numTurns) {
         appendEntries(threadId, [
           {
-            id: `rewind-error-${Date.now()}`,
+            id: uniqueTimelineId("rewind-error"),
             createdAt: Date.now(),
             body: { kind: "error", text: "无法定位这条消息所属的 turn，请刷新后重试。" }
           }
@@ -378,25 +421,27 @@ export default function ThreadPage(): JSX.Element {
       }
 
       try {
-        const rolledBack = await rollbackThreadWithResume(threadId, numTurns);
-        const rolledBackEntries = threadDetailEntries(rolledBack);
-        const visibleEntries = moreCompleteEntries(
-          target ? entriesBeforeEntry(rolledBackEntries, target) : null,
-          entriesBeforeTarget
-        );
-        applyThreadDetail(rolledBack, "replace", threadId, visibleEntries);
-        setDraft(threadId, target?.body.kind === "user-message" ? target.body.text : entry.body.text);
+        bumpMutationEpoch();
+        const expectedDeletedTurnIds = tailTurnIdsForRollback(entries, target, numTurns);
+        const rolledBack = await rollbackThreadWithResume(threadId, numTurns, expectedDeletedTurnIds);
+        for (const turnId of expectedDeletedTurnIds) {
+          markTurnDeleted(threadId, turnId);
+        }
+        applyThreadDetail(rolledBack, "replace");
+        const draftText = target.body.kind === "user-message" ? target.body.text : entry.body.text;
+        setDraft(threadId, draftText);
+        setDraftOverride({ text: draftText, version: Date.now() });
       } catch (err) {
         appendEntries(threadId, [
           {
-            id: `rewind-error-${Date.now()}`,
+            id: uniqueTimelineId("rewind-error"),
             createdAt: Date.now(),
             body: { kind: "error", text: `回滚失败：${errorMessage(err)}` }
           }
         ]);
       }
     },
-    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries]
+    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, markTurnDeleted, bumpMutationEpoch]
   );
 
   const forkFromMessage = useCallback(
@@ -405,11 +450,10 @@ export default function ThreadPage(): JSX.Element {
       const entries = threadState?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
       const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
-      const entriesBeforeTarget = target ? entriesBeforeEntry(entries, target) : null;
-      if (!numTurns) {
+      if (!target || !numTurns) {
         appendEntries(threadId, [
           {
-            id: `fork-error-${Date.now()}`,
+            id: uniqueTimelineId("fork-error"),
             createdAt: Date.now(),
             body: { kind: "error", text: "无法定位这条消息所属的 turn，请刷新后重试。" }
           }
@@ -419,26 +463,49 @@ export default function ThreadPage(): JSX.Element {
 
       try {
         const forked = await codex.forkThread(threadId);
-        const rolledBack = await rollbackThreadWithResume(forked.id, numTurns);
-        const rolledBackEntries = threadDetailEntries(rolledBack);
-        const visibleEntries = moreCompleteEntries(
-          target ? entriesBeforeEntry(rolledBackEntries, target) : null,
-          entriesBeforeTarget
-        );
-        applyThreadDetail(rolledBack, "replace", forked.id, visibleEntries);
-        setDraft(forked.id, target?.body.kind === "user-message" ? target.body.text : entry.body.text);
+        const forkEntries = "timeline" in forked && Array.isArray(forked.timeline) ? threadDetailEntries(forked) : [];
+        const forkTarget = forkEntries.length ? resolveEquivalentUserMessage(forkEntries, target) : null;
+        if (!forkTarget) {
+          appendEntries(threadId, [
+            {
+              id: uniqueTimelineId("fork-error"),
+              createdAt: Date.now(),
+              body: { kind: "error", text: "无法在 Fork 后的会话中定位这条消息，请刷新后重试。" }
+            }
+          ]);
+          return;
+        }
+        const forkNumTurns = rollbackTurnsForEntry(forkEntries, forkTarget);
+        if (!forkNumTurns) {
+          appendEntries(threadId, [
+            {
+              id: uniqueTimelineId("fork-error"),
+              createdAt: Date.now(),
+              body: { kind: "error", text: "无法计算 Fork 后的回滚范围，请刷新后重试。" }
+            }
+          ]);
+          return;
+        }
+        const expectedDeletedTurnIds = tailTurnIdsForRollback(forkEntries, forkTarget, forkNumTurns);
+        bumpMutationEpoch();
+        const rolledBack = await rollbackThreadWithResume(forked.id, forkNumTurns, expectedDeletedTurnIds);
+        for (const turnId of expectedDeletedTurnIds) {
+          markTurnDeleted(forked.id, turnId);
+        }
+        applyThreadDetail(rolledBack, "replace", forked.id);
+        setDraft(forked.id, target.body.kind === "user-message" ? target.body.text : entry.body.text);
         router.push(`/threads/${forked.id}`);
       } catch (err) {
         appendEntries(threadId, [
           {
-            id: `fork-error-${Date.now()}`,
+            id: uniqueTimelineId("fork-error"),
             createdAt: Date.now(),
             body: { kind: "error", text: `Fork 失败：${errorMessage(err)}` }
           }
         ]);
       }
     },
-    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, router]
+    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, markTurnDeleted, router, bumpMutationEpoch]
   );
 
   const openModelPicker = useCallback(async () => {
@@ -506,7 +573,14 @@ export default function ThreadPage(): JSX.Element {
     [threadId, setMode, effectiveModel, effectiveReasoningEffort]
   );
 
-  if (error) {
+  const cachedEntries = threadState?.entries ?? [];
+  const visibleDetail =
+    detail ??
+    (cachedEntries.length
+      ? cachedThreadDetail(threadId, threadState?.running ?? false, threadState?.activeTurnId ?? null)
+      : null);
+
+  if (error && !visibleDetail) {
     return (
       <main style={{ padding: 24 }}>
         <p style={{ color: "var(--cw-danger)" }}>{error}</p>
@@ -517,7 +591,7 @@ export default function ThreadPage(): JSX.Element {
     );
   }
 
-  if (loading || !detail) {
+  if (!visibleDetail) {
     return (
       <main style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100dvh" }}>
         <span style={{ color: "var(--cw-fg-muted)" }}>载入中…</span>
@@ -529,7 +603,7 @@ export default function ThreadPage(): JSX.Element {
   const modelId = effectiveModel;
   const running = threadState?.running ?? false;
   const plan = threadState?.plan ?? [];
-  const entries = threadState?.entries ?? [];
+  const entries = cachedEntries;
 
   return (
     <main style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
@@ -548,7 +622,7 @@ export default function ThreadPage(): JSX.Element {
               overflow: "hidden"
             }}
           >
-            {detail.title || "新会话"}
+            {visibleDetail.title || "新会话"}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -633,6 +707,8 @@ export default function ThreadPage(): JSX.Element {
       <ChatInput
         threadId={threadId}
         running={running}
+        disabled={!visibleDetail}
+        draftOverride={draftOverride ?? undefined}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
@@ -674,7 +750,7 @@ export default function ThreadPage(): JSX.Element {
 
       {renameOpen ? (
         <RenameDialog
-          initial={detail.title || ""}
+          initial={visibleDetail.title || ""}
           onClose={() => setRenameOpen(false)}
           onSubmit={async (name) => {
             try {
@@ -997,19 +1073,55 @@ function sendPayloadKey(text: string, imagePaths: string[]): string {
 
 function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
   return td.timeline.map((item, idx) =>
-    timelineItemToEntry(item, td.updatedAt - (td.timeline.length - idx))
+    timelineItemToEntry(
+      {
+        ...item,
+        ...(typeof item.generation !== "number" && typeof td.generation === "number" ? { generation: td.generation } : {}),
+        ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
+          ? { snapshotSequence: td.snapshotSequence }
+          : {})
+      },
+      td.updatedAt - (td.timeline.length - idx)
+    )
   );
 }
 
-async function rollbackThreadWithResume(threadId: string, numTurns: number): Promise<ThreadDetail> {
+function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: string | null): ThreadDetail {
+  return {
+    id: threadId,
+    title: "会话",
+    preview: "",
+    cwd: "",
+    modelProvider: "",
+    status: running ? "active" : "idle",
+    updatedAt: Date.now(),
+    lastTurnId: activeTurnId,
+    generation: 0,
+    timeline: []
+  };
+}
+
+function uniqueTimelineId(prefix: string): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+async function rollbackThreadWithResume(
+  threadId: string,
+  numTurns: number,
+  expectedDeletedTurnIds: string[] = []
+): Promise<ThreadDetail> {
   try {
-    return await codex.rollbackThread(threadId, numTurns);
+    return await codex.rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
   } catch (err) {
     if (!isThreadNotFoundError(err)) {
       throw err;
     }
     await codex.resumeThread(threadId);
-    return codex.rollbackThread(threadId, numTurns);
+    return codex.rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
   }
 }
 
@@ -1041,17 +1153,57 @@ function resolveCurrentUserMessage(entries: TimelineEntry[], candidate: Timeline
   return matches.length === 1 ? matches[0] : null;
 }
 
-function moreCompleteEntries(
-  preferred: TimelineEntry[] | null,
-  fallback: TimelineEntry[] | null
-): TimelineEntry[] {
-  if (!preferred) {
-    return fallback ?? [];
+function resolveEquivalentUserMessage(entries: TimelineEntry[], target: TimelineEntry): TimelineEntry | null {
+  if (target.clientUserMessageId) {
+    const byClientId = entries.find(
+      (entry) => entry.clientUserMessageId === target.clientUserMessageId && entry.body.kind === "user-message"
+    );
+    if (byClientId) {
+      return byClientId;
+    }
   }
-  if (!fallback) {
-    return preferred;
+
+  if (target.turnIndex !== undefined) {
+    const byTurnIndex = entries.find(
+      (entry) =>
+        entry.turnIndex === target.turnIndex &&
+        entry.body.kind === "user-message" &&
+        target.body.kind === "user-message" &&
+        entry.body.text.trim() === target.body.text.trim()
+    );
+    if (byTurnIndex) {
+      return byTurnIndex;
+    }
   }
-  return preferred.length >= fallback.length ? preferred : fallback;
+
+  if (target.body.kind !== "user-message") {
+    return null;
+  }
+  const targetText = target.body.text.trim();
+  const matches = entries.filter(
+    (entry) => entry.body.kind === "user-message" && entry.body.text.trim() === targetText
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function tailTurnIdsForRollback(entries: TimelineEntry[], target: TimelineEntry, numTurns: number): string[] {
+  if (!target.turnId) {
+    return [];
+  }
+  const turnIds: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.turnId || seen.has(entry.turnId)) {
+      continue;
+    }
+    seen.add(entry.turnId);
+    turnIds.push(entry.turnId);
+  }
+  const targetIndex = turnIds.indexOf(target.turnId);
+  if (targetIndex < 0) {
+    return [];
+  }
+  return turnIds.slice(targetIndex, targetIndex + numTurns);
 }
 
 function errorMessage(error: unknown): string {

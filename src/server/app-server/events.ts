@@ -218,9 +218,16 @@ export type BrowserCodexEvent =
       itemTypeResults: unknown[];
     };
 
+export type BrowserTimelineEventIdentity = {
+  eventId: string;
+  sequence: number;
+  revision: number;
+  generation: number;
+};
+
 export type BrowserCodexEventEnvelope = {
   type: "codex-event";
-  event: BrowserCodexEvent;
+  event: BrowserCodexEvent & Partial<BrowserTimelineEventIdentity>;
 };
 
 type DeltaParams = {
@@ -310,7 +317,12 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   }
 
   const metadata = isRecord(value.metadata) ? value.metadata : null;
-  const id = typeof value.call_id === "string" ? value.call_id : `${value.type}-${metadata?.turn_id ?? "item"}`;
+  const id =
+    typeof value.id === "string"
+      ? value.id
+      : typeof value.call_id === "string"
+        ? value.call_id
+        : `${value.type}-${metadata?.turn_id ?? "item"}`;
 
   if (value.type === "reasoning") {
     const summary = Array.isArray(value.summary)
@@ -326,7 +338,8 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
     return {
       id,
       role: "reasoning",
-      text: [...summary, ...content].join("\n")
+      text: [...summary, ...content].join("\n"),
+      done: true
     };
   }
 

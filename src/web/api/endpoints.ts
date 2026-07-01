@@ -135,7 +135,7 @@ export type StartTurnInput = {
   collaborationMode?: CollaborationModePayload;
 };
 
-export type StartTurnResult = { turnId: string; thread: ThreadDetail };
+export type StartTurnResult = { turnId: string; thread?: ThreadDetail };
 
 export async function startTurn(input: StartTurnInput): Promise<StartTurnResult> {
   const data = await api<StartTurnResult>("/api/codex/turns/start", {
@@ -152,10 +152,14 @@ export async function interruptTurn(threadId: string, turnId?: string): Promise<
   });
 }
 
-export async function rollbackThread(threadId: string, numTurns = 1): Promise<ThreadDetail> {
+export async function rollbackThread(
+  threadId: string,
+  numTurns = 1,
+  options?: { expectedDeletedTurnIds?: string[] }
+): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/rollback`,
-    { method: "POST", body: { numTurns } }
+    { method: "POST", body: { numTurns, ...(options?.expectedDeletedTurnIds ? { expectedDeletedTurnIds: options.expectedDeletedTurnIds } : {}) } }
   );
   return data.thread;
 }

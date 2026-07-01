@@ -3,6 +3,7 @@ import type { UpgradeHandler as NextUpgradeHandler } from "next/dist/server/next
 import { WebSocketServer } from "ws";
 import type { BrowserCodexEventEnvelope } from "./app-server/events";
 import type { BrowserServerRequestEvent } from "./app-server/pending-requests";
+import type { BrowserTimelineEvent } from "./app-server/runtime";
 import type { AppServerStatus } from "./app-server/transport";
 
 export type BrowserEvent =
@@ -14,7 +15,7 @@ export type BrowserEvent =
 type BrowserWebSocketOptions = {
   isAuthenticated(cookie: string | undefined): boolean;
   getAppServerStatus(): AppServerStatus;
-  subscribeToAppServerEvents(handler: (event: BrowserCodexEventEnvelope | BrowserServerRequestEvent) => void): () => void;
+  subscribeToAppServerEvents(handler: (event: BrowserTimelineEvent) => void): () => void;
 };
 
 export function attachBrowserWebSocket(

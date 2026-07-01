@@ -23,6 +23,9 @@ export type TimelineItem = {
   id: string;
   turnId?: string;
   turnIndex?: number;
+  clientUserMessageId?: string;
+  generation?: number;
+  snapshotSequence?: number;
   role: TimelineRole;
   text: string;
   done?: boolean;
@@ -39,6 +42,8 @@ export type TimelineItem = {
 
 export type ThreadDetail = ThreadSummary & {
   lastTurnId: string | null;
+  generation?: number;
+  snapshotSequence?: number;
   timeline: TimelineItem[];
   model?: string | null;
   reasoningEffort?: string | null;

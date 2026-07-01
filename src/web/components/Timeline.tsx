@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { TimelineEntry } from "../state/timeline";
+import { rollbackTurnsForEntry, type TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest } from "../api/types";
 import { Markdown } from "./Markdown";
 import { CommandCard } from "./cards/CommandCard";
@@ -40,6 +40,7 @@ export function Timeline({
           <TimelineRow
             key={entry.id}
             entry={entry}
+            entries={entries}
             running={running}
             onResendUser={onResendUser}
             onRewindToMessage={onRewindToMessage}
@@ -64,6 +65,7 @@ export function Timeline({
 
 function TimelineRow({
   entry,
+  entries,
   running,
   onResendUser,
   onRewindToMessage,
@@ -71,6 +73,7 @@ function TimelineRow({
   onPreviewImage
 }: {
   entry: TimelineEntry;
+  entries: TimelineEntry[];
   running: boolean;
   onResendUser?: (text: string) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
@@ -83,6 +86,7 @@ function TimelineRow({
       return (
         <UserMessage
           entry={entry}
+          actionAvailable={!running && isReliableMessageActionTarget(entries, entry)}
           running={running}
           onResend={() => onResendUser?.(body.text)}
           onRewind={() => onRewindToMessage?.(entry)}
@@ -113,9 +117,20 @@ function TimelineRow({
   }
 }
 
+function isReliableMessageActionTarget(entries: TimelineEntry[], entry: TimelineEntry): boolean {
+  if (entry.body.kind !== "user-message" || !entry.turnId || rollbackTurnsForEntry(entries, entry) === null) {
+    return false;
+  }
+  const userEntriesForTurn = entries.filter(
+    (candidate) => candidate.turnId === entry.turnId && candidate.body.kind === "user-message"
+  );
+  return userEntriesForTurn.length === 1 && userEntriesForTurn[0]?.id === entry.id;
+}
+
 function UserMessage({
   entry,
   running,
+  actionAvailable,
   onResend,
   onRewind,
   onFork,
@@ -123,6 +138,7 @@ function UserMessage({
 }: {
   entry: TimelineEntry;
   running: boolean;
+  actionAvailable: boolean;
   onResend: () => void;
   onRewind: () => void | Promise<void>;
   onFork: () => void | Promise<void>;
@@ -206,7 +222,7 @@ function UserMessage({
                 setMenuOpen(false);
               }}
             />
-            {!running ? (
+            {!running && actionAvailable ? (
               <>
                 <MessageSheetItem
                   label="回滚到这里"
