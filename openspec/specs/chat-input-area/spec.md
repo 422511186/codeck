@@ -33,21 +33,27 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 系统 MUST 触发标准发送流程
 - **AND** 全屏编辑器 MUST 关闭
 
-### Requirement: 普通输入框回车发送
-会话页底部普通输入框 SHALL 支持按 `Enter` 触发标准发送流程；全屏编辑器 SHALL 继续把 `Enter` 作为换行输入。
+### Requirement: 普通输入框回车不发送
+会话页底部普通输入框 SHALL NOT 使用 `Enter` 触发标准发送流程；`Enter` MUST 保持文本输入行为，不得作为发送快捷键。全屏编辑器 SHALL 继续把 `Enter` 作为换行输入。
 
-#### Scenario: 普通输入框回车发送
+#### Scenario: 普通输入框回车不发送
 - **WHEN** thread 静止且普通输入框包含可发送文本
 - **AND** 用户在普通输入框按下 `Enter`
-- **THEN** 系统 MUST 阻止默认换行
-- **AND** MUST 触发标准发送流程
-- **AND** 成功发送后 MUST 清空输入框和对应草稿
+- **THEN** 系统 MUST NOT 触发标准发送流程
+- **AND** MUST NOT 清空输入框或对应草稿
+- **AND** MUST NOT 阻止输入框的默认回车输入行为
 
 #### Scenario: 普通输入框不可发送时按回车
 - **WHEN** 普通输入框为空白、图片正在上传、仅有图片无文本或 thread 正在运行
 - **AND** 用户按下 `Enter`
 - **THEN** 系统 MUST NOT 触发发送
 - **AND** MUST 保持现有内容和控件状态
+
+#### Scenario: 普通输入框发送按钮发送
+- **WHEN** thread 静止且普通输入框包含可发送文本
+- **AND** 用户点击底部 composer 的「发送」按钮
+- **THEN** 系统 MUST 触发标准发送流程
+- **AND** 成功发送后 MUST 清空输入框和对应草稿
 
 #### Scenario: 全屏编辑器回车仍换行
 - **WHEN** 用户在全屏编辑器中按下 `Enter`

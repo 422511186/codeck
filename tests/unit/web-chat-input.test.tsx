@@ -119,18 +119,19 @@ describe("ChatInput", () => {
     expect(onInterrupt).toHaveBeenCalled();
   });
 
-  it("sends with Enter from the inline composer and clears the draft", async () => {
+  it("does not send with Enter from the inline composer", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderInput({ onSend });
 
     const composer = screen.getByPlaceholderText("输入消息");
     await user.type(composer, "hello from keyboard");
-    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+    const notPrevented = fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+    fireEvent.change(composer, { target: { value: "hello from keyboard\n" } });
 
-    expect(onSend).toHaveBeenCalledWith("hello from keyboard", []);
-    await waitFor(() => expect(composer).toHaveValue(""));
-    expect(localStorage.getItem("codex-web:drafts")).toBe("{}");
+    expect(notPrevented).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("hello from keyboard\n");
   });
 
   it("does not submit twice while the first send is still pending", async () => {
@@ -154,12 +155,12 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
-  it("does not send with Enter when the inline composer cannot send", async () => {
+  it("does not send with Enter from the inline composer in any send state", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { container, rerender, props } = renderInput({ onSend });
 
     const blankComposer = screen.getByPlaceholderText("输入消息");
-    fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" });
+    expect(fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" })).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
 
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -169,7 +170,7 @@ describe("ChatInput", () => {
     await waitFor(() => expect(mockUploadImage).toHaveBeenCalled());
     await waitFor(() => expect(container.querySelector("img")).toBeInTheDocument());
 
-    fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" });
+    expect(fireEvent.keyDown(blankComposer, { key: "Enter", code: "Enter" })).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
 
     rerender(<ChatInput {...props} running />);

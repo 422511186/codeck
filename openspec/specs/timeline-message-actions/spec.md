@@ -45,7 +45,7 @@ timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作
 #### Scenario: 回滚不自动发送
 - **WHEN** 用户点击「回滚到这里」且 rollback 成功
 - **THEN** 系统 MUST NOT 自动调用 `POST /api/codex/turns/start`
-- **AND** MUST 等待用户再次点击发送或按发送快捷操作
+- **AND** MUST 等待用户再次点击发送按钮
 
 #### Scenario: 无法定位所属 turn
 - **WHEN** 用户点击「回滚到这里」
@@ -221,4 +221,3 @@ server user item 确认 optimistic local user message 时，客户端 SHALL 优�
 - **AND** 新 turn 产生 reasoning、tool output 和 agent message
 - **THEN** 每个等价输出 MUST 只显示一次
 - **AND** 刷新页面后 timeline MUST 仍保持不重复
-

@@ -93,14 +93,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const disabled = Boolean(props.disabled) || sending || props.running || image?.status === "uploading";
   const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
 
-  function onInlineKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    if (canSend) {
-      void send();
-    }
-  }
-
   if (props.running) {
     return (
       <div style={barStyle}>
@@ -140,7 +132,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            onKeyDown={onInlineKeyDown}
             placeholder="输入消息"
             rows={1}
             style={textareaStyle}
