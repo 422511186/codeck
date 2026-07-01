@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ProjectThreadsPage from "../../src/app/projects/[projectId]/page";
 
@@ -36,13 +36,17 @@ const mockStartThread = vi.fn();
 const mockUpdateThreadSettings = vi.fn();
 const mockReadSettings = vi.fn();
 const mockCollaborationModes = vi.fn();
+const mockArchiveThread = vi.fn();
+const mockUnarchiveThread = vi.fn();
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     listThreadsForCwd: (...args: unknown[]) => mockListThreadsForCwd(...args),
     startThread: (...args: unknown[]) => mockStartThread(...args),
     settings: () => mockReadSettings(),
     collaborationModes: () => mockCollaborationModes(),
-    updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args)
+    updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args),
+    archiveThread: (...args: unknown[]) => mockArchiveThread(...args),
+    unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args)
   }
 }));
 
@@ -70,6 +74,10 @@ describe("ProjectThreadsPage", () => {
       { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
       { name: "Ask", mode: "ask", model: null, reasoningEffort: null }
     ]);
+    mockArchiveThread.mockClear();
+    mockArchiveThread.mockResolvedValue(undefined);
+    mockUnarchiveThread.mockClear();
+    mockUnarchiveThread.mockResolvedValue({});
     mockSaveJson.mockClear();
     mockLoadSettings.mockReturnValue({ defaultMode: "build", defaultModel: null });
   });
@@ -258,6 +266,259 @@ describe("ProjectThreadsPage", () => {
     expect(mockPush).toHaveBeenCalledWith("/threads/t1");
   });
 
+  it("should open thread action sheet on long press without navigating", async () => {
+    mockListThreadsForCwd.mockResolvedValue([
+      {
+        id: "t1",
+        title: "Long press thread",
+        preview: "Preview",
+        updatedAt: Date.now(),
+        status: "idle"
+      }
+    ]);
+
+    render(<ProjectThreadsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Long press thread")).toBeInTheDocument();
+    });
+
+    const threadRow = screen.getByText("Long press thread").closest("li");
+    triggerLongPress(threadRow!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
+    });
+
+    threadRow!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("should cancel thread long press when pointer moves like list scrolling", async () => {
+    mockListThreadsForCwd.mockResolvedValue([
+      {
+        id: "t-scroll",
+        title: "Scroll cancel target",
+        preview: "Preview",
+        updatedAt: Date.now(),
+        status: "idle"
+      }
+    ]);
+
+    render(<ProjectThreadsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Scroll cancel target")).toBeInTheDocument();
+    });
+
+    const threadRow = screen.getByText("Scroll cancel target").closest("li")!;
+    vi.useFakeTimers();
+    threadRow.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 10
+      })
+    );
+    threadRow.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 30
+      })
+    );
+    act(() => {
+      vi.advanceTimersByTime(501);
+    });
+    vi.useRealTimers();
+
+    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("should archive active thread from long press sheet and remove it from current list", async () => {
+    const user = userEvent.setup();
+    mockListThreadsForCwd.mockResolvedValue([
+      {
+        id: "t-active",
+        title: "Active archive target",
+        preview: "Preview",
+        updatedAt: Date.now(),
+        status: "idle"
+      }
+    ]);
+
+    render(<ProjectThreadsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Active archive target")).toBeInTheDocument();
+    });
+
+    triggerLongPress(screen.getByText("Active archive target").closest("li")!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "移出归档" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "归档" }));
+
+    await waitFor(() => {
+      expect(mockArchiveThread).toHaveBeenCalledWith("t-active");
+      expect(screen.queryByText("Active archive target")).not.toBeInTheDocument();
+    });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("should unarchive archived thread from long press sheet and remove it from current list", async () => {
+    const user = userEvent.setup();
+    mockListThreadsForCwd.mockImplementation((_cwd: string, archived: boolean) =>
+      Promise.resolve(
+        archived
+          ? [
+              {
+                id: "t-archived",
+                title: "Archived restore target",
+                preview: "Preview",
+                updatedAt: Date.now(),
+                status: "idle"
+              }
+            ]
+          : []
+      )
+    );
+
+    render(<ProjectThreadsPage />);
+
+    await user.click(screen.getByRole("tab", { name: "已归档" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Archived restore target")).toBeInTheDocument();
+    });
+
+    triggerLongPress(screen.getByText("Archived restore target").closest("li")!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "移出归档" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "移出归档" }));
+
+    await waitFor(() => {
+      expect(mockUnarchiveThread).toHaveBeenCalledWith("t-archived");
+      expect(screen.queryByText("Archived restore target")).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("tab", { name: "已归档" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("should keep thread in list and show error when archive action fails", async () => {
+    const user = userEvent.setup();
+    mockArchiveThread.mockRejectedValueOnce(new Error("归档失败"));
+    mockListThreadsForCwd.mockResolvedValue([
+      {
+        id: "t-fail",
+        title: "Archive failure target",
+        preview: "Preview",
+        updatedAt: Date.now(),
+        status: "idle"
+      }
+    ]);
+
+    render(<ProjectThreadsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Archive failure target")).toBeInTheDocument();
+    });
+
+    triggerLongPress(screen.getByText("Archive failure target").closest("li")!);
+    await user.click(await screen.findByRole("button", { name: "归档" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("归档失败")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Archive failure target")).toBeInTheDocument();
+  });
+
+  it("should keep archived thread in list and show error when unarchive action fails", async () => {
+    const user = userEvent.setup();
+    mockUnarchiveThread.mockRejectedValueOnce(new Error("移出归档失败"));
+    mockListThreadsForCwd.mockImplementation((_cwd: string, archived: boolean) =>
+      Promise.resolve(
+        archived
+          ? [
+              {
+                id: "t-unarchive-fail",
+                title: "Unarchive failure target",
+                preview: "Preview",
+                updatedAt: Date.now(),
+                status: "idle"
+              }
+            ]
+          : []
+      )
+    );
+
+    render(<ProjectThreadsPage />);
+
+    await user.click(screen.getByRole("tab", { name: "已归档" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Unarchive failure target")).toBeInTheDocument();
+    });
+
+    triggerLongPress(screen.getByText("Unarchive failure target").closest("li")!);
+    await user.click(await screen.findByRole("button", { name: "移出归档" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("移出归档失败")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Unarchive failure target")).toBeInTheDocument();
+  });
+
+  it("should ignore duplicate archive submissions while request is pending", async () => {
+    const user = userEvent.setup();
+    let resolveArchive: (() => void) | null = null;
+    mockArchiveThread.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveArchive = resolve;
+      })
+    );
+    mockListThreadsForCwd.mockResolvedValue([
+      {
+        id: "t-pending",
+        title: "Pending archive target",
+        preview: "Preview",
+        updatedAt: Date.now(),
+        status: "idle"
+      }
+    ]);
+
+    render(<ProjectThreadsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Pending archive target")).toBeInTheDocument();
+    });
+
+    triggerLongPress(screen.getByText("Pending archive target").closest("li")!);
+    const archiveButton = await screen.findByRole("button", { name: "归档" });
+
+    await user.click(archiveButton);
+    await user.click(archiveButton);
+
+    expect(mockArchiveThread).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveArchive?.();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Pending archive target")).not.toBeInTheDocument();
+    });
+  });
+
   it("should start new thread from FAB", async () => {
     const user = userEvent.setup();
     mockStartThread.mockResolvedValue({ id: "new-thread" });
@@ -390,3 +651,19 @@ describe("ProjectThreadsPage", () => {
     });
   });
 });
+
+function triggerLongPress(target: Element): void {
+  vi.useFakeTimers();
+  target.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10
+    })
+  );
+  act(() => {
+    vi.advanceTimersByTime(501);
+  });
+  vi.useRealTimers();
+}

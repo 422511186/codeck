@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
@@ -25,6 +25,9 @@ export default function ProjectThreadsPage(): JSX.Element {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionFor, setActionFor] = useState<{ thread: ThreadSummary; tab: Tab } | null>(null);
+  const [actionPendingId, setActionPendingId] = useState<string | null>(null);
+  const suppressClickThreadId = useRef<string | null>(null);
 
   useEffect(() => {
     const p = getProject(projectId);
@@ -83,6 +86,26 @@ export default function ProjectThreadsPage(): JSX.Element {
       router.push(`/threads/${thread.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : (err as Error).message);
+    }
+  }
+
+  async function submitArchiveAction(): Promise<void> {
+    if (!actionFor || actionPendingId) return;
+    const { thread, tab: actionTab } = actionFor;
+    setActionPendingId(thread.id);
+    setError(null);
+    try {
+      if (actionTab === "archived") {
+        await codex.unarchiveThread(thread.id);
+      } else {
+        await codex.archiveThread(thread.id);
+      }
+      setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+      setActionFor(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setActionPendingId(null);
     }
   }
 
@@ -151,7 +174,21 @@ export default function ProjectThreadsPage(): JSX.Element {
         ) : (
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
             {threads.map((t) => (
-              <ThreadRow key={t.id} thread={t} onClick={() => router.push(`/threads/${t.id}`)} />
+              <ThreadRow
+                key={t.id}
+                thread={t}
+                onClick={() => {
+                  if (suppressClickThreadId.current === t.id) {
+                    suppressClickThreadId.current = null;
+                    return;
+                  }
+                  router.push(`/threads/${t.id}`);
+                }}
+                onLongPress={() => {
+                  suppressClickThreadId.current = t.id;
+                  setActionFor({ thread: t, tab });
+                }}
+              />
             ))}
           </ul>
         )}
@@ -177,6 +214,17 @@ export default function ProjectThreadsPage(): JSX.Element {
       >
         +
       </button>
+
+      {actionFor ? (
+        <ThreadActionSheet
+          action={actionFor}
+          pending={actionPendingId === actionFor.thread.id}
+          onClose={() => {
+            if (!actionPendingId) setActionFor(null);
+          }}
+          onSubmit={submitArchiveAction}
+        />
+      ) : null}
     </main>
   );
 }
@@ -224,14 +272,76 @@ function TabButton({
   );
 }
 
-function ThreadRow({ thread, onClick }: { thread: ThreadSummary; onClick: () => void }): JSX.Element {
+function ThreadRow({
+  thread,
+  onClick,
+  onLongPress
+}: {
+  thread: ThreadSummary;
+  onClick: () => void;
+  onLongPress: () => void;
+}): JSX.Element {
   const running = thread.status === "running";
   const title = thread.title || "新会话";
   const preview = thread.preview || "";
   const time = useMemo(() => formatRelative(thread.updatedAt), [thread.updatedAt]);
+  const timerRef = useRef<number | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressedRef = useRef(false);
+
+  function clearPressTimer(): void {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  useEffect(() => clearPressTimer, []);
+
+  function handlePointerDown(event: React.PointerEvent<HTMLLIElement>): void {
+    if (event.button !== 0) return;
+    clearPressTimer();
+    longPressedRef.current = false;
+    startRef.current = { x: event.clientX, y: event.clientY };
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      longPressedRef.current = true;
+      onLongPress();
+    }, 500);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLLIElement>): void {
+    const start = startRef.current;
+    if (!start) return;
+    const dx = Math.abs(event.clientX - start.x);
+    const dy = Math.abs(event.clientY - start.y);
+    if (dx > 8 || dy > 8) {
+      clearPressTimer();
+      startRef.current = null;
+    }
+  }
+
+  function handlePointerEnd(): void {
+    clearPressTimer();
+    startRef.current = null;
+  }
+
+  function handleClick(): void {
+    if (longPressedRef.current) {
+      longPressedRef.current = false;
+      return;
+    }
+    onClick();
+  }
+
   return (
     <li
-      onClick={onClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onPointerLeave={handlePointerEnd}
+      onClick={handleClick}
       style={{
         background: "var(--cw-card)",
         border: "1px solid var(--cw-border)",
@@ -239,7 +349,8 @@ function ThreadRow({ thread, onClick }: { thread: ThreadSummary; onClick: () => 
         padding: 12,
         display: "flex",
         flexDirection: "column",
-        gap: 4
+        gap: 4,
+        userSelect: "none"
       }}
     >
       <div
@@ -268,6 +379,71 @@ function ThreadRow({ thread, onClick }: { thread: ThreadSummary; onClick: () => 
         {running ? "正在运行" : time}
       </div>
     </li>
+  );
+}
+
+function ThreadActionSheet({
+  action,
+  pending,
+  onClose,
+  onSubmit
+}: {
+  action: { thread: ThreadSummary; tab: Tab };
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: () => void;
+}): JSX.Element {
+  const isArchived = action.tab === "archived";
+  const label = isArchived ? "移出归档" : "归档";
+  const title = action.thread.title || "新会话";
+  return (
+    <Backdrop onClose={onClose} align="bottom">
+      <div style={bottomSheetStyle}>
+        <div style={{ fontSize: 13, color: "var(--cw-fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {title}
+        </div>
+        <button
+          type="button"
+          disabled={pending}
+          style={{ ...sheetItem, color: isArchived ? "var(--cw-fg)" : "var(--cw-danger)", opacity: pending ? 0.6 : 1 }}
+          onClick={onSubmit}
+        >
+          {pending ? `${label}中…` : label}
+        </button>
+        <button type="button" disabled={pending} style={{ ...sheetItem, opacity: pending ? 0.6 : 1 }} onClick={onClose}>
+          取消
+        </button>
+      </div>
+    </Backdrop>
+  );
+}
+
+function Backdrop({
+  onClose,
+  align = "center",
+  children
+}: {
+  onClose: () => void;
+  align?: "center" | "bottom";
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: align === "bottom" ? "flex-end" : "center",
+        justifyContent: "center",
+        zIndex: 50
+      }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -332,6 +508,35 @@ function EmptyState({ tab, onStart }: { tab: Tab; onStart: () => void }): JSX.El
     </div>
   );
 }
+
+const modalStyle: React.CSSProperties = {
+  background: "var(--cw-card)",
+  border: "1px solid var(--cw-border)",
+  borderRadius: 16,
+  padding: 18,
+  margin: 16,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12
+};
+
+const bottomSheetStyle: React.CSSProperties = {
+  ...modalStyle,
+  borderBottomLeftRadius: 0,
+  borderBottomRightRadius: 0,
+  margin: "0 16px",
+  paddingBottom: "calc(18px + var(--safe-bottom))"
+};
+
+const sheetItem: React.CSSProperties = {
+  padding: "12px 8px",
+  borderRadius: 10,
+  border: "none",
+  background: "transparent",
+  color: "var(--cw-fg)",
+  fontSize: 16,
+  textAlign: "left"
+};
 
 function formatRelative(ts: number): string {
   if (!ts) return "";

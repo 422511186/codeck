@@ -244,7 +244,7 @@ function ActionSheet({
 }): JSX.Element {
   return (
     <Backdrop onClose={onClose} align="bottom">
-      <div style={{ ...modalStyle, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }}>
+      <div style={bottomSheetStyle}>
         <div style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>{project.name}</div>
         <button type="button" style={sheetItem} onClick={onRename}>
           重命名
@@ -326,6 +326,14 @@ const modalStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 12
+};
+
+const bottomSheetStyle: React.CSSProperties = {
+  ...modalStyle,
+  borderBottomLeftRadius: 0,
+  borderBottomRightRadius: 0,
+  margin: "0 16px",
+  paddingBottom: "calc(18px + var(--safe-bottom))"
 };
 
 const inputStyle: React.CSSProperties = {
