@@ -214,47 +214,31 @@ export const useStore = create<State & Actions>((set, get) => ({
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
       const idx = prev.entries.findIndex((e) => e.id === entry.id);
+      let appendedExisting = false;
+      let normalizeAfterAppend = false;
       const nextEntries =
         idx >= 0
           ? prev.entries.map((current, i) => {
-              if (i !== idx || current.body.kind !== entry.body.kind) {
+              if (i !== idx) {
                 return current;
               }
-              if (
-                (current.body.kind === "agent-message" && entry.body.kind === "agent-message") ||
-                (current.body.kind === "reasoning" && entry.body.kind === "reasoning")
-              ) {
-                return {
-                  ...current,
-                  ...timelineEntryTurnMeta(current, entry),
-                  body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
-                };
+              const appended = appendDeltaToExistingEntry(current, entry);
+              if (!appended) {
+                return current;
               }
-              if (current.body.kind === "tool" && entry.body.kind === "tool") {
-                return {
-                  ...current,
-                  ...timelineEntryTurnMeta(current, entry),
-                  body: {
-                    ...current.body,
-                    toolKind: entry.body.toolKind ?? current.body.toolKind,
-                    server: entry.body.server || current.body.server,
-                    tool: entry.body.tool || current.body.tool,
-                    result: `${current.body.result ?? ""}${entry.body.result ?? ""}`,
-                    status: entry.body.status
-                  }
-                };
-              }
-              if (current.body.kind === "system" && entry.body.kind === "system") {
-                return {
-                  ...current,
-                  ...timelineEntryTurnMeta(current, entry),
-                  body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
-                };
-              }
-              return entry;
+              appendedExisting = true;
+              normalizeAfterAppend =
+                normalizeAfterAppend ||
+                current.turnId !== appended.turnId ||
+                current.turnIndex !== appended.turnIndex;
+              return appended;
             })
           : [...prev.entries, entry];
-      const normalizedEntries = normalizeTimelineEntries(nextEntries);
+      if (idx >= 0 && !appendedExisting) {
+        return state;
+      }
+      const normalizedEntries =
+        appendedExisting && !normalizeAfterAppend ? nextEntries : normalizeTimelineEntries(nextEntries);
       return {
         threads: {
           ...state.threads,
@@ -318,28 +302,34 @@ export const useStore = create<State & Actions>((set, get) => ({
       };
       const existingIndex = prev.entries.findIndex((current) => current.id === itemId);
       const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
-      const nextEntries =
-        existingIndex >= 0
-          ? prev.entries.map((current, index) => {
-              if (index !== existingIndex || current.body.kind !== "reasoning") {
-                return current;
-              }
-              return {
-                ...current,
-                ...(turnId && !current.turnId ? { turnId } : {}),
-                body: { ...current.body, text: `${current.body.text}${delta}` }
-              };
-            })
-          : pendingIndex >= 0
-            ? prev.entries.map((current, index) => (index === pendingIndex ? deltaEntry : current))
-            : [...prev.entries, deltaEntry];
+      const appendedExisting = existingIndex >= 0 && prev.entries[existingIndex]?.body.kind === "reasoning";
+      const replacedPending = !appendedExisting && pendingIndex >= 0;
+      let normalizeAfterAppend = false;
+      const nextEntries = appendedExisting
+        ? prev.entries.map((current, index) => {
+            if (index !== existingIndex || current.body.kind !== "reasoning") {
+              return current;
+            }
+            normalizeAfterAppend = normalizeAfterAppend || (Boolean(turnId) && current.turnId !== turnId);
+            return {
+              ...current,
+              ...(turnId && !current.turnId ? { turnId } : {}),
+              body: { ...current.body, text: `${current.body.text}${delta}` }
+            };
+          })
+        : replacedPending
+          ? prev.entries.map((current, index) => (index === pendingIndex ? deltaEntry : current))
+          : [...prev.entries, deltaEntry];
 
       return {
         threads: {
           ...state.threads,
           [threadId]: {
             ...prev,
-            entries: normalizeTimelineEntries(nextEntries),
+            entries:
+              (appendedExisting && !normalizeAfterAppend) || replacedPending
+                ? nextEntries
+                : normalizeTimelineEntries(nextEntries),
             lastSeenItemId: itemId
           }
         }
@@ -553,18 +543,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         return;
       }
       if (eventId) {
-        set((state) => {
-          const prev = state.threads[threadId] ?? emptyThread();
-          const processedEventIds = new Set(prev.processedEventIds);
-          processedEventIds.add(eventId);
-          trimStringSetInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS);
-          return {
-            threads: {
-              ...state.threads,
-              [threadId]: { ...prev, processedEventIds }
-            }
-          };
-        });
+        recordProcessedEventId(threadId, eventId);
       }
       if (shouldIgnoreDeletedOrInterruptedTurnEvent(get().threads[threadId], ev)) {
         return;
@@ -893,6 +872,15 @@ function trimStringSetInPlace(values: Set<string>, maxSize: number): void {
   }
 }
 
+function recordProcessedEventId(threadId: string, eventId: string): void {
+  const processedEventIds = useStore.getState().threads[threadId]?.processedEventIds;
+  if (!processedEventIds) {
+    return;
+  }
+  processedEventIds.add(eventId);
+  trimStringSetInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS);
+}
+
 function maxEntryGeneration(entries: TimelineEntry[]): number {
   let generation = 0;
   for (const entry of entries) {
@@ -980,39 +968,18 @@ function shouldSuppressSnapshotDelta(
   }
 
   const nextOffset = coveredIndex + delta.length;
-  useStore.setState((current) => {
-    const prev = current.threads[threadId] ?? emptyThread();
-    const snapshotDeltaSuppressions = new Map(prev.snapshotDeltaSuppressions);
-    if (nextOffset >= suppression.text.length) {
-      snapshotDeltaSuppressions.delete(itemId);
-    } else {
-      snapshotDeltaSuppressions.set(itemId, { ...suppression, offset: nextOffset });
-    }
-    return {
-      threads: {
-        ...current.threads,
-        [threadId]: { ...prev, snapshotDeltaSuppressions }
-      }
-    };
-  });
+  // Internal replay bookkeeping should not make React rerender for deltas that stay hidden.
+  const suppressions = useStore.getState().threads[threadId]?.snapshotDeltaSuppressions;
+  if (nextOffset >= suppression.text.length) {
+    suppressions?.delete(itemId);
+  } else {
+    suppressions?.set(itemId, { ...suppression, offset: nextOffset });
+  }
   return true;
 }
 
 function removeSnapshotDeltaSuppression(threadId: string, itemId: string): void {
-  useStore.setState((state) => {
-    const prev = state.threads[threadId] ?? emptyThread();
-    if (!prev.snapshotDeltaSuppressions.has(itemId)) {
-      return state;
-    }
-    const snapshotDeltaSuppressions = new Map(prev.snapshotDeltaSuppressions);
-    snapshotDeltaSuppressions.delete(itemId);
-    return {
-      threads: {
-        ...state.threads,
-        [threadId]: { ...prev, snapshotDeltaSuppressions }
-      }
-    };
-  });
+  useStore.getState().threads[threadId]?.snapshotDeltaSuppressions.delete(itemId);
 }
 
 function pendingReasoningId(threadId: string, turnId: string | null): string {
@@ -1029,6 +996,44 @@ function timelineEntryTurnMeta(
       ? { turnIndex: next.turnIndex ?? current.turnIndex }
       : {})
   };
+}
+
+function appendDeltaToExistingEntry(current: TimelineEntry, entry: TimelineEntry): TimelineEntry | null {
+  if (
+    (current.body.kind === "agent-message" && entry.body.kind === "agent-message") ||
+    (current.body.kind === "reasoning" && entry.body.kind === "reasoning")
+  ) {
+    return {
+      ...current,
+      ...timelineEntryTurnMeta(current, entry),
+      body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
+    };
+  }
+
+  if (current.body.kind === "tool" && entry.body.kind === "tool") {
+    return {
+      ...current,
+      ...timelineEntryTurnMeta(current, entry),
+      body: {
+        ...current.body,
+        toolKind: entry.body.toolKind ?? current.body.toolKind,
+        server: entry.body.server || current.body.server,
+        tool: entry.body.tool || current.body.tool,
+        result: `${current.body.result ?? ""}${entry.body.result ?? ""}`,
+        status: entry.body.status
+      }
+    };
+  }
+
+  if (current.body.kind === "system" && entry.body.kind === "system") {
+    return {
+      ...current,
+      ...timelineEntryTurnMeta(current, entry),
+      body: { ...current.body, text: `${current.body.text}${entry.body.text}` }
+    };
+  }
+
+  return null;
 }
 
 function shouldIgnoreDeletedOrInterruptedTurnEvent(

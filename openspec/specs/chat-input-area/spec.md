@@ -3,12 +3,12 @@
 ## Purpose
 TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
 ## Requirements
-### Requirement: 底部输入区固定单行 + 全屏编辑器
-会话页底部在 thread 静止时 SHALL 固定显示空闲态 composer；composer SHALL 包含一级图片入口、文本输入区、全屏编辑入口和发送按钮。输入区 SHALL 优先保持单行，内容超过 3 行时 MUST 内部滚动而非继续撑高；点击全屏编辑入口后 SHALL 弹出全屏编辑器。
+### Requirement: 底部输入区固定单行 + 半屏编辑器
+会话页底部在 thread 静止时 SHALL 固定显示空闲态 composer；composer SHALL 包含一级图片入口、文本输入区、半屏编辑入口和发送按钮。输入区 SHALL 优先保持单行，内容超过 3 行时 MUST 内部滚动而非继续撑高；点击半屏编辑入口后 SHALL 从屏幕底部弹出半屏编辑器。
 
 #### Scenario: 默认输入
 - **WHEN** thread 静止且用户在会话页打字
-- **THEN** 底部 composer MUST 显示图片入口、普通输入框、全屏编辑入口和发送按钮
+- **THEN** 底部 composer MUST 显示图片入口、普通输入框、半屏编辑入口和发送按钮
 - **AND** 普通输入框 MUST 优先单行显示
 - **AND** 内容超过 3 行时 MUST 内部滚动而非继续撑高
 
@@ -17,24 +17,25 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 图片入口 MUST 作为一级操作可见
 - **AND** 用户 MUST 能直接打开相册选择图片
 
-#### Scenario: 进入全屏
-- **WHEN** 用户点击全屏编辑入口
-- **THEN** MUST 弹出全屏编辑器
+#### Scenario: 进入半屏
+- **WHEN** 用户点击半屏编辑入口
+- **THEN** MUST 从屏幕底部弹出半屏编辑器
+- **AND** 半屏编辑器高度 MUST 约为可视高度的一半
 - **AND** 编辑器顶部 MUST 显示「取消」与「发送」按钮
-- **AND** 主体 MUST 是全屏输入区域
+- **AND** 主体 MUST 是半屏输入区域
 
-#### Scenario: 全屏中按回车
-- **WHEN** 用户在全屏编辑器中按回车键
+#### Scenario: 半屏中按回车
+- **WHEN** 用户在半屏编辑器中按回车键
 - **THEN** MUST 插入换行
 - **AND** MUST 不发送消息
 
-#### Scenario: 全屏发送
-- **WHEN** 用户点击全屏编辑器顶部的「发送」
+#### Scenario: 半屏发送
+- **WHEN** 用户点击半屏编辑器顶部的「发送」
 - **THEN** 系统 MUST 触发标准发送流程
-- **AND** 全屏编辑器 MUST 关闭
+- **AND** 半屏编辑器 MUST 关闭
 
 ### Requirement: 普通输入框回车不发送
-会话页底部普通输入框 SHALL NOT 使用 `Enter` 触发标准发送流程；`Enter` MUST 保持文本输入行为，不得作为发送快捷键。全屏编辑器 SHALL 继续把 `Enter` 作为换行输入。
+会话页底部普通输入框 SHALL NOT 使用 `Enter` 触发标准发送流程；`Enter` MUST 保持文本输入行为，不得作为发送快捷键。半屏编辑器 SHALL 继续把 `Enter` 作为换行输入。
 
 #### Scenario: 普通输入框回车不发送
 - **WHEN** thread 静止且普通输入框包含可发送文本
@@ -55,8 +56,8 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 系统 MUST 触发标准发送流程
 - **AND** 成功发送后 MUST 清空输入框和对应草稿
 
-#### Scenario: 全屏编辑器回车仍换行
-- **WHEN** 用户在全屏编辑器中按下 `Enter`
+#### Scenario: 半屏编辑器回车仍换行
+- **WHEN** 用户在半屏编辑器中按下 `Enter`
 - **THEN** 系统 MUST 插入换行
 - **AND** MUST NOT 触发发送流程
 
@@ -79,7 +80,7 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 底部发送区 MUST 显示运行态状态栏
 - **AND** MUST 显示「正在生成…」或等价状态提示
 - **AND** MUST 显示中断按钮
-- **AND** MUST 不显示普通输入框、图片入口、全屏编辑入口或发送按钮
+- **AND** MUST 不显示普通输入框、图片入口、半屏编辑入口或发送按钮
 
 #### Scenario: 点击中断
 - **WHEN** 用户点击中断按钮

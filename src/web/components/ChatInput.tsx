@@ -24,7 +24,7 @@ type ImageState = {
 export function ChatInput(props: ChatInputProps): JSX.Element {
   const [text, setText] = useState<string>(() => (typeof window === "undefined" ? "" : getDraft(props.threadId)));
   const [image, setImage] = useState<ImageState | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -78,7 +78,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
       setText("");
       setImage(null);
       setDraft(props.threadId, "");
-      setFullscreen(false);
+      setExpanded(false);
     } catch (err) {
       // surface left for caller via timeline (failed user msg); just keep input contents
       if (err instanceof ApiError) {
@@ -92,6 +92,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
 
   const disabled = Boolean(props.disabled) || sending || props.running || image?.status === "uploading";
   const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
+  const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
 
   if (props.running) {
     return (
@@ -114,7 +115,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
       <div style={barStyle}>
         {image ? <ImageThumb image={image} onRemove={() => setImage(null)} onRetry={retryImage} /> : null}
 
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+        <div style={composerRowStyle}>
           <button type="button" onClick={pickImage} aria-label="添加图片" style={iconBtn} disabled={disabled}>
             <ImageIcon />
           </button>
@@ -137,14 +138,14 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
             style={textareaStyle}
             disabled={disabled}
           />
-          <button type="button" onClick={() => setFullscreen(true)} aria-label="全屏编辑" style={iconBtn} disabled={disabled}>
+          <button type="button" onClick={() => setExpanded(true)} aria-label="展开编辑" style={iconBtn} disabled={disabled}>
             <ExpandIcon />
           </button>
           <button
             type="button"
             onClick={() => send()}
             disabled={!canSend}
-            style={{ ...sendBtn, opacity: canSend ? 1 : 0.4 }}
+            style={sendButtonStyle}
             aria-label="发送"
           >
             <SendIcon />
@@ -152,10 +153,10 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
         </div>
       </div>
 
-      {fullscreen ? (
-        <FullscreenEditor
+      {expanded ? (
+        <HalfScreenEditor
           initial={text}
-          onCancel={() => setFullscreen(false)}
+          onCancel={() => setExpanded(false)}
           onSubmit={async (value) => {
             setText(value);
             await send(value);
@@ -218,7 +219,7 @@ function ImageThumb({
   );
 }
 
-function FullscreenEditor({
+function HalfScreenEditor({
   initial,
   onCancel,
   onSubmit
@@ -233,67 +234,93 @@ function FullscreenEditor({
       style={{
         position: "fixed",
         inset: 0,
-        background: "var(--cw-bg)",
         display: "flex",
-        flexDirection: "column",
+        alignItems: "flex-end",
+        background: "rgba(0,0,0,0.28)",
         zIndex: 100
       }}
+      onClick={onCancel}
     >
-      <header
-        style={{
-          height: 56,
-          padding: "0 12px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          borderBottom: "1px solid var(--cw-border)"
+      <section
+        role="dialog"
+        aria-label="半屏编辑器"
+        style={halfScreenPanelStyle}
+        onClick={(e) => {
+          e.stopPropagation();
         }}
       >
-        <button type="button" onClick={onCancel} style={ghostBtn}>
-          取消
-        </button>
-        <button type="button" onClick={() => onSubmit(value)} disabled={!value.trim()} style={primaryBtn}>
-          发送
-        </button>
-      </header>
-      <textarea
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            // 允许换行（不发送）
-            e.stopPropagation();
-          }
-        }}
-        style={{
-          flex: 1,
-          width: "100%",
-          padding: 14,
-          background: "transparent",
-          color: "var(--cw-fg)",
-          border: "none",
-          fontSize: 16,
-          resize: "none",
-          outline: "none"
-        }}
-      />
+        <header style={halfScreenHeaderStyle}>
+          <button type="button" onClick={onCancel} style={ghostBtn}>
+            取消
+          </button>
+          <button type="button" onClick={() => onSubmit(value)} disabled={!value.trim()} style={primaryBtn}>
+            发送
+          </button>
+        </header>
+        <textarea
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              // 允许换行（不发送）
+              e.stopPropagation();
+            }
+          }}
+          style={halfScreenTextareaStyle}
+        />
+      </section>
     </div>
   );
 }
+
+const halfScreenPanelStyle: React.CSSProperties = {
+  width: "100%",
+  height: "50dvh",
+  background: "var(--cw-bg)",
+  borderTop: "1px solid var(--cw-border)",
+  borderTopLeftRadius: 18,
+  borderTopRightRadius: 18,
+  boxShadow: "0 -14px 34px rgba(0,0,0,0.18)",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden"
+};
+
+const halfScreenHeaderStyle: React.CSSProperties = {
+  height: 52,
+  padding: "0 12px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  borderBottom: "1px solid var(--cw-border)"
+};
+
+const halfScreenTextareaStyle: React.CSSProperties = {
+  flex: 1,
+  width: "100%",
+  padding: 14,
+  background: "transparent",
+  color: "var(--cw-fg)",
+  border: "none",
+  fontSize: 16,
+  resize: "none",
+  outline: "none"
+};
 
 const barStyle: React.CSSProperties = {
   position: "fixed",
   left: 0,
   right: 0,
   bottom: 0,
-  padding: "8px 10px calc(8px + var(--safe-bottom))",
+  padding: "8px 10px calc(10px + var(--safe-bottom))",
   background: "var(--cw-bg)",
   borderTop: "1px solid var(--cw-border)",
   display: "flex",
   flexDirection: "column",
   gap: 6,
-  zIndex: 20
+  zIndex: 20,
+  boxShadow: "0 -10px 26px rgba(0,0,0,0.08)"
 };
 
 const runningStatusStyle: React.CSSProperties = {
@@ -322,27 +349,57 @@ const pulseDotStyle: React.CSSProperties = {
 };
 
 const iconBtn: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 18,
+  width: 34,
+  height: 34,
+  flex: "0 0 34px",
+  borderRadius: 17,
   border: "none",
   background: "transparent",
-  color: "var(--cw-fg)",
+  color: "var(--cw-fg-muted)",
   display: "inline-flex",
   alignItems: "center",
-  justifyContent: "center"
+  justifyContent: "center",
+  touchAction: "manipulation"
 };
 
-const sendBtn: React.CSSProperties = {
-  width: 40,
-  height: 40,
-  borderRadius: 20,
+const composerRowStyle: React.CSSProperties = {
+  minHeight: 48,
+  display: "flex",
+  alignItems: "flex-end",
+  gap: 6,
+  padding: 5,
+  borderRadius: 24,
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-bg-elevated)",
+  boxShadow: "0 1px 0 rgba(255,255,255,0.05) inset"
+};
+
+const sendBtnBase: React.CSSProperties = {
+  width: 38,
+  height: 38,
+  flex: "0 0 38px",
+  borderRadius: 19,
   border: "none",
-  background: "var(--cw-accent)",
-  color: "#fff",
   display: "inline-flex",
   alignItems: "center",
-  justifyContent: "center"
+  justifyContent: "center",
+  touchAction: "manipulation",
+  transition: "opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease"
+};
+
+const sendBtnReady: React.CSSProperties = {
+  ...sendBtnBase,
+  background: "var(--cw-accent)",
+  color: "var(--cw-accent-fg)",
+  boxShadow: "0 8px 18px color-mix(in srgb, var(--cw-accent) 32%, transparent)"
+};
+
+const sendBtnDisabled: React.CSSProperties = {
+  ...sendBtnBase,
+  background: "color-mix(in srgb, var(--cw-fg-subtle) 18%, var(--cw-bg-elevated))",
+  color: "var(--cw-fg-subtle)",
+  opacity: 0.72,
+  boxShadow: "none"
 };
 
 const interruptBtn: React.CSSProperties = {
@@ -359,14 +416,14 @@ const interruptBtn: React.CSSProperties = {
 
 const textareaStyle: React.CSSProperties = {
   flex: 1,
-  minHeight: 36,
+  minHeight: 38,
   maxHeight: 96,
-  padding: "8px 12px",
-  borderRadius: 18,
-  border: "1px solid var(--cw-border)",
-  background: "var(--cw-bg-elevated)",
+  padding: "9px 2px",
+  border: "none",
+  background: "transparent",
   color: "var(--cw-fg)",
   fontSize: 15,
+  lineHeight: "20px",
   resize: "none",
   outline: "none"
 };
@@ -413,16 +470,23 @@ function ImageIcon(): JSX.Element {
 function ExpandIcon(): JSX.Element {
   return (
     <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5 9l5-5M19 9l-5-5M5 15l5 5M19 15l-5 5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M6 18h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" opacity="0.45" />
+      <path
+        d="M7.3 15.6l1.2-4 6.8-6.8a1.7 1.7 0 0 1 2.4 0l1.5 1.5a1.7 1.7 0 0 1 0 2.4l-6.8 6.8-4 1.2a.9.9 0 0 1-1.1-1.1Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M14.3 5.8l3.9 3.9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
 
 function SendIcon(): JSX.Element {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

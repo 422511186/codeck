@@ -31,6 +31,111 @@ describe("Timeline", () => {
     expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
   });
 
+  it("运行中的当前助手消息先按纯文本渲染，避免反复执行代码高亮", () => {
+    const { container } = render(
+      <Timeline
+        running
+        activeTurnId="turn-live"
+        entries={[
+          {
+            id: "agent-live",
+            turnId: "turn-live",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst streaming = true;\n```"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain("```ts");
+    expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+  });
+
+  it("运行中但 activeTurnId 尚未到位时，最新助手消息也先按纯文本渲染", () => {
+    const { container } = render(
+      <Timeline
+        running
+        entries={[
+          {
+            id: "agent-old",
+            turnId: "turn-old",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst oldMessage = true;\n```"
+            }
+          },
+          {
+            id: "agent-live",
+            createdAt: 2,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst liveMessage = true;\n```"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain("```ts");
+    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+  });
+
+  it("运行中但新回复尚未出现时，不把上一轮助手消息当作 live 消息", () => {
+    const { container } = render(
+      <Timeline
+        running
+        entries={[
+          {
+            id: "agent-old",
+            turnId: "turn-old",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst oldMessage = true;\n```"
+            }
+          },
+          {
+            id: "user-new",
+            createdAt: 2,
+            body: {
+              kind: "user-message",
+              text: "继续",
+              status: "sending"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(container.textContent).not.toContain("```ts");
+    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+  });
+
+  it("超长历史助手消息先按纯文本展示，避免刷新时同步执行 Markdown 高亮", () => {
+    const longText = `${"长回复内容\n".repeat(400)}\n\`\`\`ts\nconst shouldNotHighlightImmediately = true;\n\`\`\``;
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "agent-long",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: longText
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain("```ts");
+    expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+  });
+
   it("在本页弹窗预览用户消息图片，不打开新页面", async () => {
     const user = userEvent.setup();
     const open = vi.spyOn(window, "open").mockImplementation(() => null);

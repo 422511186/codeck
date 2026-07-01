@@ -1576,9 +1576,19 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should resume and retry once when start turn reports thread not found", async () => {
+  it("should not retry start turn when it reports thread not found", async () => {
     const user = userEvent.setup();
-    mockStartTurn.mockRejectedValueOnce(new ApiError("thread not found: thread-1", 502)).mockResolvedValueOnce({});
+    mockStartTurn.mockRejectedValueOnce(new ApiError("thread not found: thread-1", 502));
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      model: "gpt-5-codex"
+    });
 
     render(<ThreadPage />);
 
@@ -1586,19 +1596,27 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.type(screen.getByPlaceholderText("输入消息"), "retry after resume");
+    await user.type(screen.getByPlaceholderText("输入消息"), "do not retry after start failure");
     await user.click(screen.getByLabelText("发送"));
 
-    await waitFor(() => expect(mockStartTurn).toHaveBeenCalledTimes(2));
-    expect(mockResumeThread).toHaveBeenCalledWith("thread-1");
-    expect(mockStartTurn).toHaveBeenNthCalledWith(
-      2,
+    await waitFor(() => expect(mockStartTurn).toHaveBeenCalledTimes(1));
+    expect(mockResumeThread).not.toHaveBeenCalled();
+    expect(mockStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "thread-1",
-        text: "retry after resume",
-        imagePaths: []
+        text: "do not retry after start failure",
+        imagePaths: [],
+        model: "gpt-5-codex"
       })
     );
+    await waitFor(() => {
+      expect(mockReplaceOrAddEntry).toHaveBeenCalledWith(
+        "thread-1",
+        expect.objectContaining({
+          body: expect.objectContaining({ kind: "user-message", status: "failed" })
+        })
+      );
+    });
   });
 
   it("should resend failed local user messages from retry button", async () => {

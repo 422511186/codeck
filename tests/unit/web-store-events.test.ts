@@ -178,6 +178,36 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("records event ids without an extra visible store update for streamed deltas", () => {
+    useStore.getState().ensureThread("thread-1");
+    let notifications = 0;
+    const unsubscribe = useStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "evt-visible-delta",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "只渲染一次"
+      }
+    });
+
+    unsubscribe();
+    expect(notifications).toBe(1);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("evt-visible-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        body: { kind: "agent-message", text: "只渲染一次" }
+      })
+    ]);
+  });
+
   it("ignores duplicate event ids after a snapshot repair replace", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -523,6 +553,47 @@ describe("web store codex events", () => {
       expect.objectContaining({
         id: "agent-1",
         body: { kind: "agent-message", text: "hello world!" }
+      })
+    ]);
+  });
+
+  it("suppresses replayed snapshot deltas without a visible store update", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "agent-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "agent-message", text: "hello world" }
+        }
+      ],
+      null
+    );
+    let notifications = 0;
+    const unsubscribe = useStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "replay-covered-delta",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "hello "
+      }
+    });
+
+    unsubscribe();
+    expect(notifications).toBe(0);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("replay-covered-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        body: { kind: "agent-message", text: "hello world" }
       })
     ]);
   });

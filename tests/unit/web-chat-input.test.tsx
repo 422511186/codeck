@@ -110,7 +110,7 @@ describe("ChatInput", () => {
     expect(screen.getByLabelText("中断")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("全屏编辑")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("展开编辑")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
 
@@ -179,21 +179,22 @@ describe("ChatInput", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("keeps Enter as newline inside the fullscreen editor", async () => {
+  it("keeps Enter as newline inside the half-screen editor", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderInput({ onSend });
 
-    await user.click(screen.getByLabelText("全屏编辑"));
+    await user.click(screen.getByLabelText("展开编辑"));
+    expect(screen.getByRole("dialog", { name: "半屏编辑器" })).toHaveStyle({ height: "50dvh" });
     const editors = screen.getAllByRole("textbox");
-    const fullscreenEditor = editors[editors.length - 1];
+    const halfScreenEditor = editors[editors.length - 1];
 
-    await user.type(fullscreenEditor, "line one");
-    fireEvent.keyDown(fullscreenEditor, { key: "Enter", code: "Enter" });
-    fireEvent.change(fullscreenEditor, { target: { value: "line one\nline two" } });
+    await user.type(halfScreenEditor, "line one");
+    fireEvent.keyDown(halfScreenEditor, { key: "Enter", code: "Enter" });
+    fireEvent.change(halfScreenEditor, { target: { value: "line one\nline two" } });
 
     expect(onSend).not.toHaveBeenCalled();
-    expect(fullscreenEditor).toHaveValue("line one\nline two");
+    expect(halfScreenEditor).toHaveValue("line one\nline two");
   });
 
   it("keeps the image entry visible in the idle composer and replaces the selected image", async () => {
@@ -221,18 +222,18 @@ describe("ChatInput", () => {
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
   });
 
-  it("sends fullscreen editor text instead of the stale inline value", async () => {
+  it("sends half-screen editor text instead of the stale inline value", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderInput({ onSend });
 
-    await user.click(screen.getByLabelText("全屏编辑"));
+    await user.click(screen.getByLabelText("展开编辑"));
     const editors = screen.getAllByRole("textbox");
-    await user.type(editors[editors.length - 1], "fullscreen message");
+    await user.type(editors[editors.length - 1], "half-screen message");
     const sendButtons = screen.getAllByRole("button", { name: "发送" });
     await user.click(sendButtons[sendButtons.length - 1]);
 
-    expect(onSend).toHaveBeenCalledWith("fullscreen message", []);
+    expect(onSend).toHaveBeenCalledWith("half-screen message", []);
     expect(screen.queryByText("取消")).not.toBeInTheDocument();
   });
 });

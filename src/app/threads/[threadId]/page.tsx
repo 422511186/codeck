@@ -283,17 +283,7 @@ export default function ThreadPage(): JSX.Element {
           ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
           ...(collaborationMode ? { collaborationMode } : {})
         };
-        let started: Awaited<ReturnType<typeof codex.startTurn>>;
-        try {
-          started = await codex.startTurn(startInput);
-        } catch (err) {
-          if (!isThreadNotFoundError(err)) {
-            throw err;
-          }
-          const resumed = await codex.resumeThread(threadId);
-          setDetail(resumed);
-          started = await codex.startTurn(startInput);
-        }
+        const started = await codex.startTurn(startInput);
         bindLocalUserMessageTurn(threadId, clientUserMessageId, started.turnId);
         if (started.thread) {
           applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
@@ -646,6 +636,7 @@ export default function ThreadPage(): JSX.Element {
           entries={entries}
           approvals={threadState?.pendingApprovals ?? []}
           running={running}
+          activeTurnId={threadState?.activeTurnId ?? null}
           onResendUser={async (text) => {
             await onSend(text, []);
           }}

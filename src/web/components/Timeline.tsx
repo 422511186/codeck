@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { rollbackTurnsForEntry, type TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest } from "../api/types";
 import { Markdown } from "./Markdown";
@@ -13,10 +13,15 @@ import { ErrorCard } from "./cards/ErrorCard";
 import { ApprovalCard } from "./cards/ApprovalCard";
 import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 
+const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
+const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
+const LAZY_MARKDOWN_ROOT_MARGIN = "720px 0px";
+
 type Props = {
   entries: TimelineEntry[];
   approvals?: PendingServerRequest[];
   running?: boolean;
+  activeTurnId?: string | null;
   onResolveApproval?: (req: PendingServerRequest, value: string) => Promise<void>;
   onResendUser?: (text: string) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
@@ -27,6 +32,7 @@ export function Timeline({
   entries,
   approvals,
   running = false,
+  activeTurnId = null,
   onResolveApproval,
   onResendUser,
   onRewindToMessage,
@@ -42,6 +48,7 @@ export function Timeline({
             entry={entry}
             entries={entries}
             running={running}
+            activeTurnId={activeTurnId}
             onResendUser={onResendUser}
             onRewindToMessage={onRewindToMessage}
             onForkFromMessage={onForkFromMessage}
@@ -67,6 +74,7 @@ function TimelineRow({
   entry,
   entries,
   running,
+  activeTurnId,
   onResendUser,
   onRewindToMessage,
   onForkFromMessage,
@@ -75,6 +83,7 @@ function TimelineRow({
   entry: TimelineEntry;
   entries: TimelineEntry[];
   running: boolean;
+  activeTurnId: string | null;
   onResendUser?: (text: string) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
@@ -95,11 +104,7 @@ function TimelineRow({
         />
       );
     case "agent-message":
-      return (
-        <div style={{ padding: "4px 14px" }}>
-          <Markdown text={body.text} />
-        </div>
-      );
+      return <AgentMessage text={body.text} live={isLiveAgentMessage(entries, entry, running, activeTurnId)} />;
     case "reasoning":
       return <ReasoningCard entry={body} />;
     case "command":
@@ -116,6 +121,145 @@ function TimelineRow({
       return <></>;
   }
 }
+
+function AgentMessage({ text, live }: { text: string; live: boolean }): JSX.Element {
+  if (live) {
+    return (
+      <div style={agentMessageStyle}>
+        <PlainAgentText text={text} />
+      </div>
+    );
+  }
+  return <LazyAgentMarkdown text={text} />;
+}
+
+function LazyAgentMarkdown({ text }: { text: string }): JSX.Element {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [renderMarkdown, setRenderMarkdown] = useState(() => text.length <= EAGER_MARKDOWN_TEXT_LIMIT);
+
+  useEffect(() => {
+    setRenderMarkdown(text.length <= EAGER_MARKDOWN_TEXT_LIMIT);
+  }, [text]);
+
+  useEffect(() => {
+    if (renderMarkdown || text.length > LAZY_MARKDOWN_TEXT_LIMIT) {
+      return;
+    }
+
+    const node = ref.current;
+    if (!node) {
+      return;
+    }
+
+    let cancelled = false;
+    let cleanupScheduledRender: (() => void) | null = null;
+
+    const scheduleRender = () => {
+      const win = node.ownerDocument.defaultView;
+      const requestIdle = win && "requestIdleCallback" in win ? win.requestIdleCallback : null;
+      const cancelIdle = win && "cancelIdleCallback" in win ? win.cancelIdleCallback : null;
+      if (typeof requestIdle === "function") {
+        const handle = requestIdle(
+          () => {
+            if (!cancelled) {
+              setRenderMarkdown(true);
+            }
+          },
+          { timeout: 1_200 }
+        );
+        cleanupScheduledRender = () => {
+          if (typeof cancelIdle === "function") {
+            cancelIdle(handle);
+          }
+        };
+        return;
+      }
+
+      const timeout = window.setTimeout(() => {
+        if (!cancelled) {
+          setRenderMarkdown(true);
+        }
+      }, 80);
+      cleanupScheduledRender = () => window.clearTimeout(timeout);
+    };
+
+    if (!("IntersectionObserver" in window)) {
+      scheduleRender();
+      return () => {
+        cancelled = true;
+        cleanupScheduledRender?.();
+      };
+    }
+
+    const observer = new IntersectionObserver(
+      (records) => {
+        if (records.some((record) => record.isIntersecting || record.intersectionRatio > 0)) {
+          observer.disconnect();
+          scheduleRender();
+        }
+      },
+      { root: null, rootMargin: LAZY_MARKDOWN_ROOT_MARGIN }
+    );
+    observer.observe(node);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      cleanupScheduledRender?.();
+    };
+  }, [renderMarkdown, text]);
+
+  return (
+    <div ref={ref} style={agentMessageStyle}>
+      {renderMarkdown ? <Markdown text={text} /> : <PlainAgentText text={text} />}
+    </div>
+  );
+}
+
+function PlainAgentText({ text }: { text: string }): JSX.Element {
+  return <div style={plainAgentTextStyle}>{text}</div>;
+}
+
+function isLiveAgentMessage(
+  entries: TimelineEntry[],
+  entry: TimelineEntry,
+  running: boolean,
+  activeTurnId: string | null
+): boolean {
+  if (!running || entry.body.kind !== "agent-message") {
+    return false;
+  }
+  if (activeTurnId) {
+    return entry.turnId === activeTurnId;
+  }
+  let lastUserIndex = -1;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.body.kind === "user-message") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (index <= lastUserIndex) {
+      return false;
+    }
+    const candidate = entries[index];
+    if (candidate?.body.kind === "agent-message") {
+      return candidate.id === entry.id;
+    }
+  }
+  return false;
+}
+
+const agentMessageStyle: React.CSSProperties = {
+  padding: "4px 14px"
+};
+
+const plainAgentTextStyle: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  overflowWrap: "anywhere"
+};
 
 function isReliableMessageActionTarget(entries: TimelineEntry[], entry: TimelineEntry): boolean {
   if (entry.body.kind !== "user-message" || !entry.turnId || rollbackTurnsForEntry(entries, entry) === null) {
