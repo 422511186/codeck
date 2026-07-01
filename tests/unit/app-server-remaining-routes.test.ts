@@ -110,6 +110,26 @@ describe("剩余 app-server 协议 route", () => {
     });
   });
 
+  it("skills route 默认只返回启用的 Skill 并包含 path", async () => {
+    const cookie = await setupRouteTest();
+    const { GET } = await import("../../src/app/api/codex/skills/route");
+
+    const response = await GET(getRequest("/api/codex/skills", cookie));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      skills: [
+        {
+          name: "openai-docs",
+          path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
+          enabled: true
+        }
+      ],
+      skillErrors: []
+    });
+  });
+
   it("thread realtime route 支持列出 voices 和追加文本", async () => {
     const cookie = await setupRouteTest();
     const voicesRoute = await import("../../src/app/api/codex/realtime/voices/route");

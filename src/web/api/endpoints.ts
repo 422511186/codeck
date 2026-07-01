@@ -6,6 +6,9 @@ import type {
   CollaborationModePreset,
   ModelOption,
   PendingServerRequest,
+  SkillError,
+  SkillOption,
+  SkillReference,
   ThreadDetail,
   ThreadPage,
   ThreadSummary,
@@ -44,6 +47,19 @@ export async function getAppServerStatus(): Promise<AppServerStatus> {
 export async function listModels(): Promise<ModelOption[]> {
   const data = await api<{ models: ModelOption[] }>("/api/codex/models");
   return data.models ?? [];
+}
+
+export async function listSkills(
+  enabledOnly = true,
+  cwd?: string
+): Promise<{ skills: SkillOption[]; skillErrors: SkillError[] }> {
+  const data = await api<{ skills: SkillOption[]; skillErrors: SkillError[] }>("/api/codex/skills", {
+    query: { enabledOnly, cwd }
+  });
+  return {
+    skills: data.skills ?? [],
+    skillErrors: data.skillErrors ?? []
+  };
 }
 
 export async function readCodexSettings(): Promise<CodexSettings> {
@@ -126,6 +142,7 @@ export type StartTurnInput = {
   threadId: string;
   text: string;
   imagePaths?: string[];
+  skillReferences?: SkillReference[];
   clientUserMessageId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -305,6 +322,7 @@ export const codex = {
   status: getAppServerStatus,
   settings: readCodexSettings,
   models: listModels,
+  skills: listSkills,
   collaborationModes: listCollaborationModes,
   listThreads: async (params: { cwd?: string; archived?: boolean; cursor?: string | null; limit?: number; search?: string } = {}) => {
     if (params.cwd) {

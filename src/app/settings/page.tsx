@@ -200,7 +200,7 @@ export default function SettingsPage(): JSX.Element {
         )}
       </Section>
 
-      <Section title="登出 Web">
+      <Section title="登出 Web" framed={false}>
         <button
           type="button"
           onClick={logout}
@@ -225,22 +225,34 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }): JSX.Element {
+function Section({
+  title,
+  children,
+  framed = true
+}: {
+  title: string;
+  children: React.ReactNode;
+  framed?: boolean;
+}): JSX.Element {
   return (
     <section style={{ marginTop: 24 }}>
       <h2 style={{ fontSize: 13, fontWeight: 600, color: "var(--cw-fg-muted)", margin: "0 0 8px" }}>{title}</h2>
-      <div
-        style={{
-          background: "var(--cw-card)",
-          border: "1px solid var(--cw-border)",
-          borderRadius: 14,
-          padding: "0 14px",
-          display: "flex",
-          flexDirection: "column"
-        }}
-      >
-        {children}
-      </div>
+      {framed ? (
+        <div
+          style={{
+            background: "var(--cw-card)",
+            border: "1px solid var(--cw-border)",
+            borderRadius: 14,
+            padding: "0 14px",
+            display: "flex",
+            flexDirection: "column"
+          }}
+        >
+          {children}
+        </div>
+      ) : (
+        children
+      )}
     </section>
   );
 }

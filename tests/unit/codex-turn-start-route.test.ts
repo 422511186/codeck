@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStartTurn = vi.fn();
 const mockReadThread = vi.fn();
+const mockReadThreadSummary = vi.fn();
+const mockListSkills = vi.fn();
 const mockAudit = vi.fn();
 
 vi.mock("../../src/server/auth", () => ({
@@ -22,7 +24,9 @@ vi.mock("../../src/server/security", () => ({
 vi.mock("../../src/server/app-server/runtime", () => ({
   getAppServerGateway: () => ({
     startTurn: (...args: unknown[]) => mockStartTurn(...args),
-    readThread: (...args: unknown[]) => mockReadThread(...args)
+    readThread: (...args: unknown[]) => mockReadThread(...args),
+    readThreadSummary: (...args: unknown[]) => mockReadThreadSummary(...args),
+    listSkills: (...args: unknown[]) => mockListSkills(...args)
   })
 }));
 
@@ -31,8 +35,24 @@ describe("codex turn start route", () => {
     vi.resetModules();
     mockStartTurn.mockReset();
     mockReadThread.mockReset();
+    mockReadThreadSummary.mockReset();
+    mockListSkills.mockReset();
     mockAudit.mockReset();
     mockStartTurn.mockResolvedValue({ turnId: "turn-1" });
+    mockListSkills.mockResolvedValue({
+      skills: [
+        {
+          cwd: "C:\\repo",
+          name: "openai-docs",
+          path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
+          description: "查询 OpenAI 官方文档",
+          shortDescription: "OpenAI 文档",
+          scope: "user",
+          enabled: true
+        }
+      ],
+      skillErrors: []
+    });
     mockReadThread.mockResolvedValue({
       id: "thread-1",
       title: "会话",
@@ -43,6 +63,15 @@ describe("codex turn start route", () => {
       updatedAt: 1,
       lastTurnId: "turn-1",
       timeline: []
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      title: "会话",
+      preview: "",
+      cwd: "C:\\repo",
+      modelProvider: "custom",
+      status: "active",
+      updatedAt: 1
     });
   });
 
@@ -105,8 +134,66 @@ describe("codex turn start route", () => {
 
     expect(response.status).toBe(200);
     expect(mockReadThread).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).not.toHaveBeenCalled();
     expect(json).toMatchObject({ ok: true, turnId: "turn-1" });
     expect(json.thread).toBeUndefined();
+  });
+
+  it("校验并转发结构化 Skill 引用", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-1",
+          text: "查文档",
+          skillReferences: [
+            {
+              name: "openai-docs",
+              path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md"
+            }
+          ]
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockListSkills).toHaveBeenCalledWith({ enabledOnly: true, cwds: ["C:\\repo"] });
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillReferences: [
+          {
+            name: "openai-docs",
+            path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md"
+          }
+        ]
+      })
+    );
+  });
+
+  it("拒绝不可用的 Skill 引用", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-1",
+          text: "查文档",
+          skillReferences: [{ name: "missing", path: "C:\\missing\\SKILL.md" }]
+        })
+      })
+    );
+
+    expect(response.status).toBe(502);
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockListSkills).toHaveBeenCalledWith({ enabledOnly: true, cwds: ["C:\\repo"] });
+    expect(mockStartTurn).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: "Skill 不可用：missing" });
   });
 
   it("同一个 clientUserMessageId 的并发重复请求只启动一次 turn", async () => {

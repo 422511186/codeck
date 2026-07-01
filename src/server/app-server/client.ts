@@ -277,6 +277,8 @@ import type {
   MobileSettingsView,
   MobileSkillConfigWriteResultView,
   MobileSkillErrorView,
+  MobileSkillListView,
+  MobileSkillReference,
   MobileSkillView,
   MobileThreadElicitationResult,
   MobileThreadGoalView,
@@ -314,6 +316,7 @@ export type StartTurnInput = {
   threadId: string;
   text: string;
   imagePaths?: string[];
+  skillReferences?: MobileSkillReference[];
   clientUserMessageId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -413,6 +416,12 @@ export type WriteSkillConfigInput = {
   name?: string | null;
   path?: string | null;
   enabled: boolean;
+};
+
+export type ListSkillsInput = {
+  enabledOnly?: boolean;
+  forceReload?: boolean;
+  cwds?: string[];
 };
 
 export type ListThreadBackgroundTerminalsInput = {
@@ -1176,6 +1185,7 @@ function skillViews(response: SkillsListResponse): MobileSkillView[] {
     entry.skills.map((skill) => ({
       cwd: entry.cwd,
       name: skill.name,
+      path: skill.path,
       description: skill.description,
       shortDescription: skill.shortDescription ?? null,
       scope: skill.scope,
@@ -1362,6 +1372,14 @@ export class CodexAppServerClient {
     return { ...threadDetail(threadWithTurns(response.thread)), goal };
   }
 
+  async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
+    const response = (await this.peer.request("thread/read", {
+      threadId,
+      includeTurns: false
+    })) as ThreadReadResponse;
+    return threadSummary(response.thread);
+  }
+
   private async readThreadWithTurnsFallback(threadId: string): Promise<ThreadReadResponse> {
     try {
       return (await this.peer.request("thread/read", {
@@ -1420,7 +1438,7 @@ export class CodexAppServerClient {
     const params: TurnStartParams = {
       threadId: input.threadId,
       clientUserMessageId: input.clientUserMessageId,
-      input: createTurnUserInput(input.text, input.imagePaths),
+      input: createTurnUserInput(input.text, input.imagePaths, input.skillReferences),
       model: input.model,
       effort: input.reasoningEffort,
       summary: input.reasoningSummary,
@@ -1961,6 +1979,21 @@ export class CodexAppServerClient {
     };
     const response = (await this.peer.request("skills/config/write", params)) as SkillsConfigWriteResponse;
     return { effectiveEnabled: response.effectiveEnabled };
+  }
+
+  async listSkills(input: ListSkillsInput = {}): Promise<MobileSkillListView> {
+    const params: SkillsListParams = {
+      forceReload: input.forceReload ?? false
+    };
+    if (input.cwds?.length) {
+      params.cwds = input.cwds;
+    }
+    const response = (await this.peer.request("skills/list", params)) as SkillsListResponse;
+    const skills = skillViews(response);
+    return {
+      skills: input.enabledOnly ? skills.filter((skill) => skill.enabled) : skills,
+      skillErrors: skillErrorViews(response)
+    };
   }
 
   async setExperimentalFeatureEnablement(name: string, enabled: boolean): Promise<void> {

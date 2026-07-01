@@ -15,6 +15,7 @@ import {
   collaborationModeForChatMode,
   type ChatMode,
   type ModelOption,
+  type SkillReference,
   type ThreadDetail
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey } from "../../../web/storage/localStore";
@@ -237,14 +238,14 @@ export default function ThreadPage(): JSX.Element {
   );
 
   const onSend = useCallback(
-    async (text: string, imagePaths: string[]) => {
+    async (text: string, imagePaths: string[], skillReferences: SkillReference[] = []) => {
       const currentDetail =
         detail ??
         (threadState?.entries.length
           ? cachedThreadDetail(threadId, threadState.running, threadState.activeTurnId)
           : null);
       if (!currentDetail) return;
-      const sendKey = sendPayloadKey(text, imagePaths);
+      const sendKey = sendPayloadKey(text, imagePaths, skillReferences);
       if (pendingSendKeysRef.current.has(sendKey)) return;
       pendingSendKeysRef.current.add(sendKey);
       const localUserMessageId = uniqueTimelineId("local-user");
@@ -278,6 +279,7 @@ export default function ThreadPage(): JSX.Element {
           clientUserMessageId,
           text,
           imagePaths,
+          ...(skillReferences.length ? { skillReferences } : {}),
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
           ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
           ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
@@ -697,6 +699,7 @@ export default function ThreadPage(): JSX.Element {
 
       <ChatInput
         threadId={threadId}
+        cwd={visibleDetail?.cwd}
         running={running}
         disabled={!visibleDetail}
         draftOverride={draftOverride ?? undefined}
@@ -1058,8 +1061,10 @@ function isThreadRunningStatus(status: string): boolean {
   return status === "active";
 }
 
-function sendPayloadKey(text: string, imagePaths: string[]): string {
-  return `${text.trim()}\u0001${[...imagePaths].sort().join("\u0000")}`;
+function sendPayloadKey(text: string, imagePaths: string[], skillReferences: SkillReference[] = []): string {
+  const images = [...imagePaths].sort().join("\u0000");
+  const skills = [...skillReferences].map((skill) => `${skill.name}\u0000${skill.path}`).sort().join("\u0000");
+  return `${text.trim()}\u0001${images}\u0001${skills}`;
 }
 
 function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {

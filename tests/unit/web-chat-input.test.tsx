@@ -4,10 +4,12 @@ import { userEvent } from "@testing-library/user-event";
 import { ChatInput } from "../../src/web/components/ChatInput";
 
 const mockUploadImage = vi.fn();
+const mockListSkills = vi.fn();
 
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
-    uploadImage: (...args: unknown[]) => mockUploadImage(...args)
+    uploadImage: (...args: unknown[]) => mockUploadImage(...args),
+    skills: (...args: unknown[]) => mockListSkills(...args)
   }
 }));
 
@@ -26,7 +28,31 @@ describe("ChatInput", () => {
   beforeEach(() => {
     localStorage.clear();
     mockUploadImage.mockReset();
+    mockListSkills.mockReset();
     mockUploadImage.mockResolvedValue({ path: "uploads/image.png" });
+    mockListSkills.mockResolvedValue({
+      skills: [
+        {
+          cwd: "/repo",
+          name: "openai-docs",
+          path: "/home/hzy/.codex/skills/openai-docs/SKILL.md",
+          description: "查询 OpenAI 官方文档",
+          shortDescription: "OpenAI 文档",
+          scope: "user",
+          enabled: true
+        },
+        {
+          cwd: "/repo",
+          name: "repo-helper",
+          path: "/repo/.codex/skills/repo-helper/SKILL.md",
+          description: "项目辅助",
+          shortDescription: null,
+          scope: "repo",
+          enabled: true
+        }
+      ],
+      skillErrors: []
+    });
     vi.stubGlobal("URL", {
       ...URL,
       createObjectURL: vi.fn(() => "blob:preview")
@@ -78,7 +104,7 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByLabelText("发送")).toBeEnabled());
     await user.click(screen.getByLabelText("发送"));
 
-    expect(onSend).toHaveBeenCalledWith("look at this", ["uploads/image.png"]);
+    expect(onSend).toHaveBeenCalledWith("look at this", ["uploads/image.png"], []);
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
@@ -222,6 +248,83 @@ describe("ChatInput", () => {
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
   });
 
+  it("selects, removes, and sends structured skill references", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend, cwd: "/repo" });
+
+    await user.click(screen.getByLabelText("引用 Skill"));
+    expect(await screen.findByRole("dialog", { name: "选择 Skill" })).toBeInTheDocument();
+    expect(mockListSkills).toHaveBeenCalledWith(true, "/repo");
+
+    await user.type(screen.getByPlaceholderText("搜索 Skill"), "repo");
+    expect(screen.queryByText("openai-docs")).not.toBeInTheDocument();
+    await user.click(screen.getByText("repo-helper"));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+
+    expect(screen.getByText("repo-helper")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("移除 Skill repo-helper"));
+    expect(screen.queryByText("repo-helper")).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("引用 Skill"));
+    await user.click(await screen.findByText("openai-docs"));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await user.type(screen.getByPlaceholderText("输入消息"), "查一下文档");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(onSend).toHaveBeenCalledWith("查一下文档", [], [
+      { name: "openai-docs", path: "/home/hzy/.codex/skills/openai-docs/SKILL.md" }
+    ]);
+    await waitFor(() => expect(screen.queryByLabelText("移除 Skill openai-docs")).not.toBeInTheDocument());
+    expect(mockListSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not request the skill list twice while an open request is pending", async () => {
+    let resolveList: ((value: { skills: []; skillErrors: [] }) => void) | null = null;
+    mockListSkills.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      })
+    );
+    renderInput({ cwd: "/repo" });
+
+    const skillButton = screen.getByLabelText("引用 Skill");
+    fireEvent.click(skillButton);
+    fireEvent.click(skillButton);
+
+    expect(mockListSkills).toHaveBeenCalledTimes(1);
+    expect(mockListSkills).toHaveBeenCalledWith(true, "/repo");
+    resolveList?.({ skills: [], skillErrors: [] });
+    await waitFor(() => expect(screen.getByText("没有匹配的 Skill")).toBeInTheDocument());
+  });
+
+  it("shows skill list load failure and retries", async () => {
+    const user = userEvent.setup();
+    mockListSkills.mockRejectedValueOnce(new Error("skills unavailable")).mockResolvedValueOnce({
+      skills: [
+        {
+          cwd: "/repo",
+          name: "openai-docs",
+          path: "/home/hzy/.codex/skills/openai-docs/SKILL.md",
+          description: "查询 OpenAI 官方文档",
+          shortDescription: "OpenAI 文档",
+          scope: "user",
+          enabled: true
+        }
+      ],
+      skillErrors: []
+    });
+    renderInput({ cwd: "/repo" });
+
+    await user.click(screen.getByLabelText("引用 Skill"));
+    expect(await screen.findByText("skills unavailable")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByText("openai-docs")).toBeInTheDocument();
+    expect(mockListSkills).toHaveBeenNthCalledWith(1, true, "/repo");
+    expect(mockListSkills).toHaveBeenNthCalledWith(2, true, "/repo");
+  });
+
   it("sends half-screen editor text instead of the stale inline value", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
@@ -233,7 +336,7 @@ describe("ChatInput", () => {
     const sendButtons = screen.getAllByRole("button", { name: "发送" });
     await user.click(sendButtons[sendButtons.length - 1]);
 
-    expect(onSend).toHaveBeenCalledWith("half-screen message", []);
+    expect(onSend).toHaveBeenCalledWith("half-screen message", [], []);
     expect(screen.queryByText("取消")).not.toBeInTheDocument();
   });
 });

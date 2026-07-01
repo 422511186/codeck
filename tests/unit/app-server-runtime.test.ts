@@ -1154,6 +1154,7 @@ describe("createAppServerGateway", () => {
         {
           cwd: "C:\\Users\\huang\\workspace",
           name: "openai-docs",
+          path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
           description: "查询 OpenAI 官方文档",
           shortDescription: "OpenAI 文档",
           scope: "user",
@@ -1162,6 +1163,7 @@ describe("createAppServerGateway", () => {
         {
           cwd: "C:\\Users\\huang\\workspace",
           name: "repo-helper",
+          path: "C:\\Users\\huang\\workspace\\.codex\\skills\\repo-helper\\SKILL.md",
           description: "项目内辅助技能",
           shortDescription: null,
           scope: "repo",
@@ -1595,6 +1597,15 @@ describe("createAppServerGateway", () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();
 
+    const listedSkills = await gateway.listSkills({ enabledOnly: true });
+    expect(listedSkills.skills).toEqual([
+      expect.objectContaining({
+        name: "openai-docs",
+        path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
+        enabled: true
+      })
+    ]);
+    expect(listedSkills.skillErrors).toEqual([]);
     await expect(
       gateway.readPluginSkill({
         remoteMarketplaceName: "个人插件市场",

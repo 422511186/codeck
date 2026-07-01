@@ -426,16 +426,27 @@ export type MobileModelDefaultsView = {
 export type MobileSkillView = {
   cwd: string;
   name: string;
+  path: string;
   description: string;
   shortDescription: string | null;
   scope: string;
   enabled: boolean;
 };
 
+export type MobileSkillReference = {
+  name: string;
+  path: string;
+};
+
 export type MobileSkillErrorView = {
   cwd: string;
   path: string;
   message: string;
+};
+
+export type MobileSkillListView = {
+  skills: MobileSkillView[];
+  skillErrors: MobileSkillErrorView[];
 };
 
 export type MobileHookView = {

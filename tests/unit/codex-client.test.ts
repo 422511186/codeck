@@ -1958,6 +1958,33 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("能把 Skill 引用作为结构化 UserInput 发送为 turn/start", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      text: "查一下官方文档",
+      skillReferences: [
+        {
+          name: "openai-docs",
+          path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md"
+        }
+      ]
+    });
+
+    expect(peer.calls.at(-1)).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "查一下官方文档", text_elements: [] },
+          { type: "skill", name: "openai-docs", path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md" }
+        ]
+      }
+    });
+  });
+
   it("能 fork 当前会话", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -2414,6 +2441,41 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls).toEqual([{ method: "config/read", params: {} }]);
   });
 
+  it("能轻量读取会话摘要", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThreadSummary("thread-1")).resolves.toMatchObject({
+      id: "thread-1",
+      cwd: "C:\\Users\\huang\\workspace\\demo"
+    });
+
+    expect(peer.calls).toEqual([
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } }
+    ]);
+  });
+
+  it("能按 cwd 读取 Skill 列表", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.listSkills({ enabledOnly: false, forceReload: true, cwds: ["C:\\Users\\huang\\workspace\\demo"] })
+    ).resolves.toMatchObject({
+      skills: expect.arrayContaining([
+        expect.objectContaining({ name: "openai-docs", enabled: true }),
+        expect.objectContaining({ name: "repo-helper", enabled: false })
+      ])
+    });
+
+    expect(peer.calls).toEqual([
+      {
+        method: "skills/list",
+        params: { forceReload: true, cwds: ["C:\\Users\\huang\\workspace\\demo"] }
+      }
+    ]);
+  });
+
   it("能读取设置状态", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -2505,6 +2567,7 @@ describe("CodexAppServerClient", () => {
         {
           cwd: "C:\\Users\\huang\\workspace\\demo",
           name: "openai-docs",
+          path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md",
           description: "查询 OpenAI 官方文档",
           shortDescription: "OpenAI 文档",
           scope: "user",
@@ -2513,6 +2576,7 @@ describe("CodexAppServerClient", () => {
         {
           cwd: "C:\\Users\\huang\\workspace\\demo",
           name: "repo-helper",
+          path: "C:\\Users\\huang\\workspace\\demo\\.codex\\skills\\repo-helper\\SKILL.md",
           description: "项目内辅助技能",
           shortDescription: null,
           scope: "repo",

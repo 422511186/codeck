@@ -49,6 +49,7 @@ import type {
   MobileRemoteControlStatusView,
   MobileSettingsView,
   MobileSkillConfigWriteResultView,
+  MobileSkillListView,
   MobileTerminalSession,
   MobileThreadElicitationResult,
   MobileThreadGoalView,
@@ -79,6 +80,7 @@ import {
   type ImportExternalAgentConfigInput,
   type ListAppsInput,
   type ListInstalledPluginsInput,
+  type ListSkillsInput,
   type ListThreadBackgroundTerminalsInput,
   type ListThreadTurnItemsInput,
   type ListThreadTurnsInput,
@@ -3076,6 +3078,11 @@ export class AppServerGateway {
     return this.withTimelineGeneration(this.applyTimelineOverlay(await this.client.readThread(threadId)));
   }
 
+  async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
+    await this.ensureReady();
+    return this.client.readThreadSummary(threadId);
+  }
+
   private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
     const overlay = this.timelineOverlays.get(detail.id);
     if (!overlay?.size) {
@@ -3378,6 +3385,11 @@ export class AppServerGateway {
   async writeSkillConfig(input: WriteSkillConfigInput): Promise<MobileSkillConfigWriteResultView> {
     await this.ensureReady();
     return this.client.writeSkillConfig(input);
+  }
+
+  async listSkills(input: ListSkillsInput = {}): Promise<MobileSkillListView> {
+    await this.ensureReady();
+    return this.client.listSkills(input);
   }
 
   async setExperimentalFeatureEnablement(name: string, enabled: boolean): Promise<void> {

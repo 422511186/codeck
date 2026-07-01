@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import type { StartTurnInput } from "../../../../../server/app-server/client";
+import type { MobileSkillReference } from "../../../../../shared/codex";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
@@ -22,6 +23,7 @@ export async function POST(request: Request): Promise<Response> {
       threadId?: string;
       text?: string;
       imagePaths?: string[];
+      skillReferences?: unknown;
       clientUserMessageId?: string;
       model?: string;
       reasoningEffort?: string;
@@ -41,10 +43,15 @@ export async function POST(request: Request): Promise<Response> {
 
     const config = getRuntimeConfig();
     const imagePaths = body.imagePaths?.map((imagePath) => assertRuntimePathAllowed(imagePath, [config.uploadDir]));
+    const skillReferences = normalizeSkillReferences(body.skillReferences);
+    if (skillReferences.length) {
+      await assertSkillReferencesAllowed(body.threadId, skillReferences);
+    }
     await audit("turn.start", {
       threadId: body.threadId,
       textLength: body.text.length,
       imageCount: imagePaths?.length || 0,
+      skillCount: skillReferences.length,
       clientUserMessageId: body.clientUserMessageId,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
@@ -57,6 +64,7 @@ export async function POST(request: Request): Promise<Response> {
       threadId: body.threadId!,
       text: body.text!,
       imagePaths,
+      skillReferences,
       clientUserMessageId: body.clientUserMessageId,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
@@ -126,4 +134,34 @@ function normalizeReasoningSummary(value: unknown): StartTurnInput["reasoningSum
   return value === "auto" || value === "concise" || value === "detailed" || value === "none"
     ? value
     : undefined;
+}
+
+function normalizeSkillReferences(value: unknown): MobileSkillReference[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => {
+    const candidate = item as { name?: unknown; path?: unknown };
+    return {
+      name: typeof candidate.name === "string" ? candidate.name.trim() : "",
+      path: typeof candidate.path === "string" ? candidate.path.trim() : ""
+    };
+  });
+}
+
+async function assertSkillReferencesAllowed(threadId: string, skillReferences: MobileSkillReference[]): Promise<void> {
+  if (skillReferences.some((skill) => !skill.name || !skill.path)) {
+    throw new Error("Skill 引用不能为空");
+  }
+
+  const gateway = getAppServerGateway();
+  const thread = await gateway.readThreadSummary(threadId);
+  const available = await gateway.listSkills({ enabledOnly: true, cwds: [thread.cwd] });
+  const allowed = new Set(available.skills.map((skill) => `${skill.name}\u0001${skill.path}`));
+  for (const skill of skillReferences) {
+    if (!allowed.has(`${skill.name}\u0001${skill.path}`)) {
+      throw new Error(`Skill 不可用：${skill.name || skill.path}`);
+    }
+  }
 }

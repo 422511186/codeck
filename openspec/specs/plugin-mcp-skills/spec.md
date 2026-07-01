@@ -39,11 +39,23 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **THEN** 调用 `gateway.readPluginSkill({remoteMarketplaceName, remotePluginId, skillName})`，返回技能内容
 
 ### Requirement: Skills management
-系统 SHALL 支持列出技能、写入技能配置和设置额外根路径。
+系统 SHALL 支持列出技能、写入技能配置和设置额外根路径。返回给移动端的 `MobileSkillView` MUST 包含 `cwd`、`name`、`path`、`description`、`shortDescription`、`scope` 和 `enabled`，其中 `path` 用于构造 app-server `UserInput.skill`。
 
 #### Scenario: List skills
 - **WHEN** 已认证用户通过 settings 聚合请求 `skills/list`
 - **THEN** 返回 `MobileSkillView[]` 和 `MobileSkillErrorView[]`
+- **AND** 每个 `MobileSkillView` MUST 包含 skill `path`
+
+#### Scenario: List skills for chat picker
+- **WHEN** 已认证用户 GET `/api/codex/skills`
+- **THEN** 调用 `gateway.listSkills({enabledOnly: true})`
+- **AND** 返回已启用 `MobileSkillView[]` 和 `MobileSkillErrorView[]`
+
+#### Scenario: List skills for active thread cwd
+- **WHEN** 已认证用户 GET `/api/codex/skills?cwd=<thread-cwd>`
+- **THEN** 系统 MUST 校验 `cwd` 是允许运行时路径
+- **AND** 调用 `gateway.listSkills({enabledOnly: true, cwds: [thread-cwd]})`
+- **AND** 返回该项目 `cwd` 可见的已启用 user/repo skills
 
 #### Scenario: Write skill config
 - **WHEN** 已认证用户 POST `/api/codex/skills/config` 并提供 `name`、`path`、`enabled`
@@ -151,4 +163,3 @@ MCP 服务器启动状态变更 SHALL 通过 `mcpServer/startupStatus/updated` �
 4. **Skills extra roots 无校验**：`setSkillsExtraRoots` 接收 extraRoots 数组，但不校验这些路径是否在工作区范围内。是否应该校验？
 5. **Windows sandbox readiness 无审计**：sandbox 操作不记录审计日志。
 6. **Mock experimental method 无安全限制**：`mock/experimentalMethod` 是一个调试端点，在生产模式（spawn/external）下仍然可访问。是否应该仅在 mock 模式下可用？
-

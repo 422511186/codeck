@@ -75,6 +75,25 @@ export type UploadedImage = {
   size: number;
 };
 
+export type SkillReference = {
+  name: string;
+  path: string;
+};
+
+export type SkillOption = SkillReference & {
+  cwd: string;
+  description: string;
+  shortDescription: string | null;
+  scope: string;
+  enabled: boolean;
+};
+
+export type SkillError = {
+  cwd: string;
+  path: string;
+  message: string;
+};
+
 export type ServerRequestKind =
   | "command_approval"
   | "file_approval"

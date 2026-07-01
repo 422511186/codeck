@@ -47,7 +47,7 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **AND** MUST 不显示 ChatGPT 登录、API key 登录、Codex 账号登出等操作按钮
 
 ### Requirement: Token 用量展示
-设置页 SHALL 调用 `GET /api/codex/account/token-usage` 展示 token 用量；MUST 不在 timeline 或会话页其他地方显示 token 数据。
+设置页 SHALL 调用 `GET /api/codex/account/token-usage` 展示 token 用量；MUST 不在 timeline 或会话页其他地方显示 token 数据。账号未提供可读取 token 用量的 ChatGPT 认证时，该 API MUST 返回可渲染的空用量结果，不得把该预期不可用状态冒泡为 5xx 网关错误。
 
 #### Scenario: Token 用量只在设置里
 - **WHEN** 用户进入设置页
@@ -56,6 +56,12 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 #### Scenario: 不在 timeline 显示
 - **WHEN** 用户在会话聊天页
 - **THEN** timeline 中 MUST 不显示任何 token 用量或耗时数字
+
+#### Scenario: Token 用量不可用
+- **WHEN** app-server 返回 “chatgpt authentication required to read token usage” 或等价的账号用量不可用错误
+- **THEN** `GET /api/codex/account/token-usage` MUST 返回 HTTP 200
+- **AND** 响应 MUST 包含 `summary` 各字段为 `null`、`dailyUsageBuckets: null` 的空用量
+- **AND** 设置页 MUST 不把该情况展示为网关错误
 
 ### Requirement: 主题切换
 设置页 SHALL 提供「自适应 / 明亮 / 暗黑」三种主题选择；选择结果 MUST 持久化到 localStorage，并立即应用到当前页面。
@@ -85,4 +91,3 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **WHEN** 用户打开任一模型选择器
 - **THEN** 前端 MUST 实时调用 `/api/codex/models`
 - **AND** MUST 用最新返回结果渲染列表
-
