@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { codex } from "../../../web/api/endpoints";
+import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
+import { createRequestCoordinator, isRequestAbort } from "../../../web/api/requestCoordinator";
 import { useStore } from "../../../web/state/store";
 import { rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
@@ -74,6 +75,10 @@ export default function ThreadPage(): JSX.Element {
   const atBottomRef = useRef(true);
   const pendingSendKeysRef = useRef(new Set<string>());
   const mutationEpochRef = useRef(0);
+  const requestCoordinatorRef = useRef(createRequestCoordinator());
+  const loadingPageCursorsRef = useRef(new Set<string>());
+  const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
+  const settingsFlushRef = useRef<Promise<void> | null>(null);
 
   const configuredModel = threadState?.model ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -86,10 +91,28 @@ export default function ThreadPage(): JSX.Element {
     return mutationEpochRef.current;
   }, []);
 
+  const enqueueThreadSettings = useCallback(
+    (input: UpdateThreadSettingsInput) => {
+      pendingSettingsRef.current = input;
+      if (!settingsFlushRef.current) {
+        settingsFlushRef.current = (async () => {
+          while (pendingSettingsRef.current) {
+            const next = pendingSettingsRef.current;
+            pendingSettingsRef.current = null;
+            await codex.updateThreadSettings(threadId, next);
+          }
+        })().finally(() => {
+          settingsFlushRef.current = null;
+        });
+      }
+      return settingsFlushRef.current;
+    },
+    [threadId]
+  );
+
   useEffect(() => {
     let cancelled = false;
-    codex
-      .settings()
+    requestCoordinatorRef.current.dedupeRequest("codex:settings", () => codex.settings())
       .then((settings) => {
         if (!cancelled) {
           setServerDefaults({
@@ -99,7 +122,8 @@ export default function ThreadPage(): JSX.Element {
           });
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        if (isRequestAbort(err)) return;
         // Keep the protocol fallback when app-server settings are temporarily unavailable.
       });
     return () => {
@@ -148,12 +172,16 @@ export default function ThreadPage(): JSX.Element {
     setLoading(true);
     (async () => {
       try {
-        const td = await codex.readThread(threadId);
+        const td = await requestCoordinatorRef.current.dedupeRequest(
+          `thread:${threadId}:detail`,
+          () => codex.readThread(threadId)
+        );
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail(td, "replace");
         setRunning(threadId, isThreadRunningStatus(td.status));
       } catch (err) {
+        if (isRequestAbort(err)) return;
         if (!cancelled) {
           setError(err instanceof ApiError ? err.message : (err as Error).message);
         }
@@ -173,7 +201,10 @@ export default function ThreadPage(): JSX.Element {
     const requestEpoch = mutationEpochRef.current;
     (async () => {
       try {
-        const td = await codex.readThread(threadId);
+        const td = await requestCoordinatorRef.current.dedupeRequest(
+          `thread:${threadId}:repair`,
+          () => codex.readThread(threadId)
+        );
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) {
           requestSnapshotRepair(threadId);
@@ -182,7 +213,8 @@ export default function ThreadPage(): JSX.Element {
         applyThreadDetail(td, "replace");
         setRunning(threadId, isThreadRunningStatus(td.status));
         clearSnapshotRepair(threadId);
-      } catch {
+      } catch (err) {
+        if (isRequestAbort(err)) return;
         // Keep the current cache visible; the next stream gap or manual refresh can retry.
       }
     })();
@@ -200,14 +232,14 @@ export default function ThreadPage(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    codex
-      .listPendingRequests()
+    requestCoordinatorRef.current.dedupeRequest("pendingRequests:list", () => codex.listPendingRequests())
       .then((requests) => {
         if (!cancelled) {
           setPendingRequests(requests);
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        if (isRequestAbort(err)) return;
         // WebSocket remains the live path; this is only a reload recovery path.
       });
     return () => {
@@ -223,14 +255,23 @@ export default function ThreadPage(): JSX.Element {
       setShowJumpLatest(!atBottomRef.current);
 
       if (el.scrollTop < 64 && threadState && !threadState.reachedBeginning && threadState.cursor) {
+        const cursor = threadState.cursor;
+        const pageKey = `${threadId}\u0001${cursor}`;
+        if (loadingPageCursorsRef.current.has(pageKey)) return;
+        loadingPageCursorsRef.current.add(pageKey);
         try {
-          const page = await codex.listTurnsBefore(threadId, threadState.cursor);
+          const page = await requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:turns:${cursor}`,
+            () => codex.listTurnsBefore(threadId, cursor)
+          );
           const extra = page.items.map((it, i) =>
             timelineItemToEntry(it, Date.now() - 10_000 - i)
           );
           prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
         } catch {
           // ignore page load failure
+        } finally {
+          loadingPageCursorsRef.current.delete(pageKey);
         }
       }
     },
@@ -267,7 +308,10 @@ export default function ThreadPage(): JSX.Element {
       try {
         const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
         if (currentDetail.status === "notLoaded") {
-          const resumed = await codex.resumeThread(threadId);
+          const resumed = await requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:resume`,
+            () => codex.resumeThread(threadId)
+          );
           setDetail(resumed);
         }
         const currentMode = threadState?.mode ?? "build";
@@ -372,12 +416,14 @@ export default function ThreadPage(): JSX.Element {
   const onInterrupt = useCallback(async () => {
     const turnId = threadState?.activeTurnId ?? detail?.lastTurnId ?? undefined;
     try {
-      await codex.interruptTurn(threadId, turnId);
-      if (turnId) {
-        markTurnInterrupted(threadId, turnId);
-      }
-      setRunning(threadId, false);
-      setActiveTurnId(threadId, null);
+      await requestCoordinatorRef.current.runLockedAction(`interrupt:${threadId}`, async () => {
+        await codex.interruptTurn(threadId, turnId);
+        if (turnId) {
+          markTurnInterrupted(threadId, turnId);
+        }
+        setRunning(threadId, false);
+        setActiveTurnId(threadId, null);
+      });
     } catch (err) {
       appendEntries(threadId, [
         {
@@ -506,7 +552,7 @@ export default function ThreadPage(): JSX.Element {
     setShowModelPicker(true);
     setModels(null);
     try {
-      setModels(await codex.models());
+      setModels(await requestCoordinatorRef.current.dedupeRequest("codex:models", () => codex.models()));
     } catch {
       setModels([]);
     }
@@ -521,7 +567,7 @@ export default function ThreadPage(): JSX.Element {
           : null;
       setModel(threadId, model.id, nextEffort);
       try {
-        await codex.updateThreadSettings(threadId, {
+        await enqueueThreadSettings({
           model: model.id,
           ...(nextEffort ? { reasoningEffort: nextEffort } : {})
         });
@@ -530,14 +576,14 @@ export default function ThreadPage(): JSX.Element {
         console.warn("update model failed", err);
       }
     },
-    [threadId, effectiveReasoningEffort, setModel]
+    [threadId, effectiveReasoningEffort, setModel, enqueueThreadSettings]
   );
 
   const onSelectReasoningEffort = useCallback(
     async (effort: string) => {
       setModel(threadId, effectiveModel, effort);
       try {
-        await codex.updateThreadSettings(threadId, {
+        await enqueueThreadSettings({
           model: effectiveModel,
           reasoningEffort: effort
         });
@@ -545,7 +591,7 @@ export default function ThreadPage(): JSX.Element {
         console.warn("update reasoning effort failed", err);
       }
     },
-    [threadId, effectiveModel, setModel]
+    [threadId, effectiveModel, setModel, enqueueThreadSettings]
   );
 
   const onToggleMode = useCallback(
@@ -553,7 +599,7 @@ export default function ThreadPage(): JSX.Element {
       setMode(threadId, next);
       saveJson(threadModeKey(threadId), next);
       try {
-        await codex.updateThreadSettings(threadId, {
+        await enqueueThreadSettings({
           collaborationMode: collaborationModeForChatMode(
             next,
             effectiveModel,
@@ -564,7 +610,7 @@ export default function ThreadPage(): JSX.Element {
         console.warn("update mode failed", err);
       }
     },
-    [threadId, setMode, effectiveModel, effectiveReasoningEffort]
+    [threadId, setMode, effectiveModel, effectiveReasoningEffort, enqueueThreadSettings]
   );
 
   const cachedEntries = threadState?.entries ?? [];
@@ -719,9 +765,13 @@ export default function ThreadPage(): JSX.Element {
           onArchive={async () => {
             setShowSheet(false);
             try {
-              await codex.archiveThread(threadId);
-              setArchiveToast({ visible: true });
-              setTimeout(() => setArchiveToast(null), 4500);
+              const result = await requestCoordinatorRef.current.runLockedAction(`archive:${threadId}`, async () => {
+                await codex.archiveThread(threadId);
+              });
+              if (result.started) {
+                setArchiveToast({ visible: true });
+                setTimeout(() => setArchiveToast(null), 4500);
+              }
             } catch (err) {
               console.warn("archive failed", err);
             }
@@ -750,8 +800,13 @@ export default function ThreadPage(): JSX.Element {
           onClose={() => setRenameOpen(false)}
           onSubmit={async (name) => {
             try {
-              const updated = await codex.renameThread(threadId, name);
-              setDetail(updated);
+              const result = await requestCoordinatorRef.current.runLockedAction(
+                `rename:${threadId}`,
+                () => codex.renameThread(threadId, name)
+              );
+              if (result.started) {
+                setDetail(result.value);
+              }
             } catch (err) {
               console.warn("rename failed", err);
             } finally {
@@ -769,7 +824,10 @@ export default function ThreadPage(): JSX.Element {
           onConfirm={async () => {
             setCompactOpen(false);
             try {
-              await codex.compactThread(threadId);
+              await requestCoordinatorRef.current.runLockedAction(
+                `compact:${threadId}`,
+                () => codex.compactThread(threadId)
+              );
             } catch (err) {
               console.warn("compact failed", err);
             }
@@ -785,7 +843,10 @@ export default function ThreadPage(): JSX.Element {
             onClick={async () => {
               setArchiveToast(null);
               try {
-                await codex.unarchiveThread(threadId);
+                await requestCoordinatorRef.current.runLockedAction(
+                  `unarchive:${threadId}`,
+                  () => codex.unarchiveThread(threadId)
+                );
               } catch (err) {
                 console.warn("unarchive failed", err);
               }

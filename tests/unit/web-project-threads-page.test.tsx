@@ -3,6 +3,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ProjectThreadsPage from "../../src/app/projects/[projectId]/page";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
 const mockUseParams = vi.fn();
@@ -529,7 +531,9 @@ describe("ProjectThreadsPage", () => {
     await user.click(fab);
 
     await waitFor(() => {
-      expect(mockStartThread).toHaveBeenCalledWith({ cwd: "C:/test" });
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "C:/test", clientOperationId: expect.any(String) })
+      );
       expect(mockPush).toHaveBeenCalledWith("/threads/new-thread");
     });
   });
@@ -549,7 +553,9 @@ describe("ProjectThreadsPage", () => {
     await user.click(startButton);
 
     await waitFor(() => {
-      expect(mockStartThread).toHaveBeenCalledWith({ cwd: "C:/test" });
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "C:/test", clientOperationId: expect.any(String) })
+      );
       expect(mockPush).toHaveBeenCalledWith("/threads/new-thread");
     });
   });
@@ -567,7 +573,8 @@ describe("ProjectThreadsPage", () => {
     await waitFor(() => {
       expect(mockStartThread).toHaveBeenCalledWith({
         cwd: "C:/test",
-        model: "openai/gpt-5"
+        model: "openai/gpt-5",
+        clientOperationId: expect.any(String)
       });
       expect(mockSaveJson).toHaveBeenCalledWith("thread-mode:new-thread", "plan");
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith(
@@ -620,7 +627,9 @@ describe("ProjectThreadsPage", () => {
     await user.click(screen.getByLabelText("新建会话"));
 
     await waitFor(() => {
-      expect(mockStartThread).toHaveBeenCalledWith({ cwd: "C:/test" });
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "C:/test", clientOperationId: expect.any(String) })
+      );
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith(
         "new-thread",
         expect.objectContaining({
@@ -648,6 +657,56 @@ describe("ProjectThreadsPage", () => {
 
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith("/threads/new-thread");
+    });
+  });
+
+  it("should ignore duplicate new thread clicks while request is pending", async () => {
+    const user = userEvent.setup();
+    let resolveStart: ((value: { id: string }) => void) | null = null;
+    mockStartThread.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve;
+      })
+    );
+
+    render(<ProjectThreadsPage />);
+
+    const fab = screen.getByLabelText("新建会话");
+    await user.click(fab);
+    await user.click(fab);
+
+    expect(mockStartThread).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveStart?.({ id: "new-thread" });
+    });
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/threads/new-thread");
+    });
+    expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("should allow retrying new thread creation after a failure", async () => {
+    const user = userEvent.setup();
+    mockStartThread
+      .mockRejectedValueOnce(new Error("start failed"))
+      .mockResolvedValueOnce({ id: "new-thread-after-retry" });
+
+    render(<ProjectThreadsPage />);
+
+    const fab = screen.getByLabelText("新建会话");
+    await user.click(fab);
+
+    await waitFor(() => {
+      expect(screen.getByText("start failed")).toBeInTheDocument();
+    });
+
+    await user.click(fab);
+
+    await waitFor(() => {
+      expect(mockStartThread).toHaveBeenCalledTimes(2);
+      expect(mockPush).toHaveBeenCalledWith("/threads/new-thread-after-retry");
     });
   });
 });

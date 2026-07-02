@@ -128,6 +128,7 @@ export type StartThreadInput = {
   workspaceRoots?: string[];
   model?: string;
   permissions?: string;
+  clientOperationId?: string;
 };
 
 export async function startThread(input: StartThreadInput): Promise<ThreadDetail> {

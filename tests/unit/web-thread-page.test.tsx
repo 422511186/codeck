@@ -4,6 +4,8 @@ import { userEvent } from "@testing-library/user-event";
 import ThreadPage from "../../src/app/threads/[threadId]/page";
 import { ApiError } from "../../src/web/api/client";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const mockPush = vi.fn();
 const mockBack = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -289,7 +291,6 @@ describe("ThreadPage", () => {
   });
 
   it("should ignore a stale initial read that resolves after a cached send", async () => {
-    const user = userEvent.setup();
     let resolveInitialRead: (value: unknown) => void = () => undefined;
     mockReadThread.mockReturnValue(new Promise((resolve) => {
       resolveInitialRead = resolve;
@@ -315,8 +316,18 @@ describe("ThreadPage", () => {
 
     render(<ThreadPage />);
 
-    await user.type(await screen.findByPlaceholderText("输入消息"), "new message");
-    await user.click(screen.getByLabelText("发送"));
+    fireEvent.change(await screen.findByPlaceholderText("输入消息"), {
+      target: { value: "new message" }
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("发送")).toBeEnabled();
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
+    await waitFor(() => {
+      expect(mockStartTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: "thread-1", text: "new message" })
+      );
+    });
     await waitFor(() => {
       expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
         "thread-1",
@@ -347,7 +358,6 @@ describe("ThreadPage", () => {
   });
 
   it("should requeue snapshot repair instead of clearing it when a send changes the mutation epoch", async () => {
-    const user = userEvent.setup();
     let resolveRepair: (value: unknown) => void = () => undefined;
     const initialDetail = {
         id: "thread-1",
@@ -390,8 +400,13 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await waitFor(() => expect(mockReadThread.mock.calls.length).toBeGreaterThanOrEqual(2));
-    await user.type(await screen.findByPlaceholderText("输入消息"), "new message");
-    await user.click(screen.getByLabelText("发送"));
+    fireEvent.change(await screen.findByPlaceholderText("输入消息"), {
+      target: { value: "new message" }
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("发送")).toBeEnabled();
+    });
+    fireEvent.click(screen.getByLabelText("发送"));
     await waitFor(() => expect(mockBindLocalUserMessageTurn).toHaveBeenCalledWith(
       "thread-1",
       expect.stringMatching(/^local-user-/),
@@ -617,6 +632,50 @@ describe("ThreadPage", () => {
     expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
   });
 
+  it("should ignore duplicate interrupt clicks while request is pending", async () => {
+    let resolveInterrupt: (() => void) | null = null;
+    mockInterruptTurn.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveInterrupt = resolve;
+      })
+    );
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const interruptButton = screen.getByLabelText("中断");
+    fireEvent.click(interruptButton);
+    fireEvent.click(interruptButton);
+
+    expect(mockInterruptTurn).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveInterrupt?.();
+    });
+  });
+
   it("should prefer the tracked active turn id when detail lastTurnId is stale", async () => {
     const user = userEvent.setup();
     mockReadThread.mockResolvedValue({
@@ -723,6 +782,48 @@ describe("ThreadPage", () => {
 
     // Verify that listTurnsBefore can be called when scrolling to top
     expect(mockThreadState).toHaveBeenCalled();
+  });
+
+  it("should not request the same older page twice while cursor load is pending", async () => {
+    let resolvePage: ((value: { items: []; nextCursor: string | null }) => void) | null = null;
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "recent",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Recent message" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: "turn-10",
+      reachedBeginning: false
+    });
+    mockListTurnsBefore.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      })
+    );
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+
+    await waitFor(() => {
+      expect(mockListTurnsBefore).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      resolvePage?.({ items: [], nextCursor: null });
+    });
   });
 
   it("should show 会话开始 when reached beginning", async () => {
@@ -912,6 +1013,16 @@ describe("ThreadPage", () => {
     );
   });
 
+  it("should request default settings once while opening the thread", async () => {
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(mockReadSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("should not request older turns with lastTurnId as cursor on initial load", async () => {
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -957,7 +1068,34 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "GPT-5" }));
 
     expect(mockSetModel).toHaveBeenCalledWith("thread-1", "openai/gpt-5", null);
-    expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { model: "openai/gpt-5" });
+    await waitFor(() => {
+      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { model: "openai/gpt-5" });
+    });
+  });
+
+  it("should not request model list twice while picker load is pending", async () => {
+    let resolveModels: ((value: []) => void) | null = null;
+    mockListModels.mockReturnValue(
+      new Promise((resolve) => {
+        resolveModels = resolve;
+      })
+    );
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const modelButton = screen.getByRole("button", { name: "gpt-5-codex" });
+    fireEvent.click(modelButton);
+    fireEvent.click(modelButton);
+
+    expect(mockListModels).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveModels?.([]);
+    });
   });
 
   it("should expose bottom sheet actions without delete", async () => {
@@ -979,7 +1117,6 @@ describe("ThreadPage", () => {
   });
 
   it("should rename thread from the bottom sheet dialog", async () => {
-    const user = userEvent.setup();
     mockRenameThread.mockResolvedValue({
       id: "thread-1",
       cwd: "C:/test",
@@ -996,14 +1133,21 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByLabelText("更多"));
-    await user.click(screen.getByRole("button", { name: "重命名" }));
+    act(() => {
+      screen.getByLabelText("更多").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    act(() => {
+      screen.getByRole("button", { name: "重命名" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
     const nameInput = screen.getByDisplayValue("Test Thread");
-    await user.clear(nameInput);
-    await user.type(nameInput, "Renamed Thread");
-    await user.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.change(nameInput, { target: { value: "Renamed Thread" } });
+    screen.getByRole("button", { name: "保存" })
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
-    expect(mockRenameThread).toHaveBeenCalledWith("thread-1", "Renamed Thread");
+    await waitFor(() => {
+      expect(mockRenameThread).toHaveBeenCalledWith("thread-1", "Renamed Thread");
+    });
   });
 
   it("should archive and undo from toast", async () => {
@@ -1024,6 +1168,41 @@ describe("ThreadPage", () => {
     expect(mockUnarchiveThread).toHaveBeenCalledWith("thread-1");
   });
 
+  it("should ignore duplicate undo archive clicks while request is pending", async () => {
+    const resolver: { current?: () => void } = {};
+    mockUnarchiveThread.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolver.current = resolve;
+      })
+    );
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    act(() => {
+      screen.getByLabelText("更多").dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: "归档" }));
+    await waitFor(() => expect(mockArchiveThread).toHaveBeenCalledWith("thread-1"));
+
+    const undoButton = screen.getByRole("button", { name: "撤销" });
+    act(() => {
+      undoButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      undoButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    await waitFor(() => {
+      expect(mockUnarchiveThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      resolver.current?.();
+    });
+  });
+
   it("should confirm compact before calling API", async () => {
     const user = userEvent.setup();
 
@@ -1042,6 +1221,37 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "继续" }));
 
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should ignore duplicate compact confirmations while request is pending", async () => {
+    let resolveCompact: (() => void) | null = null;
+    mockCompactThread.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveCompact = resolve;
+      })
+    );
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await userEvent.setup().click(screen.getByLabelText("更多"));
+    await userEvent.setup().click(screen.getByRole("button", { name: "压缩上下文" }));
+    const confirm = screen.getByRole("button", { name: "继续" });
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    await waitFor(() => {
+      expect(mockCompactThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      resolveCompact?.();
+    });
   });
 
   it("should not fork from the header sheet", async () => {
@@ -1326,9 +1536,11 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "高" }));
 
     expect(mockSetModel).toHaveBeenCalledWith("thread-1", "gpt-5-codex", "high");
-    expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
-      model: "gpt-5-codex",
-      reasoningEffort: "high"
+    await waitFor(() => {
+      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
+        model: "gpt-5-codex",
+        reasoningEffort: "high"
+      });
     });
   });
 

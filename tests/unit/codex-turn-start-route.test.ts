@@ -228,4 +228,56 @@ describe("codex turn start route", () => {
     await expect(first.json()).resolves.toMatchObject({ turnId: "turn-1" });
     await expect(second.json()).resolves.toMatchObject({ turnId: "turn-1" });
   });
+
+  it("同一个 clientUserMessageId 的串行重复请求复用已缓存 turn", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    const request = () =>
+      POST(
+        new Request("http://localhost/api/codex/turns/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "thread-1",
+            text: "重复提交",
+            clientUserMessageId: "local-user-serial"
+          })
+        })
+      );
+
+    const first = await request();
+    const second = await request();
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+    await expect(first.json()).resolves.toMatchObject({ turnId: "turn-1" });
+    await expect(second.json()).resolves.toMatchObject({ turnId: "turn-1" });
+  });
+
+  it("同一个 clientUserMessageId 启动失败后释放缓存并允许重试", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    mockStartTurn
+      .mockRejectedValueOnce(new Error("start failed"))
+      .mockResolvedValueOnce({ turnId: "turn-after-retry" });
+    const request = () =>
+      POST(
+        new Request("http://localhost/api/codex/turns/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            threadId: "thread-1",
+            text: "失败后重试",
+            clientUserMessageId: "local-user-retry"
+          })
+        })
+      );
+
+    const failed = await request();
+    const retried = await request();
+
+    expect(failed.status).toBe(502);
+    expect(retried.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledTimes(2);
+    await expect(retried.json()).resolves.toMatchObject({ turnId: "turn-after-retry" });
+  });
 });

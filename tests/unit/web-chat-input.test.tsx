@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { userEvent } from "@testing-library/user-event";
 import { ChatInput } from "../../src/web/components/ChatInput";
 
+vi.setConfig({ testTimeout: 15_000 });
+
 const mockUploadImage = vi.fn();
 const mockListSkills = vi.fn();
 

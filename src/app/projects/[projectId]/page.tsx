@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
+import { dedupeRequest, runLockedAction } from "../../../web/api/requestCoordinator";
 import { getProject, touchProjectLastUsed, type Project } from "../../../web/storage/projects";
 import { settingsStore } from "../../../web/storage/settings";
 import { saveJson, threadModeKey } from "../../../web/storage/localStore";
@@ -27,7 +28,9 @@ export default function ProjectThreadsPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [actionFor, setActionFor] = useState<{ thread: ThreadSummary; tab: Tab } | null>(null);
   const [actionPendingId, setActionPendingId] = useState<string | null>(null);
+  const [startPending, setStartPending] = useState(false);
   const suppressClickThreadId = useRef<string | null>(null);
+  const listRequestSeq = useRef(0);
 
   useEffect(() => {
     const p = getProject(projectId);
@@ -42,17 +45,21 @@ export default function ProjectThreadsPage(): JSX.Element {
   useEffect(() => {
     if (!project) return;
     let cancelled = false;
+    const requestSeq = ++listRequestSeq.current;
     setLoading(true);
     setError(null);
     (async () => {
       try {
-        const list = await codex.listThreadsForCwd(project.path, tab === "archived");
-        if (!cancelled) {
+        const list = await dedupeRequest(
+          `projectThreads:${project.id}:${tab}`,
+          () => codex.listThreadsForCwd(project.path, tab === "archived")
+        );
+        if (!cancelled && requestSeq === listRequestSeq.current) {
           setThreads(list);
           setLoading(false);
         }
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || requestSeq !== listRequestSeq.current) return;
         setError(err instanceof ApiError ? err.message : (err as Error).message);
         setLoading(false);
       }
@@ -65,25 +72,38 @@ export default function ProjectThreadsPage(): JSX.Element {
   async function startNewThread(): Promise<void> {
     if (!project) return;
     try {
-      const settings = settingsStore.load();
-      const serverDefaults = settings.defaultMode === "plan" ? await readServerDefaults() : null;
-      const planModel = settings.defaultModel ?? serverDefaults?.model ?? DEFAULT_COLLABORATION_MODEL;
-      const planEffort = serverDefaults?.reasoningEffort ?? null;
-      const thread = await codex.startThread({
-        cwd: project.path,
-        ...(settings.defaultModel ? { model: settings.defaultModel } : {})
-      });
-      saveJson(threadModeKey(thread.id), settings.defaultMode);
-      if (settings.defaultMode === "plan") {
+      setError(null);
+      const clientOperationId = uniqueClientOperationId("start-thread");
+      const result = await runLockedAction(`startThread:${project.id}`, async () => {
+        setStartPending(true);
         try {
-          await codex.updateThreadSettings(thread.id, {
-            collaborationMode: collaborationModeForChatMode("plan", planModel, planEffort)
+          const settings = settingsStore.load();
+          const serverDefaults = settings.defaultMode === "plan" ? await readServerDefaults() : null;
+          const planModel = settings.defaultModel ?? serverDefaults?.model ?? DEFAULT_COLLABORATION_MODEL;
+          const planEffort = serverDefaults?.reasoningEffort ?? null;
+          const thread = await codex.startThread({
+            cwd: project.path,
+            clientOperationId,
+            ...(settings.defaultModel ? { model: settings.defaultModel } : {})
           });
-        } catch (err) {
-          console.warn("sync default thread mode failed", err);
+          saveJson(threadModeKey(thread.id), settings.defaultMode);
+          if (settings.defaultMode === "plan") {
+            try {
+              await codex.updateThreadSettings(thread.id, {
+                collaborationMode: collaborationModeForChatMode("plan", planModel, planEffort)
+              });
+            } catch (err) {
+              console.warn("sync default thread mode failed", err);
+            }
+          }
+          return thread.id;
+        } finally {
+          setStartPending(false);
         }
+      });
+      if (result.started) {
+        router.push(`/threads/${result.value}`);
       }
-      router.push(`/threads/${thread.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : (err as Error).message);
     }
@@ -197,6 +217,7 @@ export default function ProjectThreadsPage(): JSX.Element {
       <button
         type="button"
         onClick={startNewThread}
+        disabled={startPending}
         aria-label="新建会话"
         style={{
           position: "fixed",
@@ -227,6 +248,14 @@ export default function ProjectThreadsPage(): JSX.Element {
       ) : null}
     </main>
   );
+}
+
+function uniqueClientOperationId(prefix: string): string {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `${prefix}-${Date.now()}-${random}`;
 }
 
 async function readServerDefaults(): Promise<{ model: string | null; reasoningEffort: string | null } | null> {
