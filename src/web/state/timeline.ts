@@ -1,4 +1,4 @@
-import type { TimelineItem, TimelineRole } from "../api/types";
+import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
 
 export type TimelineEntryKind =
   | "user-message"
@@ -63,6 +63,7 @@ export type UserMessageEntry = {
   kind: "user-message";
   text: string;
   imagePaths?: string[];
+  skillReferences?: SkillReference[];
   status?: "sending" | "sent" | "failed";
 };
 
@@ -162,6 +163,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
           kind: "user-message",
           text: normalized.text,
           ...(normalized.imagePaths?.length ? { imagePaths: normalized.imagePaths } : {}),
+          ...(item.skillReferences?.length ? { skillReferences: item.skillReferences } : {}),
           status: "sent"
         }
       };

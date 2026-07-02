@@ -257,6 +257,7 @@ export default function ThreadPage(): JSX.Element {
           kind: "user-message",
           text,
           ...(imagePaths.length ? { imagePaths } : {}),
+          ...(skillReferences.length ? { skillReferences } : {}),
           status: "sending"
         }
       };
@@ -305,6 +306,7 @@ export default function ThreadPage(): JSX.Element {
               kind: "user-message",
               text,
               ...(imagePaths.length ? { imagePaths } : {}),
+              ...(skillReferences.length ? { skillReferences } : {}),
               status: "sent"
             }
           });

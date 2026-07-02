@@ -320,6 +320,15 @@ function UserMessage({
           ))}
         </div>
       ) : null}
+      {body.skillReferences?.length ? (
+        <div style={skillReferenceRowStyle}>
+          {body.skillReferences.map((skill) => (
+            <span key={`${skill.name}\u0001${skill.path}`} style={skillReferenceChipStyle}>
+              {skill.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div style={{ color: failed ? "var(--cw-danger)" : "var(--cw-fg)" }}>{body.text}</div>
       {failed ? (
         <button
@@ -449,4 +458,27 @@ const sheetHandleStyle: React.CSSProperties = {
   borderRadius: 999,
   background: "var(--cw-border)",
   margin: "2px 0 8px"
+};
+
+const skillReferenceRowStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 6,
+  marginBottom: 8,
+  whiteSpace: "normal"
+};
+
+const skillReferenceChipStyle: React.CSSProperties = {
+  maxWidth: "100%",
+  minWidth: 0,
+  padding: "3px 8px",
+  borderRadius: 8,
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-card)",
+  color: "var(--cw-fg-muted)",
+  fontSize: 12,
+  lineHeight: 1.4,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap"
 };

@@ -270,7 +270,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
           onSelect={(skill) => {
             setSelectedSkills((items) =>
               items.some((item) => skillKey(item) === skillKey(skill))
-                ? items
+                ? items.filter((item) => skillKey(item) !== skillKey(skill))
                 : [...items, { name: skill.name, path: skill.path }]
             );
           }}

@@ -606,6 +606,7 @@ export type MobileTimelineItem = {
   text: string;
   done?: boolean;
   imagePaths?: string[];
+  skillReferences?: MobileSkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   server?: string;
   tool?: string;

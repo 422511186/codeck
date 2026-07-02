@@ -223,6 +223,24 @@ describe("imagePreviewSrc", () => {
 });
 
 describe("ToolCard", () => {
+  it("should prioritize command text over cwd for command tools", () => {
+    render(
+      <ToolCard
+        entry={{
+          kind: "tool",
+          toolKind: "command",
+          server: "/home/hzy/workspace/codex-web-1",
+          tool: "npm test",
+          status: "success",
+          result: "ok"
+        }}
+      />
+    );
+
+    expect(screen.getByText("npm test")).toBeInTheDocument();
+    expect(screen.queryByText("/home/hzy/workspace/codex-web-1 · npm test")).not.toBeInTheDocument();
+  });
+
   it("should render file tool line stats", () => {
     render(
       <ToolCard

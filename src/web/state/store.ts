@@ -1094,7 +1094,11 @@ function mergeReplacementEntry(current: TimelineEntry, next: TimelineEntry): Tim
       turnIndex: next.turnIndex ?? current.turnIndex,
       clientUserMessageId: next.clientUserMessageId ?? current.clientUserMessageId ?? current.id,
       generation: next.generation ?? current.generation,
-      body: { ...next.body, status: next.body.status ?? "sent" }
+      body: {
+        ...next.body,
+        skillReferences: next.body.skillReferences ?? current.body.skillReferences,
+        status: next.body.status ?? "sent"
+      }
     };
   }
 
@@ -1495,7 +1499,11 @@ function userMessageKey(entry: TimelineEntry): string | null {
   }
 
   const imagePaths = [...(entry.body.imagePaths ?? [])].sort().join("\u0000");
-  return `${entry.body.text.trim()}\u0001${imagePaths}`;
+  const skills = [...(entry.body.skillReferences ?? [])]
+    .map((skill) => `${skill.name}\u0000${skill.path}`)
+    .sort()
+    .join("\u0000");
+  return `${entry.body.text.trim()}\u0001${imagePaths}\u0001${skills}`;
 }
 
 function userMessageIdentityKey(entry: TimelineEntry): string | null {

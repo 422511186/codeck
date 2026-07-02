@@ -22,6 +22,31 @@ describe("timeline conversion", () => {
     expect((entry.body as any).imagePaths).toEqual(["C:/shot.png"]);
   });
 
+  it("should preserve user message skill references", () => {
+    const item: TimelineItem = {
+      id: "1-skill",
+      role: "user",
+      text: "分析这个问题",
+      skillReferences: [
+        {
+          name: "openspec-explore",
+          path: "/repo/.codex/skills/openspec-explore/SKILL.md"
+        }
+      ]
+    };
+
+    const entry = timelineItemToEntry(item, 1002);
+
+    expect(entry.body.kind).toBe("user-message");
+    expect((entry.body as any).text).toBe("分析这个问题");
+    expect((entry.body as any).skillReferences).toEqual([
+      {
+        name: "openspec-explore",
+        path: "/repo/.codex/skills/openspec-explore/SKILL.md"
+      }
+    ]);
+  });
+
   it("should compute rollback turn count from target entry turn metadata", () => {
     const entries = [
       { id: "u1", turnId: "turn-1", turnIndex: 0, createdAt: 1, body: { kind: "user-message", text: "one" } },

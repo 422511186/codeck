@@ -170,6 +170,50 @@ describe("Timeline", () => {
     expect(screen.queryByRole("dialog", { name: "图片预览" })).not.toBeInTheDocument();
   });
 
+  it("用户消息把 Skill 引用显示为 chip，复制时只复制正文", () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "user-skill",
+            turnId: "turn-skill",
+            createdAt: 1,
+            body: {
+              kind: "user-message",
+              text: "自建 agent 的意义是什么？",
+              skillReferences: [
+                {
+                  name: "openspec-explore",
+                  path: "/repo/.codex/skills/openspec-explore/SKILL.md"
+                }
+              ],
+              status: "sent"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("openspec-explore")).toBeInTheDocument();
+    expect(screen.queryByText("[skill]")).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByText("自建 agent 的意义是什么？"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制" }));
+    expect(writeText).toHaveBeenCalledWith("自建 agent 的意义是什么？");
+  });
+
   it("长按用户消息显示复制、回滚和 Fork 操作", async () => {
     vi.useFakeTimers();
     const onRewindToMessage = vi.fn();

@@ -641,6 +641,7 @@ function diffStats(diff: string): { added: number; removed: number } {
 
 function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): MobileTimelineItem {
   const imagePaths: string[] = [];
+  const skillReferences: MobileSkillReference[] = [];
   const text = item.content
     .map((content) => {
       if (content.type === "text") {
@@ -657,6 +658,11 @@ function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): Mo
         return "";
       }
 
+      if (content.type === "skill") {
+        skillReferences.push({ name: content.name, path: content.path });
+        return "";
+      }
+
       return `[${content.type}]`;
     })
     .filter((part) => part.trim().length > 0)
@@ -667,7 +673,8 @@ function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): Mo
     ...(item.clientId ? { clientUserMessageId: item.clientId } : {}),
     role: "user",
     text,
-    ...(imagePaths.length ? { imagePaths } : {})
+    ...(imagePaths.length ? { imagePaths } : {}),
+    ...(skillReferences.length ? { skillReferences } : {})
   };
 }
 

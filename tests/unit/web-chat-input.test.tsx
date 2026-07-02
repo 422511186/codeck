@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { ChatInput } from "../../src/web/components/ChatInput";
 
@@ -277,6 +277,23 @@ describe("ChatInput", () => {
     ]);
     await waitFor(() => expect(screen.queryByLabelText("移除 Skill openai-docs")).not.toBeInTheDocument());
     expect(mockListSkills).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles a selected skill off from the picker list", async () => {
+    const user = userEvent.setup();
+    renderInput({ cwd: "/repo" });
+
+    await user.click(screen.getByLabelText("引用 Skill"));
+    const skill = await screen.findByText("openai-docs");
+    await user.click(skill);
+    expect(screen.getByText("已选")).toBeInTheDocument();
+
+    const dialog = screen.getByRole("dialog", { name: "选择 Skill" });
+    await user.click(within(dialog).getByText("openai-docs"));
+    expect(screen.queryByText("已选")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    expect(screen.queryByLabelText("移除 Skill openai-docs")).not.toBeInTheDocument();
   });
 
   it("does not request the skill list twice while an open request is pending", async () => {

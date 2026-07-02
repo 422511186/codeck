@@ -30,6 +30,7 @@ export type TimelineItem = {
   text: string;
   done?: boolean;
   imagePaths?: string[];
+  skillReferences?: SkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   server?: string;
   tool?: string;

@@ -91,6 +91,41 @@ describe("timelineItem", () => {
     });
   });
 
+  it("maps user message skill inputs into structured skill references", () => {
+    expect(
+      timelineItem({
+        type: "userMessage",
+        id: "user-1",
+        clientId: "client-1",
+        content: [
+          { type: "text", text: "分析这个问题", text_elements: [] },
+          { type: "skill", name: "openspec-explore", path: "/repo/.codex/skills/openspec-explore/SKILL.md" }
+        ]
+      })
+    ).toMatchObject({
+      id: "user-1",
+      role: "user",
+      text: "分析这个问题",
+      skillReferences: [
+        {
+          name: "openspec-explore",
+          path: "/repo/.codex/skills/openspec-explore/SKILL.md"
+        }
+      ]
+    });
+    expect(
+      timelineItem({
+        type: "userMessage",
+        id: "user-1",
+        clientId: "client-1",
+        content: [
+          { type: "text", text: "分析这个问题", text_elements: [] },
+          { type: "skill", name: "openspec-explore", path: "/repo/.codex/skills/openspec-explore/SKILL.md" }
+        ]
+      })?.text
+    ).not.toContain("[skill]");
+  });
+
   it("falls back to a visible system item for unknown thread items", () => {
     expect(timelineItem({ type: "futureItem", id: "future-1", value: "visible" } as unknown as ThreadItem)).toMatchObject({
       id: "future-1",

@@ -9,15 +9,27 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const accent =
     entry.status === "failed" ? "var(--cw-danger)" : entry.status === "running" ? "var(--cw-accent)" : undefined;
+  const titleText = entry.toolKind === "command" ? entry.tool : `${entry.server} · ${entry.diffPath ?? entry.tool}`;
+  const showCommandCwd = entry.toolKind === "command" && isLikelyPath(entry.server);
   return (
     <>
       <BaseCard
         icon="🛠️"
         accentColor={accent}
         title={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
-              {entry.server} · {entry.diffPath ?? entry.tool}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 13,
+                minWidth: 0,
+                maxWidth: "100%",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+            >
+              {titleText}
             </span>
             {typeof entry.added === "number" ? <span style={{ color: "var(--cw-success)" }}>+{entry.added}</span> : null}
             {typeof entry.removed === "number" ? <span style={{ color: "var(--cw-danger)" }}>-{entry.removed}</span> : null}
@@ -25,6 +37,18 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
         }
         right={entry.status === "running" ? <span style={{ color: "var(--cw-fg-muted)" }}>运行中</span> : null}
       >
+        {showCommandCwd ? (
+          <div
+            style={{
+              color: "var(--cw-fg-muted)",
+              fontSize: 12,
+              paddingTop: 8,
+              wordBreak: "break-word"
+            }}
+          >
+            工作目录：<code style={{ fontFamily: "var(--font-mono)" }}>{entry.server}</code>
+          </div>
+        ) : null}
         {entry.arguments ? (
           <pre
             style={{
@@ -66,4 +90,8 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
       {previewSrc ? <ImagePreviewDialog src={previewSrc} onClose={() => setPreviewSrc(null)} /> : null}
     </>
   );
+}
+
+function isLikelyPath(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(value);
 }
