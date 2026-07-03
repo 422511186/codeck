@@ -17,9 +17,15 @@ describe("release scripts", () => {
         "scripts",
         "package.json",
         "package-lock.json",
+        "next.config.mjs",
         ".env.example",
+        ".env.docker.example",
+        "Dockerfile",
+        ".dockerignore",
+        "compose.yaml",
         "README.md",
-        "docs/release.md"
+        "docs/release.md",
+        "docs/docker-deployment.md"
       ])
     );
   });
@@ -28,6 +34,12 @@ describe("release scripts", () => {
     for (const excluded of releaseUtils.excludedReleaseEntries) {
       expect(releaseUtils.releaseEntries).not.toContain(excluded);
     }
+  });
+
+  it("Docker 部署文档引用的通用部署文件会进入 release 包", () => {
+    expect(releaseUtils.releaseEntries).toEqual(
+      expect.arrayContaining(["Dockerfile", ".dockerignore", "compose.yaml", ".env.docker.example"])
+    );
   });
 
   it("release 打包会剪掉 Next 本地缓存目录", () => {

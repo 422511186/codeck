@@ -1,0 +1,33 @@
+services:
+  codex-web:
+    image: codex-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    mem_limit: ${CODEX_WEB_MEMORY_LIMIT:-2g}
+    memswap_limit: ${CODEX_WEB_MEMORY_SWAP_LIMIT:-2g}
+    cpus: "${CODEX_WEB_CPU_LIMIT:-2.0}"
+    env_file:
+      - .env.docker
+    environment:
+      NODE_ENV: production
+      CODEX_WEB_BIND_HOST: 0.0.0.0
+      CODEX_WEB_BIND_PORT: "3000"
+      CODEX_WEB_APP_SERVER_MODE: external
+      CODEX_WEB_APP_SERVER_URL: ws://host.docker.internal:31317
+    ports:
+      - "3000:3000"
+    volumes:
+      - codex-web-uploads:/var/lib/codex-web/uploads
+      - codex-web-logs:/var/log/codex-web
+      - type: bind
+        source: ${CODEX_WEB_WORKSPACE_ROOTS:?set CODEX_WEB_WORKSPACE_ROOTS in .env.docker and pass --env-file .env.docker}
+        target: ${CODEX_WEB_WORKSPACE_ROOTS:?set CODEX_WEB_WORKSPACE_ROOTS in .env.docker and pass --env-file .env.docker}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  codex-web-uploads:
+  codex-web-logs:

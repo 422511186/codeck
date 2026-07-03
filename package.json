@@ -14,6 +14,8 @@
     "release:pack": "node scripts/pack-release.mjs",
     "release:smoke": "node scripts/smoke-release.mjs",
     "release:verify": "npm run verify && npm run build && npm run release:pack && npm run release:smoke",
+    "docker:build": "node scripts/build-docker.mjs",
+    "docker:smoke": "node scripts/smoke-docker.mjs",
     "verify": "npm run typecheck && npm run test"
   },
   "dependencies": {

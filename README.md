@@ -85,7 +85,9 @@ npm run dev
 
 ## Release 发布
 
-第一版 release 采用宿主机 tarball 自托管部署，不以 Docker 作为主路径。打包、验证、systemd 部署、升级回滚和安全边界见 `docs/release.md`。
+第一版 release 采用宿主机 tarball 自托管部署作为主路径；打包、验证、systemd 部署、升级回滚和安全边界见 `docs/release.md`。
+
+Docker 和 Docker Compose 是新增部署路径，适合希望用容器固定 Node.js 运行环境的自托管场景；镜像构建、Compose 配置、external app-server、验证、升级和回滚见 `docs/docker-deployment.md`。
 
 发布验证不得停止、重启、复用或抢占当前运行在 `23000` 端口的服务；需要启动服务的 smoke test 必须显式使用非 `23000` 端口。
 
@@ -106,7 +108,7 @@ npm run verify
 ## 个人模式配置
 
 ```env
-CODEX_WEB_ACCESS_TOKEN=sk-替换成你的登录token
+CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=C:\Users\huang\workspace
 CODEX_WEB_UPLOAD_DIR=C:\Users\huang\workspace\codex-web\uploads
 CODEX_WEB_AUDIT_LOG_PATH=C:\Users\huang\workspace\codex-web\logs\audit.jsonl

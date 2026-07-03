@@ -11,7 +11,7 @@
 - 宿主机已安装并配置 Codex CLI，或已单独启动 Codex app-server。
 - 手机浏览器通过局域网或受控反向代理访问 Codex Web。
 
-第一版不提供正式 Docker 镜像发布。Docker 作为后续阶段更适合搭配 `CODEX_WEB_APP_SERVER_MODE=external`，由容器内 Web 服务连接宿主机或独立进程中的 app-server。
+宿主机 tarball 仍是第一版 release 的主路径。项目现在也提供 Docker 和 Docker Compose 部署方式，适合希望用容器固定 Node.js 运行环境的自托管场景；具体步骤见 `docs/docker-deployment.md`。
 
 ## 安全边界
 
@@ -50,6 +50,14 @@ npm run release:verify
 
 `release:verify` 会执行自动化测试、生产构建、打包和 mock 模式 smoke test。smoke test 默认从 `23001` 起寻找空闲端口，并显式跳过 `23000`。
 
+Docker smoke test 也必须避开 `23000`：
+
+```bash
+npm run docker:smoke
+```
+
+`docker:smoke` 默认从 `23001` 起寻找可用宿主机端口，并以 `CODEX_WEB_APP_SERVER_MODE=mock` 启动临时容器验证 `/api/health`。不要停止、重启、绑定、复用或抢占当前 `23000` 服务。
+
 ## 打包产物
 
 打包成功后会生成：
@@ -69,13 +77,18 @@ tarball 使用 allowlist 打包，包含：
 - `package-lock.json`
 - `next.config.mjs`
 - `.env.example`
+- `.env.docker.example`
+- `Dockerfile`
+- `.dockerignore`
+- `compose.yaml`
 - `README.md`
 - `docs/release.md`
+- `docs/docker-deployment.md`
 
-tarball 不应包含：
+tarball 不应包含真实本地文件或运行数据：
 
 - `.env`
-- `.env.*`
+- `.env.docker`
 - `node_modules/`
 - `logs/`
 - `uploads/`
@@ -99,7 +112,7 @@ npm ci --omit=dev
 创建环境文件，例如 `/etc/codex-web.env`：
 
 ```env
-CODEX_WEB_ACCESS_TOKEN=sk-替换成你的登录token
+CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=/home/你的用户名/workspace
 CODEX_WEB_UPLOAD_DIR=/var/lib/codex-web/uploads
 CODEX_WEB_AUDIT_LOG_PATH=/var/log/codex-web/audit.jsonl
@@ -193,7 +206,7 @@ CODEX_WEB_APP_SERVER_MODE=external
 CODEX_WEB_APP_SERVER_URL=ws://127.0.0.1:31317
 ```
 
-后续 Docker 方案也更适合使用 external 模式，让容器内 Web 服务连接宿主机或独立进程中的 app-server。
+Docker/Compose 部署默认推荐 external 模式，让容器内 Web 服务连接宿主机或独立进程中的 app-server。具体配置见 `docs/docker-deployment.md`。
 
 ### mock
 
