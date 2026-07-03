@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { auth } from "../../web/api/endpoints";
 import { ApiError } from "../../web/api/client";
 
 export default function LoginPage(): JSX.Element {
+  return (
+    <Suspense fallback={<LoginShell />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm(): JSX.Element {
   const router = useRouter();
   const params = useSearchParams();
   const [token, setToken] = useState("");
@@ -28,7 +37,7 @@ export default function LoginPage(): JSX.Element {
     };
   }, [router, params]);
 
-  async function onSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+  async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!token.trim() || submitting) return;
     setSubmitting(true);
@@ -45,15 +54,7 @@ export default function LoginPage(): JSX.Element {
   }
 
   return (
-    <main
-      style={{
-        minHeight: "100dvh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "var(--cw-space-6)"
-      }}
-    >
+    <LoginShell>
       <form
         onSubmit={onSubmit}
         style={{
@@ -111,6 +112,22 @@ export default function LoginPage(): JSX.Element {
           {submitting ? "登录中…" : "登录"}
         </button>
       </form>
+    </LoginShell>
+  );
+}
+
+function LoginShell({ children }: { children?: ReactNode }): JSX.Element {
+  return (
+    <main
+      style={{
+        minHeight: "100dvh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "var(--cw-space-6)"
+      }}
+    >
+      {children}
     </main>
   );
 }

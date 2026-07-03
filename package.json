@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/server/http.ts",
-    "build": "npm run typecheck",
-    "start": "tsx src/server/http.ts",
+    "build": "npm run typecheck && node scripts/build-next.mjs && npm run build:server",
+    "build:server": "node scripts/build-server.mjs",
+    "start": "node scripts/start-production.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "release:pack": "node scripts/pack-release.mjs",
+    "release:smoke": "node scripts/smoke-release.mjs",
+    "release:verify": "npm run verify && npm run build && npm run release:pack && npm run release:smoke",
     "verify": "npm run typecheck && npm run test"
   },
   "dependencies": {
@@ -37,6 +41,7 @@
     "@types/react": "19.2.17",
     "@types/ws": "^8.5.13",
     "cross-env": "^10.0.0",
+    "esbuild": "^0.28.1",
     "happy-dom": "^20.10.6",
     "jsdom": "^29.1.1",
     "tsx": "^4.20.0",

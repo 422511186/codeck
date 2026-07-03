@@ -1,12 +1,12 @@
 ## 1. 测试基线
 
 - [x] 1.1 在 `tests/unit/web-thread-page.test.tsx` 增加会话打开重复读取、旧读取结果不得覆盖新状态、快照修复请求合并的失败测试
-- [ ] 1.2 在 `tests/unit/web-thread-page.test.tsx` 增加历史分页同 `cursor` 重复触顶只请求一次、失败后可重试的测试
+- [x] 1.2 在 `tests/unit/web-thread-page.test.tsx` 增加历史分页同 `cursor` 重复触顶只请求一次、失败后可重试的测试
 - [x] 1.3 在 `tests/unit/web-thread-page.test.tsx` 和 `tests/unit/web-chat-input.test.tsx` 增加同一次发送动作只启动一个 turn、发送完成后相同文本可再次发送的测试
 - [x] 1.4 在 `tests/unit/web-project-threads-page.test.tsx` 增加“新建会话”快速连点只创建一个 thread、失败后可重试的测试
 - [x] 1.5 在会话页相关测试中覆盖归档和撤销归档的重复点击场景
-- [ ] 1.6 在会话页相关测试中覆盖压缩、中断、重命名的重复点击场景
-- [ ] 1.7 在会话页相关测试中覆盖模型、推理强度和 Plan/Build 模式设置的重复点击或乱序响应场景
+- [x] 1.6 在会话页相关测试中覆盖压缩、中断、重命名的重复点击场景
+- [x] 1.7 在会话页相关测试中覆盖模型、推理强度和 Plan/Build 模式设置的重复点击或乱序响应场景
 - [x] 1.8 在会话页相关测试中覆盖模型列表和默认设置读取的重复请求或旧结果丢弃场景
 
 ## 2. 前端请求协调基础
@@ -44,5 +44,5 @@
 
 - [x] 6.1 运行相关单元测试：`npm run test -- tests/unit/web-thread-page.test.tsx tests/unit/web-project-threads-page.test.tsx tests/unit/web-chat-input.test.tsx tests/unit/web-api-client.test.ts tests/unit/codex-turn-start-route.test.ts`
 - [x] 6.2 运行 `npm run typecheck`
-- [ ] 6.3 运行 `npm run test`
-- [ ] 6.4 手动检查移动端关键流程：打开会话、发送消息、重复发送相同文本、新建会话、滚动加载历史、归档/撤销、模式/模型快速切换
+- [x] 6.3 运行 `npm run test`
+- [x] 6.4 手动检查移动端关键流程：打开会话、发送消息、重复发送相同文本、新建会话、滚动加载历史、归档/撤销、模式/模型快速切换

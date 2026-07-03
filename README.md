@@ -83,6 +83,12 @@ npm run dev
 
 如果没有配置 `CODEX_WEB_ACCESS_TOKEN`，启动日志会打印临时登录 token。
 
+## Release 发布
+
+第一版 release 采用宿主机 tarball 自托管部署，不以 Docker 作为主路径。打包、验证、systemd 部署、升级回滚和安全边界见 `docs/release.md`。
+
+发布验证不得停止、重启、复用或抢占当前运行在 `23000` 端口的服务；需要启动服务的 smoke test 必须显式使用非 `23000` 端口。
+
 ## 验证
 
 运行：
