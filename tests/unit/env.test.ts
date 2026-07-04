@@ -78,6 +78,46 @@ describe("createRuntimeConfig", () => {
     expect(config.appServer.host).toBe("127.0.0.1");
   });
 
+  it("支持 spawn-or-connect 自动复用模式和固定 host/port", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_APP_SERVER_MODE: "spawn-or-connect",
+      CODEX_WEB_APP_SERVER_HOST: "127.0.0.1",
+      CODEX_WEB_APP_SERVER_PORT: "31317",
+      CODEX_WEB_APP_SERVER_STATE_DIR: "/tmp/codex-web-app-server-test",
+      CODEX_WEB_CODEX_BIN: "/usr/local/bin/codex"
+    });
+
+    expect(config.appServer).toMatchObject({ mode: "spawn-or-connect" });
+    if (config.appServer.mode !== "spawn-or-connect") {
+      throw new Error("expected spawn-or-connect app-server mode");
+    }
+    expect(config.appServer.codexBin).toBe("/usr/local/bin/codex");
+    expect(config.appServer.host).toBe("127.0.0.1");
+    expect(config.appServer.port).toBe(31317);
+    expect(config.appServer.stateDir).toBe("/tmp/codex-web-app-server-test");
+  });
+
+  it("显式 spawn-or-connect 不会被 app-server URL 自动覆盖为 external", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_APP_SERVER_MODE: "spawn-or-connect",
+      CODEX_WEB_APP_SERVER_URL: "ws://127.0.0.1:31317",
+      CODEX_WEB_APP_SERVER_PORT: "31317"
+    });
+
+    expect(config.appServer.mode).toBe("spawn-or-connect");
+  });
+
+  it("拒绝未知 app-server 模式", () => {
+    expect(() =>
+      createRuntimeConfig({
+        CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+        CODEX_WEB_APP_SERVER_MODE: "reuse"
+      })
+    ).toThrow("CODEX_WEB_APP_SERVER_MODE 无效");
+  });
+
   it("从项目 .env 加载运行时配置", async () => {
     const dir = await mkdtemp(join(tmpdir(), "codex-web-env-"));
     const previousPort = process.env.CODEX_WEB_BIND_PORT;

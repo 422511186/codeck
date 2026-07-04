@@ -41,6 +41,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           case "codex-event":
             dispatchEvent(event);
             break;
+          case "codex-event-batch":
+            dispatchEvent(event);
+            break;
           case "server-request":
             dispatchEvent(event);
             break;

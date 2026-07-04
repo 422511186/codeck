@@ -574,6 +574,7 @@ describe("web store codex events", () => {
     const unsubscribe = useStore.subscribe(() => {
       notifications += 1;
     });
+    const entriesBeforeReplay = useStore.getState().threads["thread-1"]?.entries;
 
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -590,6 +591,7 @@ describe("web store codex events", () => {
     unsubscribe();
     expect(notifications).toBe(0);
     expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("replay-covered-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.entries).toBe(entriesBeforeReplay);
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
@@ -674,6 +676,108 @@ describe("web store codex events", () => {
         })
       ])
     );
+  });
+
+  it("applies batch events with the same duplicate and snapshot suppression rules as individual events", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "agent-1",
+          turnId: "turn-1",
+          snapshotSequence: 10,
+          createdAt: 1,
+          body: { kind: "agent-message", text: "hello world" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      events: [
+        {
+          eventId: "covered-delta",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "agent-1",
+          sequence: 9,
+          delta: "hello "
+        },
+        {
+          eventId: "tail-delta",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "agent-1",
+          sequence: 11,
+          delta: "!"
+        },
+        {
+          eventId: "tail-delta",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "agent-1",
+          sequence: 11,
+          delta: "!"
+        }
+      ]
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("covered-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("tail-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        body: { kind: "agent-message", text: "hello world!" }
+      })
+    ]);
+  });
+
+  it("keeps deleted turns and generations isolated when dispatching a delta batch", () => {
+    useStore.getState().markTurnDeleted("thread-1", "turn-deleted");
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      events: [
+        {
+          eventId: "deleted-delta",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-deleted",
+          itemId: "agent-deleted",
+          generation: 0,
+          delta: "不应出现"
+        },
+        {
+          eventId: "generation-0",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-old",
+          itemId: "agent-1",
+          generation: 0,
+          delta: "旧"
+        },
+        {
+          eventId: "generation-1",
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-new",
+          itemId: "agent-1",
+          generation: 1,
+          delta: "新"
+        }
+      ]
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        body: { kind: "agent-message", text: "旧新" }
+      })
+    ]);
+    expect(useStore.getState().threads["thread-1"]?.entries.some((entry) => entry.id === "agent-deleted")).toBe(false);
   });
 
   it("does not suppress a new tail delta that happens to match snapshot text", () => {
@@ -1211,6 +1315,48 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("keeps paginated timeline pages in stable order when page-local turnIndex values repeat", () => {
+    const turnEntries = (turnId: string, turnIndex: number, createdAt: number) => [
+      {
+        id: `${turnId}-user`,
+        turnId,
+        turnIndex,
+        createdAt,
+        body: { kind: "user-message" as const, text: `问题 ${turnId}`, status: "sent" as const }
+      },
+      {
+        id: `${turnId}-agent`,
+        turnId,
+        turnIndex,
+        createdAt: createdAt + 1,
+        body: { kind: "agent-message" as const, text: `回答 ${turnId}` }
+      }
+    ];
+
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [...turnEntries("turn-3", 0, 30), ...turnEntries("turn-4", 1, 40)],
+      "older-cursor"
+    );
+    useStore.getState().prependEntries(
+      "thread-1",
+      [...turnEntries("turn-1", 0, 10), ...turnEntries("turn-2", 1, 20)],
+      null,
+      true
+    );
+
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "turn-1-user",
+      "turn-1-agent",
+      "turn-2-user",
+      "turn-2-agent",
+      "turn-3-user",
+      "turn-3-agent",
+      "turn-4-user",
+      "turn-4-agent"
+    ]);
+  });
+
   it("dedupes duplicate local user messages before the server confirms them", () => {
     useStore.getState().appendEntries("thread-1", [
       {
@@ -1464,5 +1610,56 @@ describe("web store codex events", () => {
         }
       })
     ]);
+  });
+
+  it("keeps long-thread timeline updates within a linear complexity budget", () => {
+    const makeAgentEntry = (index: number) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `回复 ${index}` }
+    });
+    const initialEntries = Array.from({ length: 1200 }, (_value, index) => makeAgentEntry(index));
+
+    useStore.getState().setThreadEntries("thread-long", initialEntries, "cursor-older");
+    useStore.getState().__resetTimelineDiagnostics?.();
+
+    for (let index = 0; index < 200; index += 1) {
+      useStore.getState().appendTextToEntry("thread-long", {
+        id: "agent-1199",
+        turnId: "turn-1199",
+        turnIndex: 1199,
+        createdAt: 2000 + index,
+        body: { kind: "agent-message", text: "x" }
+      });
+    }
+
+    useStore.getState().mergeThreadEntries(
+      "thread-long",
+      Array.from({ length: 40 }, (_value, index) => makeAgentEntry(1200 + index)),
+      "cursor-even-older"
+    );
+
+    const diagnostics = useStore.getState().__getTimelineDiagnostics?.();
+    expect(diagnostics).toEqual(
+      expect.objectContaining({
+        normalizeRuns: expect.any(Number),
+        entryIndexBuildEntries: expect.any(Number),
+        linearEntryScans: expect.any(Number),
+        equivalentOutputCandidateChecks: expect.any(Number)
+      })
+    );
+    expect(diagnostics!.normalizeRuns).toBeLessThanOrEqual(2);
+    expect(diagnostics!.entryIndexBuildEntries).toBeLessThanOrEqual(1400);
+    expect(diagnostics!.linearEntryScans).toBeLessThanOrEqual(3000);
+    expect(diagnostics!.equivalentOutputCandidateChecks).toBeLessThanOrEqual(2000);
+    expect(useStore.getState().threads["thread-long"]?.entries).toHaveLength(1240);
+    expect(useStore.getState().threads["thread-long"]?.entries.at(-41)).toEqual(
+      expect.objectContaining({
+        id: "agent-1199",
+        body: { kind: "agent-message", text: `回复 1199${"x".repeat(200)}` }
+      })
+    );
   });
 });

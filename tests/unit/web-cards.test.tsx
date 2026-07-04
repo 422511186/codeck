@@ -69,6 +69,32 @@ describe("CommandCard", () => {
 
     expect(screen.getByText("npm test")).toBeInTheDocument();
   });
+
+  it("should cap expanded long output and copy the complete output", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    const output = Array.from({ length: 220 }, (_value, index) => `line-${index}`).join("\n");
+    render(
+      <CommandCard
+        entry={{
+          command: "npm run noisy",
+          output,
+          status: "completed"
+        }}
+      />
+    );
+
+    await user.click(screen.getByText("npm run noisy").closest("button")!);
+
+    expect(screen.getByText(/line-0/)).toBeInTheDocument();
+    expect(screen.queryByText("line-219")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "复制完整输出" }));
+    expect(writeText).toHaveBeenCalledWith(output);
+  });
 });
 
 describe("DiffCard", () => {
@@ -126,6 +152,38 @@ describe("DiffCard", () => {
       expect(screen.getByText("console.log('test');")).toBeInTheDocument();
       expect(screen.getByText("@@ -1,1 +1,2 @@")).toBeInTheDocument();
     });
+  });
+
+  it("should cap expanded long diff and copy the complete diff", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    const diff = [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,220 +1,220 @@",
+      ...Array.from({ length: 220 }, (_value, index) => `+added-${index}`)
+    ].join("\n");
+    render(
+      <DiffCard
+        entry={{
+          path: "src/app.ts",
+          diff,
+          added: 220,
+          removed: 0
+        }}
+      />
+    );
+
+    await user.click(screen.getByText("src/app.ts").closest("button")!);
+
+    expect(screen.getByText("added-0")).toBeInTheDocument();
+    expect(screen.queryByText("added-219")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "复制完整 diff" }));
+    expect(writeText).toHaveBeenCalledWith(diff);
   });
 });
 

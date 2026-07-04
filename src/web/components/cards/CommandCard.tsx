@@ -2,6 +2,7 @@
 
 import type { CommandEntry } from "../../state/timeline";
 import { BaseCard } from "./BaseCard";
+import { LongTextPreview } from "./LongTextPreview";
 
 export function CommandCard({ entry }: { entry: CommandEntry }): JSX.Element {
   return (
@@ -10,19 +11,7 @@ export function CommandCard({ entry }: { entry: CommandEntry }): JSX.Element {
       title={<code style={{ fontFamily: "var(--font-mono)" }}>{entry.command}</code>}
       status={entry.status}
     >
-      <pre
-        style={{
-          margin: 0,
-          padding: "10px 0",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          color: "var(--cw-fg-muted)"
-        }}
-      >
-        {entry.output || "（无输出）"}
-      </pre>
+      <LongTextPreview text={entry.output ?? ""} emptyText="（无输出）" copyLabel="复制完整输出" />
     </BaseCard>
   );
 }

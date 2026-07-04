@@ -195,11 +195,11 @@ CODEX_WEB_APP_SERVER_HOST=127.0.0.1
 # CODEX_WEB_APP_SERVER_PORT=31317
 ```
 
-Web 后端会按需启动本机 `codex app-server`。如果 `codex` 不在 PATH 中，设置 `CODEX_WEB_CODEX_BIN` 为绝对路径。
+Web 后端会按需启动本机 `codex app-server`。如果 `codex` 不在 PATH 中，设置 `CODEX_WEB_CODEX_BIN` 为绝对路径。`spawn` 只表示当前 Web 后端拥有这个子进程，适合单个本机服务；如果同一机器启动了多个 Web 后端，不要假设它们会自动复用同一个 app-server。
 
 ### external
 
-如果你已经自行启动 app-server：
+如果你已经自行启动 app-server，或者需要多个 Web 后端复用同一个 app-server：
 
 ```env
 CODEX_WEB_APP_SERVER_MODE=external
@@ -207,6 +207,23 @@ CODEX_WEB_APP_SERVER_URL=ws://127.0.0.1:31317
 ```
 
 Docker/Compose 部署默认推荐 external 模式，让容器内 Web 服务连接宿主机或独立进程中的 app-server。具体配置见 `docs/docker-deployment.md`。
+
+### spawn-or-connect
+
+本机开发可用自动复用模式：
+
+```env
+CODEX_WEB_APP_SERVER_MODE=spawn-or-connect
+CODEX_WEB_CODEX_BIN=codex
+CODEX_WEB_APP_SERVER_HOST=127.0.0.1
+CODEX_WEB_APP_SERVER_PORT=31317
+# 可选，保存跨进程锁、owner pid 和 endpoint 元数据
+CODEX_WEB_APP_SERVER_STATE_DIR=/tmp/codex-web-app-server
+```
+
+该模式在固定 host/port 上先连接已有 app-server；不可连接时才获取跨进程锁并启动。拿不到锁的 Web 后端会等待持锁进程启动完成后复用同一 endpoint。若固定端口被非 app-server 占用或握手失败，启动会失败并提示端口问题，不会改用随机端口。
+
+Web 后端正常退出时会关闭自己启动的子进程并清理 owner 元数据。异常退出后留下的可用 app-server 会被后续 Web 后端复用；不可用且 owner pid 已不存在时，陈旧锁会被清理后重新启动。
 
 ### mock
 

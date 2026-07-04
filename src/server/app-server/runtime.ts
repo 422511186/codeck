@@ -326,7 +326,7 @@ type MockCommandExec = {
 };
 
 class MockAppServerPeer implements ManagedAppServerPeer {
-  private status: AppServerStatus = { state: "idle" };
+  private status: AppServerStatus = { state: "idle", mode: "mock", managedByCurrentProcess: false, reusedExisting: false };
   private thread: Thread = this.createThread();
   private threads: Thread[] = [this.thread];
   private readonly archivedThreads = new Map<string, Thread>();
@@ -472,7 +472,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   }
 
   async connect(): Promise<void> {
-    this.status = { state: "ready" };
+    this.status = { state: "ready", mode: "mock", managedByCurrentProcess: false, reusedExisting: false };
   }
 
   getStatus(): AppServerStatus {
@@ -2503,7 +2503,7 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
   }
 
   getStatus(): AppServerStatus {
-    return { state: "disabled" };
+    return { state: "disabled", mode: "off", managedByCurrentProcess: false, reusedExisting: false };
   }
 
   onNotification(): () => void {
@@ -2780,6 +2780,12 @@ export class AppServerGateway {
             done: false
           }
         );
+        break;
+      case "agent_message_delta":
+        this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
+          role: "agent",
+          text: ""
+        });
         break;
       case "command_output_delta":
         this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {

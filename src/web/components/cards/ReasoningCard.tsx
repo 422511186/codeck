@@ -2,6 +2,7 @@
 
 import type { ReasoningEntry } from "../../state/timeline";
 import { BaseCard } from "./BaseCard";
+import { LongTextPreview } from "./LongTextPreview";
 
 export function ReasoningCard({ entry }: { entry: ReasoningEntry }): JSX.Element {
   if (!entry.done) {
@@ -13,9 +14,7 @@ export function ReasoningCard({ entry }: { entry: ReasoningEntry }): JSX.Element
           title={<span>思考中… {preview}</span>}
           status="running"
         >
-          <div style={{ whiteSpace: "pre-wrap", color: "var(--cw-fg-muted)", fontSize: 13, paddingTop: 6 }}>
-            {entry.text}
-          </div>
+          <LongTextPreview text={entry.text} copyLabel="复制完整推理" maxLines={80} />
         </BaseCard>
       );
     }
@@ -60,9 +59,7 @@ export function ReasoningCard({ entry }: { entry: ReasoningEntry }): JSX.Element
         ) : null
       }
     >
-      <div style={{ whiteSpace: "pre-wrap", color: "var(--cw-fg-muted)", fontSize: 13, paddingTop: 6 }}>
-        {entry.text}
-      </div>
+      <LongTextPreview text={entry.text} copyLabel="复制完整推理" maxLines={80} />
     </BaseCard>
   );
 }

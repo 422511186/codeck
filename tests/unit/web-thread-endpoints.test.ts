@@ -50,6 +50,29 @@ describe("web thread endpoints", () => {
     });
   });
 
+  it("读取会话详情时保留首屏历史分页 cursor", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      thread: {
+        id: "thread-1",
+        title: "会话",
+        preview: "",
+        cwd: "C:\\repo",
+        modelProvider: "custom",
+        status: "idle",
+        updatedAt: 1,
+        lastTurnId: "turn-newest",
+        timeline: [],
+        nextCursor: "turn-older"
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    await expect(codex.readThread("thread-1")).resolves.toMatchObject({
+      nextCursor: "turn-older"
+    });
+  });
+
   it("读取 collaboration modes 时只调用轻量 preset endpoint", async () => {
     mockApi.mockResolvedValue({
       ok: true,

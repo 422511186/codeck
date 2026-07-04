@@ -43,6 +43,7 @@ export type TimelineItem = {
 
 export type ThreadDetail = ThreadSummary & {
   lastTurnId: string | null;
+  nextCursor: string | null;
   generation?: number;
   snapshotSequence?: number;
   timeline: TimelineItem[];
@@ -133,6 +134,12 @@ export type AppServerStatusState =
 export type AppServerStatus = {
   state: AppServerStatusState;
   message?: string;
+  mode?: "spawn" | "spawn-or-connect" | "external" | "mock" | "off";
+  managedByCurrentProcess?: boolean;
+  reusedExisting?: boolean;
+  pidKnown?: boolean;
+  errorKind?: "timeout" | "unavailable" | "handshake-failed" | "startup-failed" | "lock-timeout" | "stale-lock";
+  cleanupState?: "none" | "child-terminated" | "metadata-cleared" | "stale-lock-cleared";
 };
 
 export type ChatPermissions = "read-only" | "workspace-write" | "danger-full-access";

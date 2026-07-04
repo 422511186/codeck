@@ -289,6 +289,40 @@ class FakePeer implements AppServerPeer {
     }
 
     if (method === "thread/turns/list") {
+      const listParams = params as { cursor?: string | null; sortDirection?: string | null } | undefined;
+      if (!listParams?.cursor && listParams?.sortDirection === "desc") {
+        return {
+          data: [
+            {
+              id: "turn-1",
+              itemsView: { type: "complete" },
+              status: { type: "completed" },
+              error: null,
+              startedAt: 101,
+              completedAt: 199,
+              durationMs: 98000,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "item-user-1",
+                  clientId: "client-user-1",
+                  content: [{ type: "text", text: "请检查登录逻辑", text_elements: [] }]
+                },
+                {
+                  type: "agentMessage",
+                  id: "item-agent-1",
+                  text: "我会先阅读认证相关代码。",
+                  phase: "final",
+                  memoryCitation: null
+                }
+              ]
+            }
+          ],
+          nextCursor: "turn-older",
+          backwardsCursor: null
+        };
+      }
+
       return {
         data: [
           {
@@ -1444,15 +1478,13 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("读取未 materialized 空会话时会降级为 metadata-only 并返回空 timeline", async () => {
+  it("读取未 materialized 空会话时使用 metadata-only 并返回空 timeline", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
     peer.request = async (method, params) => {
       peer.calls.push({ method, params });
       if (method === "thread/read" && (params as { includeTurns?: boolean }).includeTurns) {
-        throw new Error(
-          "thread empty-thread is not materialized yet; includeTurns is unavailable before first user message"
-        );
+        throw new Error("首屏读取不应请求 includeTurns");
       }
       if (method === "thread/read") {
         return {
@@ -1479,6 +1511,9 @@ describe("CodexAppServerClient", () => {
           }
         };
       }
+      if (method === "thread/turns/list") {
+        return { data: [], nextCursor: null, backwardsCursor: null };
+      }
       return originalRequest(method, params);
     };
     const client = new CodexAppServerClient(peer);
@@ -1492,16 +1527,21 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.filter((call) => call.method === "thread/read")).toEqual([
       {
         method: "thread/read",
-        params: { threadId: "empty-thread", includeTurns: true }
-      },
-      {
-        method: "thread/read",
-        params: { threadId: "empty-thread" }
+        params: { threadId: "empty-thread", includeTurns: false }
       }
     ]);
+    expect(peer.calls).toContainEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "empty-thread",
+        limit: 30,
+        sortDirection: "desc",
+        itemsView: "full"
+      }
+    });
   });
 
-  it("读取普通会话时保持 includeTurns 并且不触发降级重试", async () => {
+  it("读取普通会话时使用 metadata 加最近 turns 窗口，不请求 includeTurns 全量历史", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
@@ -1510,14 +1550,65 @@ describe("CodexAppServerClient", () => {
     expect(peer.calls.filter((call) => call.method === "thread/read")).toEqual([
       {
         method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: true }
+        params: { threadId: "thread-1", includeTurns: false }
       }
+    ]);
+    expect(peer.calls).toContainEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        limit: 30,
+        sortDirection: "desc",
+        itemsView: "full"
+      }
+    });
+  });
+
+  it("读取普通会话时返回继续加载更早 turns 的 cursor", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const detail = await client.readThread("thread-1");
+
+    expect(detail.nextCursor).toBe("turn-older");
+  });
+
+  it("分页读取 turns 时不返回页内重置的 turnIndex", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const page = await client.listThreadTurns({ threadId: "thread-1", cursor: "turn-older", limit: 30 });
+
+    expect(page.items).toEqual([
+      expect.not.objectContaining({ turnIndex: expect.any(Number) })
     ]);
   });
 
   it("能把 userMessage 里的 localImage 保留为缩略图路径", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
+    const turns = [
+      {
+        id: "turn-1",
+        itemsView: { type: "complete" },
+        status: { type: "completed" },
+        error: null,
+        startedAt: 101,
+        completedAt: 199,
+        durationMs: 98000,
+        items: [
+          {
+            type: "userMessage",
+            id: "item-user-image",
+            clientId: "client-user-image",
+            content: [
+              { type: "text", text: "请看这张图", text_elements: [] },
+              { type: "localImage", path: "C:\\Users\\huang\\AppData\\Local\\Temp\\shot.png" }
+            ]
+          }
+        ]
+      }
+    ];
     peer.request = async (method, params) => {
       if (method === "thread/read") {
         return {
@@ -1541,30 +1632,12 @@ describe("CodexAppServerClient", () => {
             agentRole: null,
             gitInfo: null,
             name: "图片会话",
-            turns: [
-              {
-                id: "turn-1",
-                itemsView: { type: "complete" },
-                status: { type: "completed" },
-                error: null,
-                startedAt: 101,
-                completedAt: 199,
-                durationMs: 98000,
-                items: [
-                  {
-                    type: "userMessage",
-                    id: "item-user-image",
-                    clientId: "client-user-image",
-                    content: [
-                      { type: "text", text: "请看这张图", text_elements: [] },
-                      { type: "localImage", path: "C:\\Users\\huang\\AppData\\Local\\Temp\\shot.png" }
-                    ]
-                  }
-                ]
-              }
-            ]
+            turns: []
           }
         };
+      }
+      if (method === "thread/turns/list") {
+        return { data: turns, nextCursor: null, backwardsCursor: null };
       }
       return originalRequest(method, params);
     };
@@ -1585,6 +1658,31 @@ describe("CodexAppServerClient", () => {
   it("能把 MCP 工具调用转换成 timeline 工具项", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
+    const turns = [
+      {
+        id: "turn-1",
+        itemsView: { type: "complete" },
+        status: { type: "completed" },
+        error: null,
+        startedAt: 101,
+        completedAt: 199,
+        durationMs: 98000,
+        items: [
+          {
+            type: "mcpToolCall",
+            id: "tool-1",
+            server: "filesystem",
+            tool: "read_file",
+            status: "completed",
+            arguments: { path: "README.md" },
+            pluginId: null,
+            result: { content: [{ type: "text", text: "README content" }], isError: false },
+            error: null,
+            durationMs: 12
+          }
+        ]
+      }
+    ];
     peer.request = async (method, params) => {
       if (method === "thread/read") {
         return {
@@ -1608,33 +1706,12 @@ describe("CodexAppServerClient", () => {
             agentRole: null,
             gitInfo: null,
             name: "工具会话",
-            turns: [
-              {
-                id: "turn-1",
-                itemsView: { type: "complete" },
-                status: { type: "completed" },
-                error: null,
-                startedAt: 101,
-                completedAt: 199,
-                durationMs: 98000,
-                items: [
-                  {
-                    type: "mcpToolCall",
-                    id: "tool-1",
-                    server: "filesystem",
-                    tool: "read_file",
-                    status: "completed",
-                    arguments: { path: "README.md" },
-                    pluginId: null,
-                    result: { content: [{ type: "text", text: "README content" }], isError: false },
-                    error: null,
-                    durationMs: 12
-                  }
-                ]
-              }
-            ]
+            turns: []
           }
         };
+      }
+      if (method === "thread/turns/list") {
+        return { data: turns, nextCursor: null, backwardsCursor: null };
       }
       return originalRequest(method, params);
     };
@@ -1658,6 +1735,22 @@ describe("CodexAppServerClient", () => {
   it("能把失败 turn 的错误转换成 timeline 错误项", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
+    const turns = [
+      {
+        id: "turn-failed",
+        itemsView: { type: "complete" },
+        status: { type: "failed" },
+        error: {
+          message: "API 调用失败",
+          codexErrorInfo: null,
+          additionalDetails: "502 Bad Gateway"
+        },
+        startedAt: 101,
+        completedAt: 199,
+        durationMs: 98000,
+        items: []
+      }
+    ];
     peer.request = async (method, params) => {
       if (method === "thread/read") {
         return {
@@ -1681,24 +1774,12 @@ describe("CodexAppServerClient", () => {
             agentRole: null,
             gitInfo: null,
             name: "错误会话",
-            turns: [
-              {
-                id: "turn-failed",
-                itemsView: { type: "complete" },
-                status: { type: "failed" },
-                error: {
-                  message: "API 调用失败",
-                  codexErrorInfo: null,
-                  additionalDetails: "502 Bad Gateway"
-                },
-                startedAt: 101,
-                completedAt: 199,
-                durationMs: 98000,
-                items: []
-              }
-            ]
+            turns: []
           }
         };
+      }
+      if (method === "thread/turns/list") {
+        return { data: turns, nextCursor: null, backwardsCursor: null };
       }
       return originalRequest(method, params);
     };
@@ -2958,7 +3039,7 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient(peer);
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
-      items: [{ id: "item-page-agent-1", turnId: "turn-page-1", turnIndex: 0, role: "agent", text: "分页 turn" }],
+      items: [{ id: "item-page-agent-1", turnId: "turn-page-1", role: "agent", text: "分页 turn" }],
       nextCursor: "turn-next"
     });
     expect(peer.calls.at(-1)).toEqual({

@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ToolEntry } from "../../state/timeline";
 import { ImagePreviewDialog, ImageThumb } from "../ImagePreview";
 import { BaseCard } from "./BaseCard";
+import { LongTextPreview } from "./LongTextPreview";
 
 export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
@@ -50,19 +51,9 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
           </div>
         ) : null}
         {entry.arguments ? (
-          <pre
-            style={{
-              background: "var(--cw-bg-elevated)",
-              padding: 8,
-              borderRadius: 8,
-              fontSize: 12,
-              overflowX: "auto",
-              maxHeight: 200,
-              margin: 0
-            }}
-          >
-            {entry.arguments}
-          </pre>
+          <div style={previewBoxStyle}>
+            <LongTextPreview text={entry.arguments} copyLabel="复制完整参数" maxLines={80} />
+          </div>
         ) : null}
         {entry.imagePaths?.length ? (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
@@ -72,19 +63,9 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
           </div>
         ) : null}
         {entry.result ? (
-          <pre
-            style={{
-              background: "var(--cw-bg-elevated)",
-              padding: 8,
-              borderRadius: 8,
-              fontSize: 12,
-              overflowX: "auto",
-              maxHeight: 240,
-              margin: "8px 0 0"
-            }}
-          >
-            {entry.result}
-          </pre>
+          <div style={{ ...previewBoxStyle, marginTop: 8 }}>
+            <LongTextPreview text={entry.result} copyLabel="复制完整结果" />
+          </div>
         ) : null}
       </BaseCard>
       {previewSrc ? <ImagePreviewDialog src={previewSrc} onClose={() => setPreviewSrc(null)} /> : null}
@@ -95,3 +76,12 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
 function isLikelyPath(value: string): boolean {
   return value.startsWith("/") || value.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(value);
 }
+
+const previewBoxStyle: React.CSSProperties = {
+  background: "var(--cw-bg-elevated)",
+  padding: 8,
+  borderRadius: 8,
+  fontSize: 12,
+  overflowX: "auto",
+  margin: 0
+};

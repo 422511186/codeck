@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoints";
@@ -16,12 +16,17 @@ import {
   collaborationModeForChatMode,
   type ChatMode,
   type ModelOption,
+  type PendingServerRequest,
   type SkillReference,
   type ThreadDetail
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey } from "../../../web/storage/localStore";
 import { setDraft } from "../../../web/storage/drafts";
 import { settingsStore } from "../../../web/storage/settings";
+
+const EMPTY_ENTRIES: TimelineEntry[] = [];
+const EMPTY_APPROVALS: PendingServerRequest[] = [];
+const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
 
 export default function ThreadPage(): JSX.Element {
   const params = useParams<{ threadId: string }>();
@@ -47,7 +52,14 @@ export default function ThreadPage(): JSX.Element {
   const clearSnapshotRepair = useStore((s) => s.clearSnapshotRepair);
   const setPendingRequests = useStore((s) => s.setPendingRequests);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
-  const threadState = useStore((s) => s.threads[threadId]);
+  const threadRunning = useStore((s) => s.threads[threadId]?.running ?? false);
+  const threadActiveTurnId = useStore((s) => s.threads[threadId]?.activeTurnId ?? null);
+  const threadMode = useStore((s) => s.threads[threadId]?.mode ?? "build");
+  const threadModel = useStore((s) => s.threads[threadId]?.model ?? null);
+  const threadModelEffort = useStore((s) => s.threads[threadId]?.modelEffort ?? null);
+  const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
+  const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
+  const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
   const webSettings = settingsStore.get();
 
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
@@ -80,9 +92,9 @@ export default function ThreadPage(): JSX.Element {
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
 
-  const configuredModel = threadState?.model ?? detail?.model ?? webSettings.defaultModel ?? null;
+  const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
-  const configuredReasoningEffort = threadState?.modelEffort ?? detail?.reasoningEffort ?? null;
+  const configuredReasoningEffort = threadModelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
   const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
 
@@ -144,10 +156,11 @@ export default function ThreadPage(): JSX.Element {
       const entries: TimelineEntry[] =
         entriesOverride ??
         threadDetailEntries(td);
+      const nextCursor = td.nextCursor ?? null;
       if (mode === "merge") {
-        mergeThreadEntries(targetThreadId, entries, null);
+        mergeThreadEntries(targetThreadId, entries, nextCursor);
       } else {
-        setThreadEntries(targetThreadId, entries, null);
+        setThreadEntries(targetThreadId, entries, nextCursor);
       }
       if (typeof td.generation === "number") {
         setTimelineGeneration(targetThreadId, td.generation);
@@ -196,7 +209,7 @@ export default function ThreadPage(): JSX.Element {
   }, [threadId, ensureThread, applyThreadDetail, setMode, setRunning, setActiveThread]);
 
   useEffect(() => {
-    if (!threadState?.repairRequestedAt) return;
+    if (!repairRequestedAt) return;
     let cancelled = false;
     const requestEpoch = mutationEpochRef.current;
     (async () => {
@@ -221,14 +234,14 @@ export default function ThreadPage(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [threadId, threadState?.repairRequestedAt, applyThreadDetail, setRunning, requestSnapshotRepair, clearSnapshotRepair]);
+  }, [threadId, repairRequestedAt, applyThreadDetail, setRunning, requestSnapshotRepair, clearSnapshotRepair]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
     if (atBottomRef.current) {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
-  }, [loading, threadState?.entries.length]);
+  }, [loading, entryCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,11 +267,14 @@ export default function ThreadPage(): JSX.Element {
       atBottomRef.current = distanceFromBottom < 64;
       setShowJumpLatest(!atBottomRef.current);
 
-      if (el.scrollTop < 64 && threadState && !threadState.reachedBeginning && threadState.cursor) {
-        const cursor = threadState.cursor;
+      const currentThread = useStore.getState().threads[threadId];
+      if (el.scrollTop < 64 && currentThread && !currentThread.reachedBeginning && currentThread.cursor) {
+        const cursor = currentThread.cursor;
         const pageKey = `${threadId}\u0001${cursor}`;
         if (loadingPageCursorsRef.current.has(pageKey)) return;
         loadingPageCursorsRef.current.add(pageKey);
+        const previousScrollHeight = el.scrollHeight;
+        const previousScrollTop = el.scrollTop;
         try {
           const page = await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:turns:${cursor}`,
@@ -268,6 +284,7 @@ export default function ThreadPage(): JSX.Element {
             timelineItemToEntry(it, Date.now() - 10_000 - i)
           );
           prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
+          restorePrependScrollAnchor(el, previousScrollHeight, previousScrollTop);
         } catch {
           // ignore page load failure
         } finally {
@@ -275,15 +292,19 @@ export default function ThreadPage(): JSX.Element {
         }
       }
     },
-    [threadId, threadState, prependEntries]
+    [threadId, prependEntries]
   );
 
   const onSend = useCallback(
     async (text: string, imagePaths: string[], skillReferences: SkillReference[] = []) => {
       const currentDetail =
         detail ??
-        (threadState?.entries.length
-          ? cachedThreadDetail(threadId, threadState.running, threadState.activeTurnId)
+        (useStore.getState().threads[threadId]?.entries.length
+          ? cachedThreadDetail(
+              threadId,
+              useStore.getState().threads[threadId]?.running ?? false,
+              useStore.getState().threads[threadId]?.activeTurnId ?? null
+            )
           : null);
       if (!currentDetail) return;
       const sendKey = sendPayloadKey(text, imagePaths, skillReferences);
@@ -314,7 +335,7 @@ export default function ThreadPage(): JSX.Element {
           );
           setDetail(resumed);
         }
-        const currentMode = threadState?.mode ?? "build";
+        const currentMode = useStore.getState().threads[threadId]?.mode ?? "build";
         const collaborationMode =
           currentMode === "plan"
             ? collaborationModeForChatMode("plan", effectiveModel, effectiveReasoningEffort)
@@ -394,15 +415,11 @@ export default function ThreadPage(): JSX.Element {
     [
       detail,
       threadId,
-      threadState?.entries,
-      threadState?.running,
-      threadState?.activeTurnId,
       effectiveModel,
       effectiveReasoningEffort,
       effectiveReasoningSummary,
       configuredModel,
       configuredReasoningEffort,
-      threadState?.mode,
       appendEntries,
       applyThreadDetail,
       replaceOrAddEntry,
@@ -414,7 +431,7 @@ export default function ThreadPage(): JSX.Element {
   );
 
   const onInterrupt = useCallback(async () => {
-    const turnId = threadState?.activeTurnId ?? detail?.lastTurnId ?? undefined;
+    const turnId = threadActiveTurnId ?? detail?.lastTurnId ?? undefined;
     try {
       await requestCoordinatorRef.current.runLockedAction(`interrupt:${threadId}`, async () => {
         await codex.interruptTurn(threadId, turnId);
@@ -435,7 +452,7 @@ export default function ThreadPage(): JSX.Element {
     }
   }, [
     threadId,
-    threadState?.activeTurnId,
+    threadActiveTurnId,
     detail?.lastTurnId,
     appendEntries,
     setRunning,
@@ -445,8 +462,9 @@ export default function ThreadPage(): JSX.Element {
 
   const rewindToMessage = useCallback(
     async (entry: TimelineEntry) => {
-      if (threadState?.running || entry.body.kind !== "user-message") return;
-      const entries = threadState?.entries ?? [];
+      const currentThread = useStore.getState().threads[threadId];
+      if (currentThread?.running || entry.body.kind !== "user-message") return;
+      const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
       const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
       if (!target || !numTurns) {
@@ -481,13 +499,14 @@ export default function ThreadPage(): JSX.Element {
         ]);
       }
     },
-    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, markTurnDeleted, bumpMutationEpoch]
+    [threadId, applyThreadDetail, appendEntries, markTurnDeleted, bumpMutationEpoch]
   );
 
   const forkFromMessage = useCallback(
     async (entry: TimelineEntry) => {
-      if (threadState?.running || entry.body.kind !== "user-message") return;
-      const entries = threadState?.entries ?? [];
+      const currentThread = useStore.getState().threads[threadId];
+      if (currentThread?.running || entry.body.kind !== "user-message") return;
+      const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
       const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
       if (!target || !numTurns) {
@@ -545,7 +564,7 @@ export default function ThreadPage(): JSX.Element {
         ]);
       }
     },
-    [threadId, threadState?.running, threadState?.entries, applyThreadDetail, appendEntries, markTurnDeleted, router, bumpMutationEpoch]
+    [threadId, applyThreadDetail, appendEntries, markTurnDeleted, router, bumpMutationEpoch]
   );
 
   const openModelPicker = useCallback(async () => {
@@ -613,11 +632,10 @@ export default function ThreadPage(): JSX.Element {
     [threadId, setMode, effectiveModel, effectiveReasoningEffort, enqueueThreadSettings]
   );
 
-  const cachedEntries = threadState?.entries ?? [];
   const visibleDetail =
     detail ??
-    (cachedEntries.length
-      ? cachedThreadDetail(threadId, threadState?.running ?? false, threadState?.activeTurnId ?? null)
+    (hasCachedEntries
+      ? cachedThreadDetail(threadId, threadRunning, threadActiveTurnId)
       : null);
 
   if (error && !visibleDetail) {
@@ -639,97 +657,45 @@ export default function ThreadPage(): JSX.Element {
     );
   }
 
-  const mode = threadState?.mode ?? "build";
+  const mode = threadMode;
   const modelId = effectiveModel;
-  const running = threadState?.running ?? false;
-  const plan = threadState?.plan ?? [];
-  const entries = cachedEntries;
+  const running = threadRunning;
 
   return (
     <main style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
-      <header style={headerStyle}>
-        <button type="button" onClick={() => router.back()} style={iconBtn} aria-label="返回">
-          ‹
-        </button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden"
-            }}
-          >
-            {visibleDetail.title || "新会话"}
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <ModeSegmented value={mode} onChange={onToggleMode} />
-          <button type="button" onClick={openModelPicker} style={modelBtn}>
-            {shortModel(modelId)}
-          </button>
-          <button type="button" onClick={() => setShowSheet(true)} style={iconBtn} aria-label="更多">
-            ⋮
-          </button>
-        </div>
-      </header>
+      <ThreadHeader
+        title={visibleDetail.title || "新会话"}
+        mode={mode}
+        modelId={modelId}
+        onBack={() => router.back()}
+        onToggleMode={onToggleMode}
+        onOpenModelPicker={openModelPicker}
+        onOpenActions={() => setShowSheet(true)}
+      />
 
-      {plan.length > 0 ? <PlanBar steps={plan} /> : null}
+      <ThreadPlanBar threadId={threadId} />
 
-      <div ref={scrollerRef} className="cw-thread-scroller" onScroll={onScroll} style={scrollStyle}>
-        {threadState?.reachedBeginning ? (
-          <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
-        ) : null}
-        <Timeline
-          entries={entries}
-          approvals={threadState?.pendingApprovals ?? []}
-          running={running}
-          activeTurnId={threadState?.activeTurnId ?? null}
-          onResendUser={async (text) => {
-            await onSend(text, []);
-          }}
-          onRewindToMessage={rewindToMessage}
-          onForkFromMessage={forkFromMessage}
-          onResolveApproval={async (req) => {
-            resolvePendingRequest(req.requestId);
-          }}
-        />
-        {running ? (
-          <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>正在生成…</div>
-        ) : null}
-        {mode === "plan" && !running && entries.length > 0 ? (
-          <div style={{ textAlign: "center", padding: 16 }}>
-            <button
-              type="button"
-              onClick={async () => {
-                onToggleMode("build");
-                try {
-                  const lastUserMsg = entries
-                    .slice()
-                    .reverse()
-                    .find((e) => e.body.kind === "user-message");
-                  const text = lastUserMsg ? (lastUserMsg.body as any).text : "请按上面的计划开始执行";
-                  await onSend(text, []);
-                } catch (err) {
-                  console.warn("execute plan failed", err);
-                }
-              }}
-              style={{
-                padding: "10px 20px",
-                borderRadius: 12,
-                border: "none",
-                background: "var(--cw-accent)",
-                color: "#fff",
-                fontSize: 15
-              }}
-            >
-              转 Build 执行
-            </button>
-          </div>
-        ) : null}
-      </div>
+      <ThreadTimelineViewport
+        threadId={threadId}
+        scrollerRef={scrollerRef}
+        onScroll={onScroll}
+        onSend={onSend}
+        onRewindToMessage={rewindToMessage}
+        onForkFromMessage={forkFromMessage}
+        onResolveApproval={(req) => resolvePendingRequest(req.requestId)}
+        onExecutePlan={async (entries) => {
+          onToggleMode("build");
+          const lastUserMsg = entries
+            .slice()
+            .reverse()
+            .find((entry) => entry.body.kind === "user-message");
+          const text =
+            lastUserMsg && lastUserMsg.body.kind === "user-message"
+              ? lastUserMsg.body.text
+              : "请按上面的计划开始执行";
+          await onSend(text, []);
+        }}
+      />
 
       {showJumpLatest ? (
         <button
@@ -745,7 +711,7 @@ export default function ThreadPage(): JSX.Element {
         </button>
       ) : null}
 
-      <ChatInput
+      <ThreadComposerDock
         threadId={threadId}
         cwd={visibleDetail?.cwd}
         running={running}
@@ -858,6 +824,166 @@ export default function ThreadPage(): JSX.Element {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function ThreadHeader({
+  title,
+  mode,
+  modelId,
+  onBack,
+  onToggleMode,
+  onOpenModelPicker,
+  onOpenActions
+}: {
+  title: string;
+  mode: ChatMode;
+  modelId: string;
+  onBack: () => void;
+  onToggleMode: (mode: ChatMode) => void;
+  onOpenModelPicker: () => void;
+  onOpenActions: () => void;
+}): JSX.Element {
+  return (
+    <header style={headerStyle}>
+      <button type="button" onClick={onBack} style={iconBtn} aria-label="返回">
+        ‹
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden"
+          }}
+        >
+          {title}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <ModeSegmented value={mode} onChange={onToggleMode} />
+        <button type="button" onClick={onOpenModelPicker} style={modelBtn}>
+          {shortModel(modelId)}
+        </button>
+        <button type="button" onClick={onOpenActions} style={iconBtn} aria-label="更多">
+          ⋮
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function ThreadPlanBar({ threadId }: { threadId: string }): JSX.Element | null {
+  const plan = useStore((s) => s.threads[threadId]?.plan ?? EMPTY_PLAN);
+  return plan.length > 0 ? <PlanBar steps={plan} /> : null;
+}
+
+function ThreadTimelineViewport({
+  threadId,
+  scrollerRef,
+  onScroll,
+  onSend,
+  onRewindToMessage,
+  onForkFromMessage,
+  onResolveApproval,
+  onExecutePlan
+}: {
+  threadId: string;
+  scrollerRef: RefObject<HTMLDivElement | null>;
+  onScroll: (event: React.UIEvent<HTMLDivElement>) => void | Promise<void>;
+  onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
+  onRewindToMessage: (entry: TimelineEntry) => void | Promise<void>;
+  onForkFromMessage: (entry: TimelineEntry) => void | Promise<void>;
+  onResolveApproval: (req: PendingServerRequest) => void | Promise<void>;
+  onExecutePlan: (entries: TimelineEntry[]) => void | Promise<void>;
+}): JSX.Element {
+  const entries = useStore((s) => s.threads[threadId]?.entries ?? EMPTY_ENTRIES);
+  const approvals = useStore((s) => s.threads[threadId]?.pendingApprovals ?? EMPTY_APPROVALS);
+  const running = useStore((s) => s.threads[threadId]?.running ?? false);
+  const activeTurnId = useStore((s) => s.threads[threadId]?.activeTurnId ?? null);
+  const mode = useStore((s) => s.threads[threadId]?.mode ?? "build");
+  const reachedBeginning = useStore((s) => s.threads[threadId]?.reachedBeginning ?? false);
+
+  return (
+    <div ref={scrollerRef} className="cw-thread-scroller" onScroll={onScroll} style={scrollStyle}>
+      {reachedBeginning ? (
+        <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
+      ) : null}
+      <Timeline
+        entries={entries}
+        approvals={approvals}
+        running={running}
+        activeTurnId={activeTurnId}
+        onResendUser={async (text) => {
+          await onSend(text, []);
+        }}
+        onRewindToMessage={onRewindToMessage}
+        onForkFromMessage={onForkFromMessage}
+        onResolveApproval={async (req) => {
+          await onResolveApproval(req);
+        }}
+      />
+      {running ? (
+        <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>正在生成…</div>
+      ) : null}
+      {mode === "plan" && !running && entries.length > 0 ? (
+        <div style={{ textAlign: "center", padding: 16 }}>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await onExecutePlan(entries);
+              } catch (err) {
+                console.warn("execute plan failed", err);
+              }
+            }}
+            style={{
+              padding: "10px 20px",
+              borderRadius: 12,
+              border: "none",
+              background: "var(--cw-accent)",
+              color: "#fff",
+              fontSize: 15
+            }}
+          >
+            转 Build 执行
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThreadComposerDock({
+  threadId,
+  cwd,
+  running,
+  disabled,
+  draftOverride,
+  onSend,
+  onInterrupt
+}: {
+  threadId: string;
+  cwd?: string;
+  running: boolean;
+  disabled: boolean;
+  draftOverride?: { text: string; version: number };
+  onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
+  onInterrupt: () => Promise<void>;
+}): JSX.Element {
+  return (
+    <ChatInput
+      threadId={threadId}
+      cwd={cwd}
+      running={running}
+      disabled={disabled}
+      draftOverride={draftOverride}
+      onSend={onSend}
+      onInterrupt={onInterrupt}
+    />
   );
 }
 
@@ -1156,8 +1282,27 @@ function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: st
     updatedAt: Date.now(),
     lastTurnId: activeTurnId,
     generation: 0,
+    nextCursor: null,
     timeline: []
   };
+}
+
+function restorePrependScrollAnchor(
+  scroller: HTMLDivElement,
+  previousScrollHeight: number,
+  previousScrollTop: number
+): void {
+  const win = scroller.ownerDocument.defaultView;
+  const schedule =
+    win && typeof win.requestAnimationFrame === "function"
+      ? (callback: () => void) => win.requestAnimationFrame(() => callback())
+      : (callback: () => void) => (win ?? window).setTimeout(callback, 0);
+  schedule(() => {
+    const addedHeight = scroller.scrollHeight - previousScrollHeight;
+    if (addedHeight > 0) {
+      scroller.scrollTop = previousScrollTop + addedHeight;
+    }
+  });
 }
 
 function uniqueTimelineId(prefix: string): string {

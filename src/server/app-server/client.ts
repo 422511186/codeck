@@ -868,34 +868,43 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   };
 }
 
-function turnErrorTimelineItem(turnId: string, turnIndex: number, error: TurnError): MobileTimelineItem {
+function turnErrorTimelineItem(turnId: string, turnIndex: number | undefined, error: TurnError): MobileTimelineItem {
   const details = error.additionalDetails?.trim() ? `：${error.additionalDetails}` : "";
   return {
     id: `${turnId}-error`,
     turnId,
-    turnIndex,
+    ...(typeof turnIndex === "number" ? { turnIndex } : {}),
     role: "error",
     text: `${error.message}${details}`
   };
 }
 
-function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex: number): MobileTimelineItem[] {
+function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex?: number): MobileTimelineItem[] {
   const items = turn.items.flatMap((item) => {
     const mapped = timelineItem(item);
-    return mapped ? [{ ...mapped, turnId: turn.id, turnIndex }] : [];
+    return mapped
+      ? [
+          {
+            ...mapped,
+            turnId: turn.id,
+            ...(typeof turnIndex === "number" ? { turnIndex } : {})
+          }
+        ]
+      : [];
   });
   return turn.error ? [...items, turnErrorTimelineItem(turn.id, turnIndex, turn.error)] : items;
 }
 
 function threadDetail(
   thread: Thread,
-  extras: Pick<MobileThreadDetail, "model" | "reasoningEffort"> = {}
+  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor">> = {}
 ): MobileThreadDetail {
   const timeline = thread.turns.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex));
 
   return {
     ...threadSummary(thread),
     lastTurnId: thread.turns.at(-1)?.id || null,
+    nextCursor: extras.nextCursor ?? null,
     timeline,
     ...extras
   };
@@ -908,6 +917,10 @@ function isUnmaterializedIncludeTurnsError(error: unknown): boolean {
 
 function threadWithTurns(thread: Thread): Thread {
   return { ...thread, turns: Array.isArray(thread.turns) ? thread.turns : [] };
+}
+
+function threadWithRecentTurns(thread: Thread, turns: Thread["turns"]): Thread {
+  return { ...thread, turns };
 }
 
 function conversationSummaryView(response: GetConversationSummaryResponse): MobileThreadSummary {
@@ -1371,12 +1384,20 @@ export class CodexAppServerClient {
   }
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
-    const [response, goal] = await Promise.all([
-      this.readThreadWithTurnsFallback(threadId),
-      this.readThreadGoal(threadId)
-    ]);
+    const goalPromise = this.readThreadGoal(threadId);
+    const response = (await this.peer.request("thread/read", {
+        threadId,
+        includeTurns: false
+    })) as ThreadReadResponse;
+    const initialPage = await this.readInitialThreadTurns(threadId, response.thread);
+    const goal = await goalPromise;
 
-    return { ...threadDetail(threadWithTurns(response.thread)), goal };
+    return {
+      ...threadDetail(threadWithRecentTurns(response.thread, initialPage.turns), {
+        nextCursor: initialPage.nextCursor
+      }),
+      goal
+    };
   }
 
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
@@ -1402,6 +1423,27 @@ export class CodexAppServerClient {
     }
   }
 
+  private async readInitialThreadTurns(
+    threadId: string,
+    metadataThread: Thread
+  ): Promise<{ turns: Thread["turns"]; nextCursor: string | null }> {
+    try {
+      const response = (await this.peer.request("thread/turns/list", {
+        threadId,
+        limit: 30,
+        sortDirection: "desc",
+        itemsView: "full"
+      } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+      return { turns: [...response.data].reverse(), nextCursor: response.nextCursor };
+    } catch (error) {
+      const fallbackTurns = threadWithTurns(metadataThread).turns;
+      if (fallbackTurns.length) {
+        return { turns: fallbackTurns, nextCursor: null };
+      }
+      throw error;
+    }
+  }
+
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
     const params: ThreadResumeParams = {
       threadId,
@@ -1423,7 +1465,8 @@ export class CodexAppServerClient {
     return {
       ...threadDetail(thread, {
         model: response.model,
-        reasoningEffort: response.reasoningEffort
+        reasoningEffort: response.reasoningEffort,
+        nextCursor: response.initialTurnsPage?.nextCursor ?? null
       }),
       goal
     };
@@ -2432,7 +2475,7 @@ export class CodexAppServerClient {
     const response = (await this.peer.request("thread/turns/list", params)) as ThreadTurnsListResponse;
 
     return {
-      items: response.data.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex)),
+      items: response.data.flatMap((turn) => timelineItemsForTurn(turn)),
       nextCursor: response.nextCursor
     };
   }

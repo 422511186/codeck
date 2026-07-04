@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../server/auth";
 import { audit } from "../../../server/security";
+import { publicErrorMessage } from "../../../shared/errors";
 
 export { audit, getAppServerGateway };
 
@@ -15,7 +16,7 @@ export function badRequest(error: string): Response {
 
 export function serverError(error: unknown, fallback: string): Response {
   return NextResponse.json(
-    { ok: false, error: error instanceof Error ? error.message : fallback },
+    { ok: false, error: publicErrorMessage(error, fallback) },
     { status: 502 }
   );
 }

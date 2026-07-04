@@ -50,6 +50,23 @@ describe("web/api/client", () => {
     });
   });
 
+  it("does not expose raw HTML error pages from reverse proxies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<!DOCTYPE html><title>huangzy.cyou | 502: Bad gateway</title><body>Cloudflare</body>", {
+          status: 502,
+          headers: { "content-type": "text/html" }
+        })
+      )
+    );
+
+    await expect(api("/api/sample")).rejects.toMatchObject({
+      name: "ApiError",
+      message: "上游服务暂不可用（502 Bad gateway）"
+    });
+  });
+
   it("invokes session invalid handler on 401", async () => {
     const handler = vi.fn();
     setSessionInvalidHandler(handler);

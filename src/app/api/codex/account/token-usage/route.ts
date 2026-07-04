@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
+import { getAppServerGateway, serverError } from "../../_route-helpers";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 
 const unavailableUsage = {
@@ -26,10 +26,7 @@ export async function GET(request: Request): Promise<Response> {
       return NextResponse.json({ ok: true, result: unavailableUsage, usage: unavailableUsage });
     }
 
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取账号 token 用量" },
-      { status: 502 }
-    );
+    return serverError(error, "无法读取账号 token 用量");
   }
 }
 

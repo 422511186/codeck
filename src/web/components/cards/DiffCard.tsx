@@ -2,9 +2,12 @@
 
 import type { DiffEntry } from "../../state/timeline";
 import { BaseCard } from "./BaseCard";
+import { createTextPreview, TruncationFooter } from "./LongTextPreview";
 
 export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
-  const rows = parseUnifiedDiff(entry.diff || "");
+  const diff = entry.diff || "";
+  const preview = createTextPreview(diff, { maxLines: 120, maxChars: 20_000 });
+  const rows = parseUnifiedDiff(preview.preview);
 
   return (
     <BaseCard
@@ -33,6 +36,9 @@ export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
           ))}
         </div>
       </div>
+      {preview.truncated ? (
+        <TruncationFooter text={diff} copyLabel="复制完整 diff" omittedLines={preview.omittedLines} />
+      ) : null}
     </BaseCard>
   );
 }

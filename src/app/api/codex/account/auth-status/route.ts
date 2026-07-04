@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
+import { getAppServerGateway, serverError } from "../../_route-helpers";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 
 export async function GET(request: Request): Promise<Response> {
@@ -11,9 +11,6 @@ export async function GET(request: Request): Promise<Response> {
     const authStatus = await getAppServerGateway().getAuthStatus();
     return NextResponse.json({ ok: true, result: authStatus, authStatus });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取账号鉴权状态" },
-      { status: 502 }
-    );
+    return serverError(error, "无法读取账号鉴权状态");
   }
 }

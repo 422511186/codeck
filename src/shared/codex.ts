@@ -1,6 +1,12 @@
 export type AppServerStatusView = {
   state: "disabled" | "idle" | "starting" | "connecting" | "ready" | "error";
   message?: string;
+  mode?: "spawn" | "spawn-or-connect" | "external" | "mock" | "off";
+  managedByCurrentProcess?: boolean;
+  reusedExisting?: boolean;
+  pidKnown?: boolean;
+  errorKind?: "timeout" | "unavailable" | "handshake-failed" | "startup-failed" | "lock-timeout" | "stale-lock";
+  cleanupState?: "none" | "child-terminated" | "metadata-cleared" | "stale-lock-cleared";
 };
 
 export type MobileThreadSummary = {
@@ -630,6 +636,7 @@ export type MobileThreadGoalView = {
 
 export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
+  nextCursor: string | null;
   generation?: number;
   snapshotSequence?: number;
   timeline: MobileTimelineItem[];

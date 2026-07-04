@@ -191,10 +191,16 @@ unknown
 {
   "ok": true,
   "appServer": {
-    "state": "ready"
+    "state": "ready",
+    "mode": "spawn-or-connect",
+    "managedByCurrentProcess": false,
+    "reusedExisting": true,
+    "pidKnown": false
   }
 }
 ```
+
+`appServer` 可能包含 `mode`、`state`、`managedByCurrentProcess`、`reusedExisting`、`pidKnown`、`errorKind` 和 `cleanupState` 等安全诊断字段。响应不得包含原始 app-server URL、token 或认证信息；错误时 `message` 也会做连接串脱敏。
 
 ### `GET /api/codex/models`
 

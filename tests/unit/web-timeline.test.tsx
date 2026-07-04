@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { Timeline } from "../../src/web/components/Timeline";
+import {
+  Timeline,
+  __getTimelineDerivationDiagnostics,
+  __resetTimelineDerivationDiagnostics
+} from "../../src/web/components/Timeline";
 
 describe("Timeline", () => {
   afterEach(() => {
@@ -134,6 +138,92 @@ describe("Timeline", () => {
 
     expect(container.textContent).toContain("```ts");
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+  });
+
+  it("长 timeline 初始挂载只渲染可见窗口附近 rows，历史 Markdown 不全部同步渲染", () => {
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "agent-message" as const,
+        text: `历史回复 ${index}\n\n\`\`\`ts\nconst item${index} = true;\n\`\`\``
+      }
+    }));
+
+    const { container } = render(<Timeline entries={entries} />);
+
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
+    expect(screen.getAllByText(/历史回复/).length).toBeLessThanOrEqual(80);
+    expect(screen.queryAllByRole("button", { name: "复制代码" }).length).toBeLessThanOrEqual(2);
+  });
+
+  it("窗口化后仍渲染尾部系统消息、错误卡片和审批卡片", async () => {
+    const user = userEvent.setup();
+    const entries = [
+      ...Array.from({ length: 100 }, (_value, index) => ({
+        id: `agent-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: {
+          kind: "agent-message" as const,
+          text: `历史回复 ${index}`
+        }
+      })),
+      {
+        id: "system-tail",
+        createdAt: 101,
+        body: { kind: "system" as const, text: "系统提示仍可见" }
+      },
+      {
+        id: "error-tail",
+        createdAt: 102,
+        body: { kind: "error" as const, text: "错误提示仍可见" }
+      }
+    ];
+
+    const { container } = render(
+      <Timeline
+        entries={entries}
+        approvals={[
+          {
+            requestId: "approval-1",
+            kind: "command_approval",
+            request: { command: "npm test" }
+          }
+        ]}
+      />
+    );
+
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
+    expect(screen.getByText("系统提示仍可见")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /出错了/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /出错了/ }));
+    expect(screen.getByText("错误提示仍可见")).toBeInTheDocument();
+    expect(screen.getByText("执行命令需要授权")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "同意" })).toBeInTheDocument();
+  });
+
+  it("长 timeline 渲染前预计算行派生状态，避免每行扫描完整 entries", () => {
+    __resetTimelineDerivationDiagnostics();
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `user-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "user-message" as const,
+        text: `历史提问 ${index}`,
+        status: "sent" as const
+      }
+    }));
+
+    render(<Timeline entries={entries} running />);
+
+    const diagnostics = __getTimelineDerivationDiagnostics();
+    expect(diagnostics.derivationRuns).toBe(1);
+    expect(diagnostics.rowEntryScans).toBe(0);
   });
 
   it("在本页弹窗预览用户消息图片，不打开新页面", async () => {

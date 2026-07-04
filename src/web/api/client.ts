@@ -1,4 +1,5 @@
 import type { ApiErr, ApiOk, ApiResponse } from "./types";
+import { sanitizePublicErrorMessage } from "../../shared/errors";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -50,7 +51,7 @@ async function readBody(response: Response): Promise<unknown> {
   try {
     return JSON.parse(text);
   } catch {
-    return { ok: false, error: text };
+    return { ok: false, error: sanitizePublicErrorMessage(text) };
   }
 }
 
@@ -95,12 +96,12 @@ export async function api<T = Record<string, unknown>>(
 
     if (!response.ok) {
       const message =
-        (body as ApiErr)?.error ?? `请求失败 (${response.status})`;
+        sanitizePublicErrorMessage((body as ApiErr)?.error ?? "", `请求失败 (${response.status})`);
       throw new ApiError(message, response.status);
     }
 
     if (body && typeof body === "object" && (body as ApiResponse<T>).ok === false) {
-      throw new ApiError((body as ApiErr).error ?? "请求失败", response.status);
+      throw new ApiError(sanitizePublicErrorMessage((body as ApiErr).error ?? "", "请求失败"), response.status);
     }
 
     return body as ApiOk<T>;

@@ -9,8 +9,27 @@ export type { WsConnectionState };
 
 const MAX_PROCESSED_EVENT_IDS = 2_000;
 
+type TimelineEntryIndexes = {
+  byId: Map<string, number>;
+};
+
+type TimelineDiagnostics = {
+  normalizeRuns: number;
+  entryIndexBuildEntries: number;
+  linearEntryScans: number;
+  equivalentOutputCandidateChecks: number;
+};
+
+const timelineDiagnostics: TimelineDiagnostics = {
+  normalizeRuns: 0,
+  entryIndexBuildEntries: 0,
+  linearEntryScans: 0,
+  equivalentOutputCandidateChecks: 0
+};
+
 export type ThreadState = {
   entries: TimelineEntry[];
+  entryIndexes: TimelineEntryIndexes;
   pendingApprovals: PendingServerRequest[];
   resolvedApprovals: Set<string>;
   interruptedTurnIds: Set<string>;
@@ -74,31 +93,38 @@ type Actions = {
   resolvePendingRequest: (requestId: string) => void;
   dispatchEvent: (event: WsEvent) => void;
   reset: (threadId: string) => void;
+  __getTimelineDiagnostics?: () => TimelineDiagnostics;
+  __resetTimelineDiagnostics?: () => void;
 };
 
-export const emptyThread = (init?: Partial<ThreadState>): ThreadState => ({
-  entries: [],
-  pendingApprovals: [],
-  resolvedApprovals: new Set<string>(),
-  interruptedTurnIds: new Set<string>(),
-  deletedTurnIds: new Set<string>(),
-  processedEventIds: new Set<string>(),
-  itemRevisions: new Map<string, number>(),
-  snapshotDeltaSuppressions: new Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }>(),
-  timelineGeneration: 0,
-  localUserMessageIdsByTurn: new Map<string, string>(),
-  repairRequestedAt: null,
-  running: false,
-  cursor: null,
-  reachedBeginning: false,
-  plan: [],
-  mode: "build",
-  model: null,
-  modelEffort: null,
-  activeTurnId: null,
-  lastSeenItemId: null,
-  ...init
-});
+export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
+  const entries = init?.entries ?? [];
+  const entryIndexes = init?.entryIndexes ?? buildTimelineEntryIndexes(entries);
+  return {
+    pendingApprovals: [],
+    resolvedApprovals: new Set<string>(),
+    interruptedTurnIds: new Set<string>(),
+    deletedTurnIds: new Set<string>(),
+    processedEventIds: new Set<string>(),
+    itemRevisions: new Map<string, number>(),
+    snapshotDeltaSuppressions: new Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }>(),
+    timelineGeneration: 0,
+    localUserMessageIdsByTurn: new Map<string, string>(),
+    repairRequestedAt: null,
+    running: false,
+    cursor: null,
+    reachedBeginning: false,
+    plan: [],
+    mode: "build",
+    model: null,
+    modelEffort: null,
+    activeTurnId: null,
+    lastSeenItemId: null,
+    ...init,
+    entries,
+    entryIndexes
+  };
+};
 
 export const useStore = create<State & Actions>((set, get) => ({
   wsState: "idle",
@@ -121,9 +147,9 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
+          [threadId]: indexedThreadState(
+            {
             ...prev,
-            entries: nextEntries,
             cursor,
             reachedBeginning: cursor === null,
             timelineGeneration,
@@ -132,27 +158,31 @@ export const useStore = create<State & Actions>((set, get) => ({
             snapshotDeltaSuppressions: snapshotDeltaSuppressions(nextEntries),
             localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(nextEntries),
             lastSeenItemId: nextEntries.length ? nextEntries[nextEntries.length - 1].id : prev.lastSeenItemId
-          }
+            },
+            nextEntries
+          )
         }
       };
     }),
   mergeThreadEntries: (threadId, entries, cursor) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const nextEntries = mergeTimelineEntries(prev.entries, entries);
+      const nextEntries = mergeTimelineEntries(prev.entries, entries, prev.entryIndexes);
       const timelineGeneration = Math.max(prev.timelineGeneration, maxEntryGeneration(entries));
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
+          [threadId]: indexedThreadState(
+            {
             ...prev,
-            entries: nextEntries,
             cursor,
             reachedBeginning: cursor === null,
             timelineGeneration,
             localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(nextEntries, prev.localUserMessageIdsByTurn),
             lastSeenItemId: nextEntries.length ? nextEntries[nextEntries.length - 1].id : prev.lastSeenItemId
-          }
+            },
+            nextEntries
+          )
         }
       };
     }),
@@ -163,7 +193,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, entries: nextEntries, cursor, reachedBeginning }
+          [threadId]: indexedThreadState({ ...prev, cursor, reachedBeginning }, nextEntries)
         }
       };
     }),
@@ -175,14 +205,14 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, entries: nextEntries, lastSeenItemId: last }
+          [threadId]: indexedThreadState({ ...prev, lastSeenItemId: last }, nextEntries)
         }
       };
     }),
   replaceOrAddEntry: (threadId, entry) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const idx = prev.entries.findIndex((e) => e.id === entry.id);
+      const idx = findEntryIndexById(prev, entry.id);
       const equivalentOutputIndex = idx >= 0 ? -1 : findEquivalentOutputIndex(prev.entries, entry);
       const confirmedLocalIndex = idx >= 0 || equivalentOutputIndex >= 0 ? -1 : findConfirmableLocalUserIndex(prev, entry);
       const nextEntries =
@@ -197,57 +227,58 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
+          [threadId]: indexedThreadState(
+            {
             ...prev,
-            entries: normalizedEntries,
             timelineGeneration: Math.max(prev.timelineGeneration, entry.generation ?? 0),
             localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
               normalizedEntries,
               prev.localUserMessageIdsByTurn
             ),
             lastSeenItemId: entry.id
-          }
+            },
+            normalizedEntries
+          )
         }
       };
     }),
   appendTextToEntry: (threadId, entry) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const idx = prev.entries.findIndex((e) => e.id === entry.id);
+      const idx = findEntryIndexById(prev, entry.id);
       let appendedExisting = false;
       let normalizeAfterAppend = false;
-      const nextEntries =
-        idx >= 0
-          ? prev.entries.map((current, i) => {
-              if (i !== idx) {
-                return current;
-              }
-              const appended = appendDeltaToExistingEntry(current, entry);
-              if (!appended) {
-                return current;
-              }
-              appendedExisting = true;
-              normalizeAfterAppend =
-                normalizeAfterAppend ||
-                current.turnId !== appended.turnId ||
-                current.turnIndex !== appended.turnIndex;
-              return appended;
-            })
-          : [...prev.entries, entry];
+      const nextEntries = idx >= 0 ? prev.entries.slice() : [...prev.entries, entry];
+      if (idx >= 0) {
+        const current = prev.entries[idx];
+        if (current) {
+          const appended = appendDeltaToExistingEntry(current, entry);
+          if (appended) {
+            appendedExisting = true;
+            normalizeAfterAppend =
+              current.turnId !== appended.turnId ||
+              current.turnIndex !== appended.turnIndex;
+            nextEntries[idx] = appended;
+          }
+        }
+      }
       if (idx >= 0 && !appendedExisting) {
         return state;
       }
       const normalizedEntries =
         appendedExisting && !normalizeAfterAppend ? nextEntries : normalizeTimelineEntries(nextEntries);
+      const nextThread = {
+        ...prev,
+        timelineGeneration: Math.max(prev.timelineGeneration, entry.generation ?? 0),
+        lastSeenItemId: entry.id
+      };
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            entries: normalizedEntries,
-            timelineGeneration: Math.max(prev.timelineGeneration, entry.generation ?? 0),
-            lastSeenItemId: entry.id
-          }
+          [threadId]:
+            appendedExisting && !normalizeAfterAppend
+              ? { ...nextThread, entries: normalizedEntries, entryIndexes: prev.entryIndexes }
+              : indexedThreadState(nextThread, normalizedEntries)
         }
       };
     }),
@@ -261,8 +292,8 @@ export const useStore = create<State & Actions>((set, get) => ({
         createdAt: Date.now(),
         body: { kind: "reasoning", text: "", done: false }
       };
-      const existingIndex = prev.entries.findIndex((current) => current.id === itemId);
-      const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
+      const existingIndex = findEntryIndexById(prev, itemId);
+      const pendingIndex = existingIndex >= 0 ? -1 : findEntryIndexById(prev, pendingId);
       const nextEntries =
         existingIndex >= 0
           ? prev.entries.map((current, index) => {
@@ -282,11 +313,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            entries: normalizeTimelineEntries(nextEntries),
-            lastSeenItemId: itemId
-          }
+          [threadId]: indexedThreadState({ ...prev, lastSeenItemId: itemId }, normalizeTimelineEntries(nextEntries))
         }
       };
     }),
@@ -300,38 +327,37 @@ export const useStore = create<State & Actions>((set, get) => ({
         createdAt: Date.now(),
         body: { kind: "reasoning", text: delta, done: false }
       };
-      const existingIndex = prev.entries.findIndex((current) => current.id === itemId);
-      const pendingIndex = prev.entries.findIndex((current) => current.id === pendingId);
+      const existingIndex = findEntryIndexById(prev, itemId);
+      const pendingIndex = existingIndex >= 0 ? -1 : findEntryIndexById(prev, pendingId);
       const appendedExisting = existingIndex >= 0 && prev.entries[existingIndex]?.body.kind === "reasoning";
       const replacedPending = !appendedExisting && pendingIndex >= 0;
       let normalizeAfterAppend = false;
-      const nextEntries = appendedExisting
-        ? prev.entries.map((current, index) => {
-            if (index !== existingIndex || current.body.kind !== "reasoning") {
-              return current;
-            }
-            normalizeAfterAppend = normalizeAfterAppend || (Boolean(turnId) && current.turnId !== turnId);
-            return {
-              ...current,
-              ...(turnId && !current.turnId ? { turnId } : {}),
-              body: { ...current.body, text: `${current.body.text}${delta}` }
-            };
-          })
-        : replacedPending
-          ? prev.entries.map((current, index) => (index === pendingIndex ? deltaEntry : current))
-          : [...prev.entries, deltaEntry];
+      const nextEntries = appendedExisting || replacedPending ? prev.entries.slice() : [...prev.entries, deltaEntry];
+      if (appendedExisting) {
+        const current = prev.entries[existingIndex];
+        if (current?.body.kind === "reasoning") {
+          normalizeAfterAppend = Boolean(turnId) && current.turnId !== turnId;
+          nextEntries[existingIndex] = {
+            ...current,
+            ...(turnId && !current.turnId ? { turnId } : {}),
+            body: { ...current.body, text: `${current.body.text}${delta}` }
+          };
+        }
+      } else if (replacedPending) {
+        nextEntries[pendingIndex] = deltaEntry;
+      }
+
+      const normalizedEntries =
+        (appendedExisting && !normalizeAfterAppend) || replacedPending ? nextEntries : normalizeTimelineEntries(nextEntries);
+      const nextThread = { ...prev, lastSeenItemId: itemId };
 
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            entries:
-              (appendedExisting && !normalizeAfterAppend) || replacedPending
-                ? nextEntries
-                : normalizeTimelineEntries(nextEntries),
-            lastSeenItemId: itemId
-          }
+          [threadId]:
+            appendedExisting && !normalizeAfterAppend
+              ? { ...nextThread, entries: normalizedEntries, entryIndexes: prev.entryIndexes }
+              : indexedThreadState(nextThread, normalizedEntries)
         }
       };
     }),
@@ -352,7 +378,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, entries: normalizeTimelineEntries(nextEntries) }
+          [threadId]: indexedThreadState(prev, normalizeTimelineEntries(nextEntries))
         }
       };
     }),
@@ -388,11 +414,7 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            entries: normalizeTimelineEntries(entries),
-            localUserMessageIdsByTurn
-          }
+          [threadId]: indexedThreadState({ ...prev, localUserMessageIdsByTurn }, normalizeTimelineEntries(entries))
         }
       };
     }),
@@ -522,6 +544,12 @@ export const useStore = create<State & Actions>((set, get) => ({
       if (threadId) {
         get().ensureThread(threadId);
         get().requestSnapshotRepair(threadId);
+      }
+      return;
+    }
+    if (event.type === "codex-event-batch") {
+      for (const raw of event.events) {
+        get().dispatchEvent({ type: "codex-event", event: raw });
       }
       return;
     }
@@ -774,31 +802,38 @@ export const useStore = create<State & Actions>((set, get) => ({
       const next = { ...state.threads };
       delete next[threadId];
       return { threads: next };
-    })
+    }),
+  __getTimelineDiagnostics: () => ({ ...timelineDiagnostics }),
+  __resetTimelineDiagnostics: () => {
+    timelineDiagnostics.normalizeRuns = 0;
+    timelineDiagnostics.entryIndexBuildEntries = 0;
+    timelineDiagnostics.linearEntryScans = 0;
+    timelineDiagnostics.equivalentOutputCandidateChecks = 0;
+  }
 }));
 
-function mergeTimelineEntries(current: TimelineEntry[], snapshot: TimelineEntry[]): TimelineEntry[] {
+function mergeTimelineEntries(
+  current: TimelineEntry[],
+  snapshot: TimelineEntry[],
+  currentIndexes = buildTimelineEntryIndexes(current)
+): TimelineEntry[] {
   if (!current.length) {
     return normalizeTimelineEntries(snapshot);
   }
 
-  const snapshotById = new Map(snapshot.map((entry) => [entry.id, entry]));
-  const usedSnapshotIds = new Set<string>();
-  const merged: TimelineEntry[] = [];
-  for (const entry of current) {
-    const snapshotEntry = snapshotById.get(entry.id);
-    if (!snapshotEntry) {
-      merged.push(entry);
+  const merged = current.slice();
+  for (const snapshotEntry of snapshot) {
+    const currentIndex = currentIndexes.byId.get(snapshotEntry.id);
+    if (typeof currentIndex !== "number") {
+      merged.push(snapshotEntry);
       continue;
     }
-    usedSnapshotIds.add(entry.id);
-    merged.push(shouldReplaceLiveEntry(entry, snapshotEntry) ? snapshotEntry : entry);
-  }
-
-  for (const entry of snapshot) {
-    if (!usedSnapshotIds.has(entry.id)) {
-      merged.push(entry);
+    const currentEntry = merged[currentIndex];
+    if (!currentEntry) {
+      merged.push(snapshotEntry);
+      continue;
     }
+    merged[currentIndex] = shouldReplaceLiveEntry(currentEntry, snapshotEntry) ? snapshotEntry : currentEntry;
   }
 
   return normalizeTimelineEntries(merged);
@@ -818,6 +853,7 @@ function shouldReplaceLiveEntry(current: TimelineEntry, snapshot: TimelineEntry)
 }
 
 function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  timelineDiagnostics.normalizeRuns += 1;
   return orderTimelineEntries(
     mergeEquivalentOutputEntries(
       removeAdjacentDuplicateUserMessages(
@@ -827,6 +863,32 @@ function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
       )
     )
   );
+}
+
+function buildTimelineEntryIndexes(entries: TimelineEntry[]): TimelineEntryIndexes {
+  timelineDiagnostics.entryIndexBuildEntries += entries.length;
+  const byId = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    byId.set(entry.id, index);
+  });
+  return { byId };
+}
+
+function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): ThreadState {
+  return {
+    ...prev,
+    entries,
+    entryIndexes: buildTimelineEntryIndexes(entries)
+  };
+}
+
+function findEntryIndexById(state: ThreadState, id: string): number {
+  const indexed = state.entryIndexes.byId.get(id);
+  if (typeof indexed === "number" && state.entries[indexed]?.id === id) {
+    return indexed;
+  }
+  timelineDiagnostics.linearEntryScans += state.entries.length;
+  return state.entries.findIndex((entry) => entry.id === id);
 }
 
 function snapshotDeltaSuppressions(entries: TimelineEntry[]): Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }> {
@@ -1133,20 +1195,48 @@ function findEquivalentOutputIndex(entries: TimelineEntry[], entry: TimelineEntr
   if (!isMergeableOutputEntry(entry)) {
     return -1;
   }
+  timelineDiagnostics.equivalentOutputCandidateChecks += entries.length;
   return entries.findIndex((candidate) => areEquivalentOutputEntries(candidate, entry));
 }
 
 function mergeEquivalentOutputEntries(entries: TimelineEntry[]): TimelineEntry[] {
   const merged: TimelineEntry[] = [];
+  const mergeableIndexesByBucket = new Map<string, number[]>();
   for (const entry of entries) {
-    const existingIndex = findEquivalentOutputIndex(merged, entry);
+    const bucketKey = equivalentOutputBucketKey(entry);
+    const candidateIndexes = bucketKey ? (mergeableIndexesByBucket.get(bucketKey) ?? []) : [];
+    timelineDiagnostics.equivalentOutputCandidateChecks += candidateIndexes.length;
+    const existingIndex = candidateIndexes.find((index) => {
+      const candidate = merged[index];
+      return candidate ? areEquivalentOutputEntries(candidate, entry) : false;
+    }) ?? -1;
     if (existingIndex < 0) {
       merged.push(entry);
+      if (bucketKey) {
+        candidateIndexes.push(merged.length - 1);
+        mergeableIndexesByBucket.set(bucketKey, candidateIndexes);
+      }
       continue;
     }
     merged[existingIndex] = mergeEquivalentOutputEntry(merged[existingIndex]!, entry);
   }
   return merged;
+}
+
+function equivalentOutputBucketKey(entry: TimelineEntry): string | null {
+  if (!isMergeableOutputEntry(entry) || !entry.turnId) {
+    return null;
+  }
+  if (entry.body.kind === "tool") {
+    return [
+      entry.turnId,
+      entry.body.kind,
+      entry.body.toolKind ?? "",
+      entry.body.server,
+      entry.body.tool
+    ].join("\u0001");
+  }
+  return `${entry.turnId}\u0001${entry.body.kind}`;
 }
 
 function mergeEquivalentOutputEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry {
@@ -1373,7 +1463,7 @@ function orderTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
     if (!entry.turnId || turnOrder.has(entry.turnId)) {
       return;
     }
-    turnOrder.set(entry.turnId, typeof entry.turnIndex === "number" ? entry.turnIndex : nextTurnOrder);
+    turnOrder.set(entry.turnId, nextTurnOrder);
     nextTurnOrder += 1;
   });
 

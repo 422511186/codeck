@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TimelineEventStreamClient } from "../../src/web/events/client";
 import type { WsEvent } from "../../src/web/ws/client";
 
@@ -34,6 +34,10 @@ class FakeEventSource {
 describe("TimelineEventStreamClient", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("dispatches parsed SSE messages", () => {
@@ -154,5 +158,161 @@ describe("TimelineEventStreamClient", () => {
     client.onEvent((event) => received.push(event));
 
     expect(received).toEqual([{ type: "timeline-gap", threadId: "thread-1" }]);
+  });
+
+  it("batches same item text deltas before notifying listeners and drops duplicate event ids inside the batch", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+
+    const source = FakeEventSource.instances[0]!;
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "delta-1",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        generation: 1,
+        delta: "one"
+      }
+    });
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "delta-2",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        generation: 1,
+        delta: "two"
+      }
+    });
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "delta-2",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        generation: 1,
+        delta: "two"
+      }
+    });
+
+    expect(received).toEqual([]);
+
+    vi.advanceTimersByTime(10);
+
+    expect(received).toEqual([
+      {
+        type: "codex-event-batch",
+        events: [
+          expect.objectContaining({ eventId: "delta-1", delta: "one" }),
+          expect.objectContaining({ eventId: "delta-2", delta: "two" })
+        ]
+      }
+    ]);
+  });
+
+  it("keeps different items and generations in separate delta batches", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+
+    const source = FakeEventSource.instances[0]!;
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "agent-1-g1",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        generation: 1,
+        delta: "one"
+      }
+    });
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "agent-2-g1",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-2",
+        generation: 1,
+        delta: "two"
+      }
+    });
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "agent-1-g2",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        generation: 2,
+        delta: "three"
+      }
+    });
+
+    vi.advanceTimersByTime(10);
+
+    expect(received).toEqual([
+      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-1-g1" }) },
+      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-2-g1" }) },
+      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-1-g2" }) }
+    ]);
+  });
+
+  it("flushes pending text delta batches before interactive control events", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+
+    const source = FakeEventSource.instances[0]!;
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "delta-1",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "one"
+      }
+    });
+    source.emit("message", { type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" });
+
+    expect(received).toEqual([
+      { type: "codex-event", event: expect.objectContaining({ eventId: "delta-1" }) },
+      { type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" }
+    ]);
   });
 });

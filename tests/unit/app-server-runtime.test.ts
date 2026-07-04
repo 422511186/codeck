@@ -458,7 +458,12 @@ describe("createAppServerGateway", () => {
   it("off 模式会保留 disabled 状态并拒绝请求", async () => {
     const gateway = createAppServerGateway({ mode: "off" });
 
-    expect(gateway.getStatus()).toEqual({ state: "disabled" });
+    expect(gateway.getStatus()).toMatchObject({
+      state: "disabled",
+      mode: "off",
+      managedByCurrentProcess: false,
+      reusedExisting: false
+    });
     await expect(gateway.listThreads()).rejects.toThrow("app-server 已关闭");
   });
 
@@ -565,6 +570,33 @@ describe("createAppServerGateway", () => {
           turnIndex: 0,
           role: "user",
           text: "覆盖后的用户消息"
+        })
+      ])
+    });
+  });
+
+  it("刷新读取会合并 agent message delta overlay", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-live-1",
+        delta: "正在生成的 agent 正文"
+      }
+    });
+
+    expect(await gateway.readThread("thread-1")).toMatchObject({
+      timeline: expect.arrayContaining([
+        expect.objectContaining({
+          id: "agent-live-1",
+          turnId: "turn-1",
+          role: "agent",
+          text: "正在生成的 agent 正文"
         })
       ])
     });

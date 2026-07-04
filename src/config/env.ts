@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import nextEnv from "@next/env";
 
@@ -21,6 +22,13 @@ export type AppServerConfig =
       codexBin: string;
       host: string;
       port: number | null;
+    }
+  | {
+      mode: "spawn-or-connect";
+      codexBin: string;
+      host: string;
+      port: number | null;
+      stateDir: string;
     }
   | {
       mode: "external";
@@ -76,6 +84,11 @@ function parseOptionalPort(value: string | undefined): number | null {
 function parseAppServerConfig(env: RuntimeEnv): AppServerConfig {
   const explicitMode = env.CODEX_WEB_APP_SERVER_MODE?.trim();
   const url = env.CODEX_WEB_APP_SERVER_URL?.trim();
+  const spawnConfig = {
+    codexBin: env.CODEX_WEB_CODEX_BIN?.trim() || "codex",
+    host: env.CODEX_WEB_APP_SERVER_HOST?.trim() || "127.0.0.1",
+    port: parseOptionalPort(env.CODEX_WEB_APP_SERVER_PORT)
+  };
 
   if (explicitMode === "mock") {
     return { mode: "mock" };
@@ -85,7 +98,7 @@ function parseAppServerConfig(env: RuntimeEnv): AppServerConfig {
     return { mode: "off" };
   }
 
-  if (explicitMode === "external" || url) {
+  if (explicitMode === "external") {
     if (!url) {
       throw new Error("CODEX_WEB_APP_SERVER_MODE=external 时必须配置 CODEX_WEB_APP_SERVER_URL");
     }
@@ -93,11 +106,27 @@ function parseAppServerConfig(env: RuntimeEnv): AppServerConfig {
     return { mode: "external", url };
   }
 
+  if (!explicitMode && url) {
+    return { mode: "external", url };
+  }
+
+  if (explicitMode === "spawn-or-connect") {
+    return {
+      mode: "spawn-or-connect",
+      ...spawnConfig,
+      stateDir: env.CODEX_WEB_APP_SERVER_STATE_DIR?.trim() || resolve(tmpdir(), "codex-web-app-server")
+    };
+  }
+
+  if (explicitMode && explicitMode !== "spawn") {
+    throw new Error(
+      `CODEX_WEB_APP_SERVER_MODE 无效: ${explicitMode}，可选值为 spawn、spawn-or-connect、external、mock、off`
+    );
+  }
+
   return {
     mode: "spawn",
-    codexBin: env.CODEX_WEB_CODEX_BIN?.trim() || "codex",
-    host: env.CODEX_WEB_APP_SERVER_HOST?.trim() || "127.0.0.1",
-    port: parseOptionalPort(env.CODEX_WEB_APP_SERVER_PORT)
+    ...spawnConfig
   };
 }
 

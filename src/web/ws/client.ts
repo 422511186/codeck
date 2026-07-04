@@ -12,6 +12,10 @@ export type WsCodexEvent = {
   type: "codex-event";
   event: { kind: string; threadId?: string; turnId?: string; eventId?: string; revision?: number; sequence?: number; [k: string]: unknown };
 };
+export type WsCodexEventBatch = {
+  type: "codex-event-batch";
+  events: WsCodexEvent["event"][];
+};
 export type WsServerRequestEvent = {
   type: "server-request";
   request: {
@@ -35,6 +39,7 @@ export type WsEvent =
   | WsHelloEvent
   | WsHealthEvent
   | WsCodexEvent
+  | WsCodexEventBatch
   | WsServerRequestEvent
   | WsServerRequestResolvedEvent
   | WsTimelineGapEvent;

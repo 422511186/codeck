@@ -265,6 +265,37 @@ describe("ThreadPage", () => {
     expect(scroller).toBeTruthy();
   });
 
+  it("should store initial history cursor from bounded thread detail", async () => {
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        {
+          id: "recent-user",
+          turnId: "turn-newest",
+          role: "user",
+          text: "Recent message"
+        }
+      ],
+      lastTurnId: "turn-newest",
+      nextCursor: "turn-older",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        [expect.objectContaining({ id: "recent-user" })],
+        "turn-older"
+      );
+    });
+  });
+
   it("should keep sending available while cached idle timeline is visible and thread detail is still loading", async () => {
     mockReadThread.mockReturnValue(new Promise(() => undefined));
     mockThreadState.mockReturnValue({
@@ -432,6 +463,65 @@ describe("ThreadPage", () => {
     expect(mockSetThreadEntries).not.toHaveBeenCalled();
     expect(mockClearSnapshotRepair).not.toHaveBeenCalled();
     expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should preserve older history cursor after bounded snapshot repair", async () => {
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [{ id: "cached-1", turnId: "turn-old", role: "user", text: "Cached message" }],
+      lastTurnId: "turn-old",
+      nextCursor: "initial-older",
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Repaired",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [{ id: "repair-1", turnId: "turn-new", role: "agent", text: "Repaired tail" }],
+      lastTurnId: "turn-new",
+      nextCursor: "repair-older",
+      updatedAt: Date.now()
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "cached-1",
+          turnId: "turn-old",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Cached message", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: "stale-older",
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        [expect.objectContaining({ id: "repair-1" })],
+        "repair-older"
+      );
+    });
+    expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
   it("should render timeline with multiple entries", async () => {
@@ -823,6 +913,70 @@ describe("ThreadPage", () => {
 
     act(() => {
       resolvePage?.({ items: [], nextCursor: null });
+    });
+  });
+
+  it("should keep scroll anchor when older history is prepended", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "recent",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Recent message" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: "turn-10",
+      reachedBeginning: false
+    });
+    let resolvePage: ((value: { items: Array<{ id: string; role: "user"; text: string }>; nextCursor: string }) => void) | null = null;
+    mockListTurnsBefore.mockReturnValue(new Promise((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 0;
+    let scrollHeight = 1000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 500
+    });
+
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+
+    await waitFor(() => {
+      expect(mockListTurnsBefore).toHaveBeenCalled();
+    });
+    scrollHeight = 1400;
+    act(() => {
+      resolvePage?.({
+        items: [{ id: "older", role: "user", text: "Older message" }],
+        nextCursor: "turn-5"
+      });
+    });
+
+    await waitFor(() => {
+      expect(scroller.scrollTop).toBe(400);
     });
   });
 

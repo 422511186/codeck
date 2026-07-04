@@ -129,7 +129,7 @@ CODEX_WEB_APP_SERVER_MODE=spawn
 
 ## app-server 模式
 
-默认使用 `spawn` 模式：Web 后端在需要读取 Codex 数据时自动启动本机 `codex app-server --listen ws://127.0.0.1:<port>`。
+默认使用 `spawn` 模式：Web 后端在需要读取 Codex 数据时自动启动本机 `codex app-server --listen ws://127.0.0.1:<port>`。这个模式表示“当前 Web 后端拥有子进程”，适合单个本机开发服务，不承诺多个 Web 后端之间复用同一个 app-server。
 
 可选配置：
 
@@ -140,11 +140,22 @@ CODEX_WEB_APP_SERVER_HOST=127.0.0.1
 CODEX_WEB_APP_SERVER_PORT=31317
 ```
 
-如果你已经自己启动了 Codex app-server，可以使用 external 模式：
+如果你已经自己启动了 Codex app-server，或者有多个 Web 后端需要复用同一个 app-server，推荐使用 external 模式：
 
 ```env
 CODEX_WEB_APP_SERVER_MODE=external
 CODEX_WEB_APP_SERVER_URL=ws://127.0.0.1:31317
+```
+
+本机开发如果希望“有就复用，没有就自动启动”，可以使用 `spawn-or-connect`。必须配置固定 host/port；启动时会先探测该 endpoint，已有可用 app-server 时直接连接，不会再 spawn。端口未监听时会通过跨进程锁启动一个新 app-server；如果端口被非 app-server 占用或 WebSocket 握手失败，会报明确错误，不会静默换随机端口。
+
+```env
+CODEX_WEB_APP_SERVER_MODE=spawn-or-connect
+CODEX_WEB_CODEX_BIN=codex
+CODEX_WEB_APP_SERVER_HOST=127.0.0.1
+CODEX_WEB_APP_SERVER_PORT=31317
+# 可选，保存启动锁和 owner pid 元数据
+CODEX_WEB_APP_SERVER_STATE_DIR=/tmp/codex-web-app-server
 ```
 
 测试或后端联调用 mock 模式：
@@ -161,7 +172,7 @@ CODEX_WEB_APP_SERVER_MODE=off
 
 ## 安全边界
 
-- app-server 默认只绑定 loopback，原始 app-server URL 和 Web 登录 token 不通过状态接口暴露。
+- app-server 默认只绑定 loopback，原始 app-server URL 和 Web 登录 token 不通过状态接口暴露。状态接口只返回 mode、state、是否复用、是否由当前进程拥有、pid 是否已知、错误类别等安全诊断字段。
 - 文件读取、终端 cwd、新建会话 cwd、runtime workspace roots 和图片路径会经过 `CODEX_WEB_WORKSPACE_ROOTS` allowlist 校验。
 - 图片上传目录额外允许作为 `localImage` 来源，但不会自动扩大 Files/Terminal 的工作区范围。
 - 发送消息、上传图片、执行终端命令、审批响应、fork、rollback、interrupt、steer、新建会话等敏感动作会写入 append-only JSONL 审计日志。
