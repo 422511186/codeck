@@ -8,6 +8,10 @@ function normalizePath(input: string): string {
   return input.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+function normalizeThreadPath(input: unknown): string | null {
+  return typeof input === "string" && input.trim() ? normalizePath(input) : null;
+}
+
 export async function GET(request: Request): Promise<Response> {
   if (!isRequestAuthenticated(request)) {
     return NextResponse.json({ ok: false }, { status: 401 });
@@ -20,29 +24,38 @@ export async function GET(request: Request): Promise<Response> {
     const cwd = url.searchParams.get("cwd")?.trim();
     const archived = url.searchParams.get("archived") === "true";
     const gateway = getAppServerGateway();
-    const readPage = (nextCursor: string | null) =>
-      searchTerm
-        ? gateway.searchThreads({
-            searchTerm,
-            limit: 30,
-            cursor: nextCursor,
-            archived
-          })
-        : gateway.listThreads({
-            limit: 30,
-            cursor: nextCursor,
-            sortKey: "updated_at",
-            sortDirection: "desc",
-            archived
-          });
+    const readPage = (nextCursor: string | null) => {
+      if (searchTerm) {
+        return gateway.searchThreads({
+          searchTerm,
+          limit: 30,
+          cursor: nextCursor,
+          archived
+        });
+      }
+
+      return gateway.listThreads({
+        limit: 30,
+        cursor: nextCursor,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        archived,
+        ...(cwd ? { cwd } : {})
+      });
+    };
 
     if (cwd) {
+      if (!searchTerm) {
+        const page = await readPage(cursor);
+        return NextResponse.json({ ok: true, ...page });
+      }
+
       const target = normalizePath(cwd);
       const threads = [];
       let nextCursor: string | null = cursor;
       for (let i = 0; i < CWD_FILTER_SCAN_PAGE_LIMIT; i++) {
         const page = await readPage(nextCursor);
-        threads.push(...page.threads.filter((thread) => normalizePath(thread.cwd) === target));
+        threads.push(...page.threads.filter((thread) => normalizeThreadPath(thread.cwd) === target));
         if (!page.nextCursor) {
           return NextResponse.json({ ok: true, threads, nextCursor: null });
         }

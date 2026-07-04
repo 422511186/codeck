@@ -19,7 +19,7 @@ describe("codex threads route", () => {
     mockListThreads.mockReset();
   });
 
-  it("cwd 查询只返回精确匹配路径的会话，不包含子目录", async () => {
+  it("cwd 查询交给 app-server 精确过滤，并保留 archived 参数", async () => {
     mockListThreads.mockResolvedValueOnce({
       threads: [
         {
@@ -30,26 +30,26 @@ describe("codex threads route", () => {
           modelProvider: "openai",
           status: "idle",
           updatedAt: 1
-        },
-        {
-          id: "child-thread",
-          title: "child",
-          preview: "",
-          cwd: "C:\\Users\\huang\\workspace",
-          modelProvider: "openai",
-          status: "idle",
-          updatedAt: 2
         }
       ],
-      nextCursor: null
+      nextCursor: "older"
     });
 
     const { GET } = await import("../../src/app/api/codex/threads/route");
     const response = await GET(
-      new Request("http://localhost/api/codex/threads?cwd=C%3A%5CUsers%5Chuang")
+      new Request("http://localhost/api/codex/threads?cwd=C%3A%5CUsers%5Chuang&archived=false")
     );
 
     expect(response.status).toBe(200);
+    expect(mockListThreads).toHaveBeenCalledTimes(1);
+    expect(mockListThreads).toHaveBeenCalledWith({
+      limit: 30,
+      cursor: null,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+      archived: false,
+      cwd: "C:\\Users\\huang"
+    });
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       threads: [
@@ -58,7 +58,7 @@ describe("codex threads route", () => {
           cwd: "C:\\Users\\huang"
         })
       ],
-      nextCursor: null
+      nextCursor: "older"
     });
   });
 });
