@@ -38,6 +38,11 @@ export type MobilePermissionProfileOption = {
   description: string | null;
 };
 
+export type MobileActivePermissionProfile = {
+  id: string;
+  extends: string | null;
+};
+
 export type MobileAccountView = {
   type: "apiKey" | "chatgpt" | "amazonBedrock" | "none";
   email: string | null;
@@ -642,6 +647,7 @@ export type MobileThreadDetail = MobileThreadSummary & {
   timeline: MobileTimelineItem[];
   model?: string | null;
   reasoningEffort?: string | null;
+  activePermissionProfile?: MobileActivePermissionProfile | null;
   tokenUsageTotal?: number;
   goal?: MobileThreadGoalView | null;
 };

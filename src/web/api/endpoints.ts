@@ -63,12 +63,18 @@ export async function listSkills(
 }
 
 export async function readCodexSettings(): Promise<CodexSettings> {
-  const data = await api<{ settings: CodexSettings }>("/api/codex/settings/model-defaults");
+  let data: { settings: CodexSettings };
+  try {
+    data = await api<{ settings: CodexSettings }>("/api/codex/settings");
+  } catch {
+    data = await api<{ settings: CodexSettings }>("/api/codex/settings/model-defaults");
+  }
   return {
     model: data.settings?.model ?? null,
     modelProvider: data.settings?.modelProvider ?? null,
     reasoningEffort: data.settings?.reasoningEffort ?? null,
-    reasoningSummary: data.settings?.reasoningSummary ?? null
+    reasoningSummary: data.settings?.reasoningSummary ?? null,
+    permissionProfiles: data.settings?.permissionProfiles ?? []
   };
 }
 
@@ -127,7 +133,7 @@ export type StartThreadInput = {
   cwd: string;
   workspaceRoots?: string[];
   model?: string;
-  permissions?: string;
+  permissions?: string | null;
   clientOperationId?: string;
 };
 
@@ -148,7 +154,7 @@ export type StartTurnInput = {
   model?: string;
   reasoningEffort?: string;
   reasoningSummary?: string;
-  permissions?: string;
+  permissions?: string | null;
   additionalContext?: Record<string, { value: string; kind: "untrusted" | "application" }>;
   collaborationMode?: CollaborationModePayload;
 };
@@ -217,7 +223,7 @@ export async function compactThread(threadId: string): Promise<void> {
 export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
-  permissions?: string;
+  permissions?: string | null;
   collaborationMode?: CollaborationModePayload;
 };
 

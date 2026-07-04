@@ -17,7 +17,7 @@ export async function POST(
     const body = (await request.json()) as {
       model?: string;
       reasoningEffort?: string;
-      permissions?: string;
+      permissions?: string | null;
       collaborationMode?: UpdateThreadSettingsInput["collaborationMode"];
     };
     await audit("thread.settings.update", {

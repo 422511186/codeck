@@ -49,6 +49,7 @@ export type ThreadDetail = ThreadSummary & {
   timeline: TimelineItem[];
   model?: string | null;
   reasoningEffort?: string | null;
+  activePermissionProfile?: ActivePermissionProfile | null;
 };
 
 export type TimelinePage = {
@@ -69,6 +70,18 @@ export type CodexSettings = {
   modelProvider: string | null;
   reasoningEffort: string | null;
   reasoningSummary: string | null;
+  permissionProfiles?: PermissionProfile[];
+};
+
+export type PermissionProfile = {
+  id: string;
+  label: string;
+  description: string | null;
+};
+
+export type ActivePermissionProfile = {
+  id: string;
+  extends: string | null;
 };
 
 export type UploadedImage = {

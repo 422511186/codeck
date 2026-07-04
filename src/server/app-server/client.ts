@@ -309,7 +309,7 @@ export type StartThreadInput = {
   cwd?: string;
   workspaceRoots?: string[];
   model?: string;
-  permissions?: string;
+  permissions?: string | null;
 };
 
 export type StartTurnInput = {
@@ -321,7 +321,7 @@ export type StartTurnInput = {
   model?: string;
   reasoningEffort?: string;
   reasoningSummary?: ReasoningSummary;
-  permissions?: string;
+  permissions?: string | null;
   additionalContext?: TurnStartParams["additionalContext"];
   collaborationMode?: TurnStartParams["collaborationMode"];
 };
@@ -383,7 +383,7 @@ export type UpdateThreadSettingsInput = {
   threadId: string;
   model?: string;
   reasoningEffort?: string;
-  permissions?: string;
+  permissions?: string | null;
   collaborationMode?: ThreadSettingsUpdateParams["collaborationMode"];
 };
 
@@ -897,7 +897,7 @@ function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex?: number)
 
 function threadDetail(
   thread: Thread,
-  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor">> = {}
+  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor" | "activePermissionProfile">> = {}
 ): MobileThreadDetail {
   const timeline = thread.turns.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex));
 
@@ -1466,6 +1466,7 @@ export class CodexAppServerClient {
       ...threadDetail(thread, {
         model: response.model,
         reasoningEffort: response.reasoningEffort,
+        activePermissionProfile: response.activePermissionProfile,
         nextCursor: response.initialTurnsPage?.nextCursor ?? null
       }),
       goal
@@ -1509,7 +1510,8 @@ export class CodexAppServerClient {
     const response = (await this.peer.request("thread/fork", params)) as ThreadForkResponse;
     return threadDetail(response.thread, {
       model: response.model,
-      reasoningEffort: response.reasoningEffort
+      reasoningEffort: response.reasoningEffort,
+      activePermissionProfile: response.activePermissionProfile
     });
   }
 

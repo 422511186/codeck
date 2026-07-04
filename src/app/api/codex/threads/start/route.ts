@@ -25,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
       cwd?: string;
       workspaceRoots?: string[];
       model?: string;
-      permissions?: string;
+      permissions?: string | null;
       clientOperationId?: string;
     };
     const input = {
@@ -58,7 +58,7 @@ async function startThreadOnly(input: {
   cwd?: string;
   workspaceRoots?: string[];
   model?: string;
-  permissions?: string;
+  permissions?: string | null;
 }): Promise<StartThreadRouteResult> {
   const thread = await getAppServerGateway().startThread(input);
   return { thread };

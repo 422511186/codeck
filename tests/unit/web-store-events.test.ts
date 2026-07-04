@@ -1517,7 +1517,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("syncs thread mode, model, and reasoning effort from settings update events", () => {
+  it("syncs thread mode, model, reasoning effort, and permission profile from settings update events", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -1525,6 +1525,7 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
+        activePermissionProfile: { id: "read-only", extends: null },
         collaborationMode: "plan"
       }
     });
@@ -1533,7 +1534,8 @@ describe("web store codex events", () => {
       expect.objectContaining({
         mode: "plan",
         model: "gpt-5-codex",
-        modelEffort: "high"
+        modelEffort: "high",
+        permissionProfileId: "read-only"
       })
     );
   });

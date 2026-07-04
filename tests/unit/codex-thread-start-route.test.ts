@@ -55,6 +55,26 @@ describe("codex thread start route", () => {
     });
   });
 
+  it("把 permissions null 从 HTTP body 转发给 app-server", async () => {
+    const { POST } = await import("../../src/app/api/codex/threads/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "C:\\repo", permissions: null })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockStartThread).toHaveBeenCalledWith({
+      cwd: "C:\\repo",
+      workspaceRoots: undefined,
+      model: undefined,
+      permissions: null
+    });
+  });
+
   it("同一个 clientOperationId 的并发重复请求只创建一个会话", async () => {
     const { POST } = await import("../../src/app/api/codex/threads/start/route");
     const requestBody = {

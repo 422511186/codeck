@@ -12,6 +12,12 @@ export type ChatInputProps = {
   running: boolean;
   disabled?: boolean;
   draftOverride?: { text: string; version: number };
+  permissionLabel?: string;
+  permissionDescription?: string;
+  modelLabel?: string;
+  reasoningEffortLabel?: string;
+  onOpenPermissionPicker?: () => void;
+  onOpenModelPicker?: () => void;
   onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
@@ -26,7 +32,7 @@ type ImageState = {
 export function ChatInput(props: ChatInputProps): JSX.Element {
   const [text, setText] = useState<string>(() => (typeof window === "undefined" ? "" : getDraft(props.threadId)));
   const [image, setImage] = useState<ImageState | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillOptions, setSkillOptions] = useState<SkillOption[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -37,10 +43,12 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const loadedSkillKeyRef = useRef<string | null>(null);
   const skillLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     setText(getDraft(props.threadId));
     setImage(null);
+    setAddPanelOpen(false);
     setSelectedSkills([]);
     setSkillPickerOpen(false);
     setSkillOptions([]);
@@ -71,7 +79,15 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     setDraft(props.threadId, text);
   }, [props.threadId, text]);
 
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight || 38, 220)}px`;
+  }, [text]);
+
   function pickImage(): void {
+    setAddPanelOpen(false);
     fileInput.current?.click();
   }
 
@@ -127,6 +143,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   }
 
   function openSkillPicker(): void {
+    setAddPanelOpen(false);
     setSkillPickerOpen(true);
     void loadSkills();
   }
@@ -145,7 +162,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
       setImage(null);
       setSelectedSkills([]);
       setDraft(props.threadId, "");
-      setExpanded(false);
+      setAddPanelOpen(false);
     } catch (err) {
       // surface left for caller via timeline (failed user msg); just keep input contents
       if (err instanceof ApiError) {
@@ -181,39 +198,95 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   return (
     <>
       <div style={barStyle}>
-        {image ? <ImageThumb image={image} onRemove={() => setImage(null)} onRetry={retryImage} /> : null}
-        {selectedSkills.length ? (
-          <div style={skillChipRowStyle}>
-            {selectedSkills.map((skill) => (
-              <span key={skillKey(skill)} style={skillChipStyle}>
-                <span style={skillChipLabelStyle}>{skill.name}</span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSkills((items) => items.filter((item) => skillKey(item) !== skillKey(skill)))}
-                  aria-label={`移除 Skill ${skill.name}`}
-                  style={skillChipRemoveStyle}
-                  disabled={disabled}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
+        {addPanelOpen ? (
+          <>
+            <div aria-hidden="true" style={addPanelScrimStyle} onClick={() => setAddPanelOpen(false)} />
+            <AddPanel onPickImage={pickImage} onOpenSkillPicker={openSkillPicker} />
+          </>
         ) : null}
 
-        <div style={composerRowStyle}>
-          <button type="button" onClick={pickImage} aria-label="添加图片" style={iconBtn} disabled={disabled}>
-            <ImageIcon />
-          </button>
-          <button
-            type="button"
-            onClick={openSkillPicker}
-            aria-label="引用 Skill"
-            style={iconBtn}
+        <div style={composerCardStyle}>
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="输入消息"
+            rows={1}
+            style={textareaStyle}
             disabled={disabled}
-          >
-            <SkillIcon />
-          </button>
+          />
+
+          {image || selectedSkills.length ? (
+            <div aria-label="已选上下文" style={selectedContextStyle}>
+              {image ? <ImageThumb image={image} onRemove={() => setImage(null)} onRetry={retryImage} /> : null}
+              {selectedSkills.length ? (
+                <div style={skillChipRowStyle}>
+                  {selectedSkills.map((skill) => (
+                    <span key={skillKey(skill)} style={skillChipStyle}>
+                      <span style={skillChipLabelStyle}>{skill.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSkills((items) => items.filter((item) => skillKey(item) !== skillKey(skill)))}
+                        aria-label={`移除 Skill ${skill.name}`}
+                        style={skillChipRemoveStyle}
+                        disabled={disabled}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div style={composerToolbarStyle}>
+            <button
+              type="button"
+              onClick={() => setAddPanelOpen((open) => !open)}
+              aria-label="添加内容"
+              style={addBtnStyle}
+              disabled={disabled}
+            >
+              +
+            </button>
+            <div style={statusChipRowStyle}>
+              {props.permissionLabel && props.onOpenPermissionPicker ? (
+                <button
+                  type="button"
+                  onClick={props.onOpenPermissionPicker}
+                  aria-label={`权限 ${props.permissionLabel}`}
+                  title={props.permissionDescription}
+                  style={stateChipStyle}
+                  disabled={disabled}
+                >
+                  {props.permissionLabel}
+                  <span aria-hidden="true">⌄</span>
+                </button>
+              ) : null}
+              {props.modelLabel && props.onOpenModelPicker ? (
+                <button
+                  type="button"
+                  onClick={props.onOpenModelPicker}
+                  aria-label={`模型 ${modelChipText(props.modelLabel, props.reasoningEffortLabel)}`}
+                  style={stateChipStyle}
+                  disabled={disabled}
+                >
+                  {modelChipText(props.modelLabel, props.reasoningEffortLabel)}
+                  <span aria-hidden="true">⌄</span>
+                </button>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => send()}
+              disabled={!canSend}
+              style={sendButtonStyle}
+              aria-label="发送"
+            >
+              <SendIcon />
+            </button>
+          </div>
           <input
             ref={fileInput}
             type="file"
@@ -225,39 +298,8 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
               e.target.value = "";
             }}
           />
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="输入消息"
-            rows={1}
-            style={textareaStyle}
-            disabled={disabled}
-          />
-          <button type="button" onClick={() => setExpanded(true)} aria-label="展开编辑" style={iconBtn} disabled={disabled}>
-            <ExpandIcon />
-          </button>
-          <button
-            type="button"
-            onClick={() => send()}
-            disabled={!canSend}
-            style={sendButtonStyle}
-            aria-label="发送"
-          >
-            <SendIcon />
-          </button>
         </div>
       </div>
-
-      {expanded ? (
-        <HalfScreenEditor
-          initial={text}
-          onCancel={() => setExpanded(false)}
-          onSubmit={async (value) => {
-            setText(value);
-            await send(value);
-          }}
-        />
-      ) : null}
 
       {skillPickerOpen ? (
         <SkillPickerSheet
@@ -287,6 +329,37 @@ function skillKey(skill: SkillReference): string {
 function skillLoadKey(cwd?: string): string {
   const normalized = cwd?.trim();
   return normalized || "__default__";
+}
+
+function modelChipText(modelLabel: string, effortLabel?: string): string {
+  return effortLabel ? `${modelLabel}，${effortLabel}` : modelLabel;
+}
+
+function AddPanel({
+  onPickImage,
+  onOpenSkillPicker
+}: {
+  onPickImage: () => void;
+  onOpenSkillPicker: () => void;
+}): JSX.Element {
+  return (
+    <section role="dialog" aria-label="添加内容" style={addPanelStyle}>
+      <button type="button" onClick={onPickImage} style={addPanelItemStyle}>
+        <span style={addPanelIconStyle}><ImageIcon /></span>
+        <span style={addPanelTextStyle}>图片</span>
+      </button>
+      <button type="button" onClick={onOpenSkillPicker} style={addPanelItemStyle}>
+        <span style={addPanelIconStyle}><SkillIcon /></span>
+        <span style={addPanelTextStyle}>引用 Skill</span>
+      </button>
+      {["文件", "目标", "插件"].map((label) => (
+        <button key={label} type="button" style={addPanelItemDisabledStyle} disabled>
+          <span style={addPanelIconStyle}>＋</span>
+          <span style={addPanelTextStyle}>{label}</span>
+        </button>
+      ))}
+    </section>
+  );
 }
 
 function ImageThumb({
@@ -337,61 +410,6 @@ function ImageThumb({
       >
         ×
       </button>
-    </div>
-  );
-}
-
-function HalfScreenEditor({
-  initial,
-  onCancel,
-  onSubmit
-}: {
-  initial: string;
-  onCancel: () => void;
-  onSubmit: (value: string) => void | Promise<void>;
-}): JSX.Element {
-  const [value, setValue] = useState(initial);
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        display: "flex",
-        alignItems: "flex-end",
-        background: "rgba(0,0,0,0.28)",
-        zIndex: 100
-      }}
-      onClick={onCancel}
-    >
-      <section
-        role="dialog"
-        aria-label="半屏编辑器"
-        style={halfScreenPanelStyle}
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-      >
-        <header style={halfScreenHeaderStyle}>
-          <button type="button" onClick={onCancel} style={ghostBtn}>
-            取消
-          </button>
-          <button type="button" onClick={() => onSubmit(value)} disabled={!value.trim()} style={primaryBtn}>
-            发送
-          </button>
-        </header>
-        <textarea
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              // 允许换行（不发送）
-              e.stopPropagation();
-            }
-          }}
-          style={halfScreenTextareaStyle}
-        />
-      </section>
     </div>
   );
 }
@@ -491,19 +509,6 @@ function SkillPickerSheet({
     </div>
   );
 }
-
-const halfScreenPanelStyle: React.CSSProperties = {
-  width: "100%",
-  height: "50dvh",
-  background: "var(--cw-bg)",
-  borderTop: "1px solid var(--cw-border)",
-  borderTopLeftRadius: 18,
-  borderTopRightRadius: 18,
-  boxShadow: "0 -14px 34px rgba(0,0,0,0.18)",
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden"
-};
 
 const sheetBackdropStyle: React.CSSProperties = {
   position: "fixed",
@@ -653,27 +658,6 @@ const retryBtnStyle: React.CSSProperties = {
   fontSize: 14
 };
 
-const halfScreenHeaderStyle: React.CSSProperties = {
-  height: 52,
-  padding: "0 12px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  borderBottom: "1px solid var(--cw-border)"
-};
-
-const halfScreenTextareaStyle: React.CSSProperties = {
-  flex: 1,
-  width: "100%",
-  padding: 14,
-  background: "transparent",
-  color: "var(--cw-fg)",
-  border: "none",
-  fontSize: 16,
-  resize: "none",
-  outline: "none"
-};
-
 const barStyle: React.CSSProperties = {
   position: "fixed",
   left: 0,
@@ -687,6 +671,69 @@ const barStyle: React.CSSProperties = {
   gap: 6,
   zIndex: 20,
   boxShadow: "0 -10px 26px rgba(0,0,0,0.08)"
+};
+
+const addPanelScrimStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 18,
+  background: "transparent"
+};
+
+const addPanelStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 10,
+  right: 10,
+  bottom: "calc(100% - 2px)",
+  zIndex: 22,
+  maxHeight: "50dvh",
+  overflowY: "auto",
+  padding: 8,
+  borderRadius: 14,
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-card)",
+  boxShadow: "0 -12px 34px rgba(0,0,0,0.18)",
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8
+};
+
+const addPanelItemStyle: React.CSSProperties = {
+  minHeight: 58,
+  border: "1px solid var(--cw-border)",
+  borderRadius: 10,
+  background: "var(--cw-bg-elevated)",
+  color: "var(--cw-fg)",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 12px",
+  textAlign: "left",
+  fontSize: 14
+};
+
+const addPanelItemDisabledStyle: React.CSSProperties = {
+  ...addPanelItemStyle,
+  opacity: 0.45
+};
+
+const addPanelIconStyle: React.CSSProperties = {
+  width: 26,
+  height: 26,
+  flex: "0 0 26px",
+  borderRadius: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  color: "var(--cw-accent)",
+  background: "color-mix(in srgb, var(--cw-accent) 12%, transparent)"
+};
+
+const addPanelTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap"
 };
 
 const runningStatusStyle: React.CSSProperties = {
@@ -714,30 +761,75 @@ const pulseDotStyle: React.CSSProperties = {
   boxShadow: "0 0 0 4px color-mix(in srgb, var(--cw-accent) 16%, transparent)"
 };
 
-const iconBtn: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  flex: "0 0 34px",
-  borderRadius: 17,
-  border: "none",
-  background: "transparent",
-  color: "var(--cw-fg-muted)",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  touchAction: "manipulation"
-};
-
-const composerRowStyle: React.CSSProperties = {
-  minHeight: 48,
+const composerCardStyle: React.CSSProperties = {
+  position: "relative",
   display: "flex",
-  alignItems: "flex-end",
-  gap: 6,
-  padding: 5,
-  borderRadius: 24,
+  flexDirection: "column",
+  gap: 8,
+  padding: 8,
+  borderRadius: 16,
   border: "1px solid var(--cw-border)",
   background: "var(--cw-bg-elevated)",
   boxShadow: "0 1px 0 rgba(255,255,255,0.05) inset"
+};
+
+const composerToolbarStyle: React.CSSProperties = {
+  minHeight: 38,
+  display: "flex",
+  alignItems: "center",
+  gap: 8
+};
+
+const addBtnStyle: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  flex: "0 0 36px",
+  borderRadius: 18,
+  border: "none",
+  background: "var(--cw-card)",
+  color: "var(--cw-fg)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  touchAction: "manipulation",
+  fontSize: 24,
+  lineHeight: 1
+};
+
+const statusChipRowStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  overflowX: "auto"
+};
+
+const stateChipStyle: React.CSSProperties = {
+  maxWidth: 156,
+  height: 32,
+  flex: "0 1 auto",
+  minWidth: 0,
+  padding: "0 10px",
+  borderRadius: 16,
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-card)",
+  color: "var(--cw-fg)",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis"
+};
+
+const selectedContextStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  overflowX: "auto",
+  padding: "0 2px"
 };
 
 const skillChipRowStyle: React.CSSProperties = {
@@ -825,17 +917,18 @@ const interruptBtn: React.CSSProperties = {
 };
 
 const textareaStyle: React.CSSProperties = {
-  flex: 1,
-  minHeight: 38,
-  maxHeight: 96,
-  padding: "9px 2px",
+  width: "100%",
+  minHeight: 44,
+  maxHeight: "min(220px, 35dvh)",
+  padding: "8px 4px",
   border: "none",
   background: "transparent",
   color: "var(--cw-fg)",
   fontSize: 15,
-  lineHeight: "20px",
+  lineHeight: "21px",
   resize: "none",
-  outline: "none"
+  outline: "none",
+  overflowY: "auto"
 };
 
 const overlay: React.CSSProperties = {
@@ -856,15 +949,6 @@ const ghostBtn: React.CSSProperties = {
   border: "none",
   color: "var(--cw-fg-muted)",
   fontSize: 15
-};
-
-const primaryBtn: React.CSSProperties = {
-  background: "var(--cw-accent)",
-  border: "none",
-  color: "#fff",
-  fontSize: 15,
-  padding: "6px 14px",
-  borderRadius: 10
 };
 
 function ImageIcon(): JSX.Element {
@@ -898,22 +982,6 @@ function SkillIcon(): JSX.Element {
         strokeLinecap="round"
         opacity="0.7"
       />
-    </svg>
-  );
-}
-
-function ExpandIcon(): JSX.Element {
-  return (
-    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 18h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" opacity="0.45" />
-      <path
-        d="M7.3 15.6l1.2-4 6.8-6.8a1.7 1.7 0 0 1 2.4 0l1.5 1.5a1.7 1.7 0 0 1 0 2.4l-6.8 6.8-4 1.2a.9.9 0 0 1-1.1-1.1Z"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M14.3 5.8l3.9 3.9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }

@@ -330,6 +330,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private thread: Thread = this.createThread();
   private threads: Thread[] = [this.thread];
   private readonly archivedThreads = new Map<string, Thread>();
+  private readonly permissionProfilesByThread = new Map<string, string | null>();
   private turnCounter = 1;
   private itemCounter = 2;
   private requestCounter = 0;
@@ -598,7 +599,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         approvalPolicy: "untrusted",
         approvalsReviewer: "user",
         sandbox: { mode: "workspace-write" },
-        activePermissionProfile: null,
+        activePermissionProfile: this.activePermissionProfileForThread(thread.id),
         reasoningEffort: "medium",
         initialTurnsPage: resumeParams.initialTurnsPage
           ? {
@@ -640,6 +641,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         name: startParams.permissions ? `新会话 ${startParams.permissions}` : "新会话",
         turns: []
       };
+      this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
       this.upsertThread(this.thread);
 
       return {
@@ -653,7 +655,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         approvalPolicy: "untrusted",
         approvalsReviewer: "user",
         sandbox: { mode: "workspace-write" },
-        activePermissionProfile: null,
+        activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
         reasoningEffort: null
       };
     }
@@ -670,6 +672,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         name: `${this.thread.name || "会话"} fork`,
         updatedAt: Math.floor(Date.now() / 1000)
       };
+      this.permissionProfilesByThread.set(
+        this.thread.id,
+        this.permissionProfilesByThread.get(forkParams.threadId) ?? null
+      );
       this.upsertThread(this.thread);
 
       return {
@@ -683,7 +689,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         approvalPolicy: "untrusted",
         approvalsReviewer: "user",
         sandbox: { mode: "workspace-write" },
-        activePermissionProfile: null,
+        activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
         reasoningEffort: null
       };
     }
@@ -715,7 +721,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/settings/update") {
       const settingsParams = params as ThreadSettingsUpdateParams;
-      this.selectThread(settingsParams.threadId);
+      const thread = this.selectThread(settingsParams.threadId);
+      if ("permissions" in settingsParams) {
+        this.permissionProfilesByThread.set(thread.id, settingsParams.permissions ?? null);
+      }
       return {};
     }
 
@@ -1010,6 +1019,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "turn/start") {
       const startParams = params as TurnStartParams;
       this.selectThread(startParams.threadId);
+      if ("permissions" in startParams) {
+        this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
+      }
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
       const settingSuffix = startParams.model || startParams.effort || startParams.permissions
@@ -2163,6 +2175,11 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.thread;
     this.thread = thread;
     return thread;
+  }
+
+  private activePermissionProfileForThread(threadId: string): { id: string; extends: string | null } | null {
+    const profileId = this.permissionProfilesByThread.get(threadId);
+    return { id: profileId || "default", extends: null };
   }
 
   private upsertThread(thread: Thread): void {

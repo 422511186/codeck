@@ -153,6 +153,7 @@ export type BrowserCodexEvent =
       threadId: string;
       model: string | null;
       reasoningEffort: string | null;
+      activePermissionProfile: BrowserActivePermissionProfile | null;
       collaborationMode: "plan" | "default" | null;
     }
   | {
@@ -217,6 +218,11 @@ export type BrowserCodexEvent =
       importId: string;
       itemTypeResults: unknown[];
     };
+
+export type BrowserActivePermissionProfile = {
+  id: string;
+  extends: string | null;
+};
 
 export type BrowserTimelineEventIdentity = {
   eventId: string;
@@ -498,6 +504,17 @@ function numberOrZero(value: unknown): number {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function activePermissionProfileOrNull(value: unknown): BrowserActivePermissionProfile | null {
+  if (!isRecord(value) || typeof value.id !== "string") {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    extends: typeof value.extends === "string" ? value.extends : null
+  };
 }
 
 function collaborationModeKind(value: unknown): "plan" | "default" | null {
@@ -954,6 +971,7 @@ export function normalizeAppServerNotification(
         threadId: params.threadId,
         model: stringOrNull(params.threadSettings.model),
         reasoningEffort: stringOrNull(params.threadSettings.effort),
+        activePermissionProfile: activePermissionProfileOrNull(params.threadSettings.activePermissionProfile),
         collaborationMode: collaborationModeKind(params.threadSettings.collaborationMode)
       }
     };

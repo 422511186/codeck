@@ -19,11 +19,27 @@ function renderInput(overrides: Partial<React.ComponentProps<typeof ChatInput>> 
   const props: React.ComponentProps<typeof ChatInput> = {
     threadId: "thread-1",
     running: false,
+    permissionLabel: "完全访问",
+    permissionDescription: "允许自动执行命令",
+    modelLabel: "gpt-5-codex",
+    reasoningEffortLabel: "中",
+    onOpenPermissionPicker: vi.fn(),
+    onOpenModelPicker: vi.fn(),
     onSend: vi.fn().mockResolvedValue(undefined),
     onInterrupt: vi.fn().mockResolvedValue(undefined),
     ...overrides
   };
   return { ...render(<ChatInput {...props} />), props };
+}
+
+async function openAddPanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "添加内容" }));
+  return screen.getByRole("dialog", { name: "添加内容" });
+}
+
+async function openSkillPickerFromAddPanel(user: ReturnType<typeof userEvent.setup>) {
+  const panel = await openAddPanel(user);
+  await user.click(within(panel).getByRole("button", { name: "引用 Skill" }));
 }
 
 describe("ChatInput", () => {
@@ -137,8 +153,11 @@ describe("ChatInput", () => {
     expect(screen.getByText("正在生成…")).toBeInTheDocument();
     expect(screen.getByLabelText("中断")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("添加内容")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("展开编辑")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "权限 完全访问" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "模型 gpt-5-codex，中" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
 
@@ -207,28 +226,32 @@ describe("ChatInput", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("keeps Enter as newline inside the half-screen editor", async () => {
-    const user = userEvent.setup();
+  it("uses the inline textarea for multiline editing without a half-screen editor", () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderInput({ onSend });
 
-    await user.click(screen.getByLabelText("展开编辑"));
-    expect(screen.getByRole("dialog", { name: "半屏编辑器" })).toHaveStyle({ height: "50dvh" });
-    const editors = screen.getAllByRole("textbox");
-    const halfScreenEditor = editors[editors.length - 1];
+    expect(screen.queryByLabelText("展开编辑")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "半屏编辑器" })).not.toBeInTheDocument();
 
-    await user.type(halfScreenEditor, "line one");
-    fireEvent.keyDown(halfScreenEditor, { key: "Enter", code: "Enter" });
-    fireEvent.change(halfScreenEditor, { target: { value: "line one\nline two" } });
+    const composer = screen.getByPlaceholderText("输入消息");
+    fireEvent.change(composer, { target: { value: "line one\nline two" } });
 
     expect(onSend).not.toHaveBeenCalled();
-    expect(halfScreenEditor).toHaveValue("line one\nline two");
+    expect(composer).toHaveValue("line one\nline two");
+    expect(composer).toHaveStyle({ maxHeight: "min(220px, 35dvh)", overflowY: "auto" });
   });
 
-  it("keeps the image entry visible in the idle composer and replaces the selected image", async () => {
+  it("moves image selection into the add panel and replaces the selected image", async () => {
+    const user = userEvent.setup();
     const { container } = renderInput();
 
-    expect(screen.getByLabelText("添加图片")).toBeInTheDocument();
+    expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
+    const panel = await openAddPanel(user);
+    expect(within(panel).getByRole("button", { name: "图片" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "引用 Skill" })).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "图片" }));
+    expect(screen.queryByRole("dialog", { name: "添加内容" })).not.toBeInTheDocument();
+
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
 
     fireEvent.change(input, {
@@ -242,6 +265,7 @@ describe("ChatInput", () => {
     });
     await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
+    expect(screen.getByLabelText("已选上下文")).toBeInTheDocument();
   });
 
   it("does not expose resend from the idle composer", () => {
@@ -255,7 +279,7 @@ describe("ChatInput", () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     renderInput({ onSend, cwd: "/repo" });
 
-    await user.click(screen.getByLabelText("引用 Skill"));
+    await openSkillPickerFromAddPanel(user);
     expect(await screen.findByRole("dialog", { name: "选择 Skill" })).toBeInTheDocument();
     expect(mockListSkills).toHaveBeenCalledWith(true, "/repo");
 
@@ -268,7 +292,7 @@ describe("ChatInput", () => {
     await user.click(screen.getByLabelText("移除 Skill repo-helper"));
     expect(screen.queryByText("repo-helper")).not.toBeInTheDocument();
 
-    await user.click(screen.getByLabelText("引用 Skill"));
+    await openSkillPickerFromAddPanel(user);
     await user.click(await screen.findByText("openai-docs"));
     await user.click(screen.getByRole("button", { name: "完成" }));
     await user.type(screen.getByPlaceholderText("输入消息"), "查一下文档");
@@ -285,7 +309,7 @@ describe("ChatInput", () => {
     const user = userEvent.setup();
     renderInput({ cwd: "/repo" });
 
-    await user.click(screen.getByLabelText("引用 Skill"));
+    await openSkillPickerFromAddPanel(user);
     const skill = await screen.findByText("openai-docs");
     await user.click(skill);
     expect(screen.getByText("已选")).toBeInTheDocument();
@@ -307,7 +331,9 @@ describe("ChatInput", () => {
     );
     renderInput({ cwd: "/repo" });
 
-    const skillButton = screen.getByLabelText("引用 Skill");
+    const panel = screen.getByRole("button", { name: "添加内容" });
+    fireEvent.click(panel);
+    const skillButton = within(screen.getByRole("dialog", { name: "添加内容" })).getByRole("button", { name: "引用 Skill" });
     fireEvent.click(skillButton);
     fireEvent.click(skillButton);
 
@@ -335,7 +361,7 @@ describe("ChatInput", () => {
     });
     renderInput({ cwd: "/repo" });
 
-    await user.click(screen.getByLabelText("引用 Skill"));
+    await openSkillPickerFromAddPanel(user);
     expect(await screen.findByText("skills unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "重试" }));
 
@@ -344,18 +370,16 @@ describe("ChatInput", () => {
     expect(mockListSkills).toHaveBeenNthCalledWith(2, true, "/repo");
   });
 
-  it("sends half-screen editor text instead of the stale inline value", async () => {
+  it("renders permission and model chips as bottom toolbar actions", async () => {
     const user = userEvent.setup();
-    const onSend = vi.fn().mockResolvedValue(undefined);
-    renderInput({ onSend });
+    const onOpenPermissionPicker = vi.fn();
+    const onOpenModelPicker = vi.fn();
+    renderInput({ onOpenPermissionPicker, onOpenModelPicker });
 
-    await user.click(screen.getByLabelText("展开编辑"));
-    const editors = screen.getAllByRole("textbox");
-    await user.type(editors[editors.length - 1], "half-screen message");
-    const sendButtons = screen.getAllByRole("button", { name: "发送" });
-    await user.click(sendButtons[sendButtons.length - 1]);
+    await user.click(screen.getByRole("button", { name: "权限 完全访问" }));
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex，中" }));
 
-    expect(onSend).toHaveBeenCalledWith("half-screen message", [], []);
-    expect(screen.queryByText("取消")).not.toBeInTheDocument();
+    expect(onOpenPermissionPicker).toHaveBeenCalledTimes(1);
+    expect(onOpenModelPicker).toHaveBeenCalledTimes(1);
   });
 });

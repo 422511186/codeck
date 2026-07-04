@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ThreadPage from "../../src/app/threads/[threadId]/page";
 import { ApiError } from "../../src/web/api/client";
@@ -21,6 +21,7 @@ const mockAppendEntries = vi.fn();
 const mockReplaceOrAddEntry = vi.fn();
 const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
+const mockSetPermissionProfile = vi.fn();
 const mockSetRunning = vi.fn();
 const mockSetActiveTurnId = vi.fn();
 const mockBindLocalUserMessageTurn = vi.fn();
@@ -51,6 +52,7 @@ function mockStoreState(): unknown {
       replaceOrAddEntry: mockReplaceOrAddEntry,
       setMode: mockSetMode,
       setModel: mockSetModel,
+      setPermissionProfile: mockSetPermissionProfile,
       setRunning: mockSetRunning,
       setActiveTurnId: mockSetActiveTurnId,
       bindLocalUserMessageTurn: mockBindLocalUserMessageTurn,
@@ -132,6 +134,7 @@ describe("ThreadPage", () => {
     mockReplaceOrAddEntry.mockClear();
     mockSetMode.mockClear();
     mockSetModel.mockClear();
+    mockSetPermissionProfile.mockClear();
     mockSetRunning.mockClear();
     mockSetActiveTurnId.mockClear();
     mockBindLocalUserMessageTurn.mockClear();
@@ -186,7 +189,16 @@ describe("ThreadPage", () => {
     mockInterruptTurn.mockResolvedValue({});
     mockListModels.mockResolvedValue([]);
     mockReadSettings.mockClear();
-    mockReadSettings.mockResolvedValue({ model: null, modelProvider: null, reasoningEffort: null, reasoningSummary: null });
+    mockReadSettings.mockResolvedValue({
+      model: null,
+      modelProvider: null,
+      reasoningEffort: null,
+      reasoningSummary: null,
+      permissionProfiles: [
+        { id: "read-only", label: "read-only", description: "只读工作区" },
+        { id: "full-auto", label: "full-auto", description: "允许自动执行" }
+      ]
+    });
     mockCollaborationModes.mockClear();
     mockCollaborationModes.mockResolvedValue([
       { name: "Code", mode: "default", model: "gpt-5-codex", reasoningEffort: "medium" },
@@ -1167,6 +1179,125 @@ describe("ThreadPage", () => {
     );
   });
 
+  it("should render active backend permission profile in the composer and switch to a named profile", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Permission Thread",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      activePermissionProfile: { id: "full-auto", extends: null }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", "full-auto");
+    await user.click(screen.getByRole("button", { name: "权限 完全访问" }));
+    const picker = screen.getByRole("dialog", { name: "权限模式" });
+    await user.click(within(picker).getByRole("button", { name: /只读/ }));
+
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", "read-only");
+    await waitFor(() => {
+      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { permissions: "read-only" });
+    });
+  });
+
+  it("should clear permission override with permissions null when selecting config.toml defaults", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      permissionProfileId: "full-auto"
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "权限 完全访问" }));
+    await user.click(within(screen.getByRole("dialog", { name: "权限模式" })).getByRole("button", { name: /自定义 config\.toml/ }));
+
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", null);
+    await waitFor(() => {
+      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { permissions: null });
+    });
+  });
+
+  it("should include the current permission profile when starting a turn", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      permissionProfileId: "read-only"
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "use current permissions");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "use current permissions",
+        permissions: "read-only"
+      })
+    );
+  });
+
+  it("should send permissions null for config.toml default mode", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      permissionProfileId: null
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "use config");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "use config",
+        permissions: null
+      })
+    );
+  });
+
   it("should request default settings once while opening the thread", async () => {
     render(<ThreadPage />);
 
@@ -1216,7 +1347,9 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "gpt-5-codex" }));
+    const header = document.querySelector("header") as HTMLElement;
+    expect(within(header).queryByRole("button", { name: "gpt-5-codex" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex" }));
 
     await waitFor(() => expect(mockListModels).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: "GPT-5" }));
@@ -1241,7 +1374,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    const modelButton = screen.getByRole("button", { name: "gpt-5-codex" });
+    const modelButton = screen.getByRole("button", { name: "模型 gpt-5-codex" });
     fireEvent.click(modelButton);
     fireEvent.click(modelButton);
 
@@ -1578,7 +1711,7 @@ describe("ThreadPage", () => {
     });
 
     expect(screen.queryByRole("button", { name: "custom" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "gpt-5-codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex" })).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("输入消息"), "现在是plan模式吗");
     await user.click(screen.getByLabelText("发送"));
@@ -1631,7 +1764,7 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "gpt-5.5" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "模型 gpt-5.5，中" })).toBeInTheDocument();
     });
 
     await user.type(screen.getByPlaceholderText("输入消息"), "follow cli config");
@@ -1682,7 +1815,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "gpt-5-codex" }));
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex，中" }));
 
     await waitFor(() => expect(mockListModels).toHaveBeenCalled());
     expect(screen.getByText("推理强度")).toBeInTheDocument();

@@ -139,6 +139,31 @@ describe("codex turn start route", () => {
     expect(json.thread).toBeUndefined();
   });
 
+  it("把 permissions null 从 HTTP body 转发给 app-server", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-1",
+          text: "回到配置默认权限",
+          permissions: null
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "回到配置默认权限",
+        permissions: null
+      })
+    );
+  });
+
   it("校验并转发结构化 Skill 引用", async () => {
     const { POST } = await import("../../src/app/api/codex/turns/start/route");
 

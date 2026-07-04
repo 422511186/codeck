@@ -47,6 +47,7 @@ export type ThreadState = {
   mode: ChatMode;
   model: string | null;
   modelEffort: string | null;
+  permissionProfileId?: string | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
 };
@@ -87,6 +88,7 @@ type Actions = {
   clearSnapshotRepair: (threadId: string) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
+  setPermissionProfile: (threadId: string, profileId: string | null) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
   addApproval: (threadId: string, req: PendingServerRequest) => void;
   setPendingRequests: (reqs: PendingServerRequest[]) => void;
@@ -118,6 +120,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     mode: "build",
     model: null,
     modelEffort: null,
+    permissionProfileId: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
     ...init,
@@ -489,6 +492,11 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  setPermissionProfile: (threadId, profileId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return { threads: { ...state.threads, [threadId]: { ...prev, permissionProfileId: profileId } } };
+    }),
   setPlan: (threadId, plan) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -740,6 +748,13 @@ export const useStore = create<State & Actions>((set, get) => ({
               threadId,
               ev.model,
               typeof ev.reasoningEffort === "string" ? ev.reasoningEffort : null
+            );
+          }
+          if ("activePermissionProfile" in ev) {
+            const activeProfile = ev.activePermissionProfile as { id?: unknown } | null;
+            get().setPermissionProfile(
+              threadId,
+              activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null
             );
           }
           break;

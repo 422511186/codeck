@@ -17,10 +17,11 @@ import {
   type ChatMode,
   type ModelOption,
   type PendingServerRequest,
+  type PermissionProfile,
   type SkillReference,
   type ThreadDetail
 } from "../../../web/api/types";
-import { loadJson, saveJson, threadModeKey } from "../../../web/storage/localStore";
+import { loadJson, saveJson, threadModeKey, threadPermissionProfileKey } from "../../../web/storage/localStore";
 import { setDraft } from "../../../web/storage/drafts";
 import { settingsStore } from "../../../web/storage/settings";
 
@@ -41,6 +42,7 @@ export default function ThreadPage(): JSX.Element {
   const replaceOrAddEntry = useStore((s) => s.replaceOrAddEntry);
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
+  const setPermissionProfile = useStore((s) => s.setPermissionProfile);
   const setRunning = useStore((s) => s.setRunning);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
   const bindLocalUserMessageTurn = useStore((s) => s.bindLocalUserMessageTurn);
@@ -57,6 +59,7 @@ export default function ThreadPage(): JSX.Element {
   const threadMode = useStore((s) => s.threads[threadId]?.mode ?? "build");
   const threadModel = useStore((s) => s.threads[threadId]?.model ?? null);
   const threadModelEffort = useStore((s) => s.threads[threadId]?.modelEffort ?? null);
+  const threadPermissionProfileId = useStore((s) => s.threads[threadId]?.permissionProfileId);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
@@ -67,7 +70,9 @@ export default function ThreadPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [showSheet, setShowSheet] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showPermissionPicker, setShowPermissionPicker] = useState(false);
   const [models, setModels] = useState<ModelOption[] | null>(null);
+  const [permissionProfiles, setPermissionProfiles] = useState<PermissionProfile[]>([]);
   const [serverDefaults, setServerDefaults] = useState<{
     model: string | null;
     reasoningEffort: string | null;
@@ -97,6 +102,10 @@ export default function ThreadPage(): JSX.Element {
   const configuredReasoningEffort = threadModelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
   const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
+  const effectivePermissionProfileId =
+    detail && "activePermissionProfile" in detail
+      ? detail.activePermissionProfile?.id ?? null
+      : threadPermissionProfileId;
 
   const bumpMutationEpoch = useCallback(() => {
     mutationEpochRef.current += 1;
@@ -132,6 +141,7 @@ export default function ThreadPage(): JSX.Element {
             reasoningEffort: settings.reasoningEffort,
             reasoningSummary: settings.reasoningSummary
           });
+          setPermissionProfiles(settings.permissionProfiles ?? []);
         }
       })
       .catch((err) => {
@@ -168,9 +178,14 @@ export default function ThreadPage(): JSX.Element {
       if (td.model) {
         setModel(targetThreadId, td.model, td.reasoningEffort ?? null);
       }
+      if ("activePermissionProfile" in td) {
+        const profileId = td.activePermissionProfile?.id ?? null;
+        setPermissionProfile(targetThreadId, profileId);
+        saveJson(threadPermissionProfileKey(targetThreadId), profileId);
+      }
       setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
-    [threadId, setThreadEntries, mergeThreadEntries, setTimelineGeneration, setModel, setActiveTurnId]
+    [threadId, setThreadEntries, mergeThreadEntries, setTimelineGeneration, setModel, setPermissionProfile, setActiveTurnId]
   );
 
   useEffect(() => {
@@ -179,6 +194,13 @@ export default function ThreadPage(): JSX.Element {
     const savedMode = loadJson<ChatMode | null>(threadModeKey(threadId), null);
     if (savedMode) {
       setMode(threadId, savedMode);
+    }
+    const savedPermissionProfile = loadJson<string | null | undefined>(
+      threadPermissionProfileKey(threadId),
+      undefined
+    );
+    if (savedPermissionProfile !== undefined) {
+      setPermissionProfile(threadId, savedPermissionProfile);
     }
     let cancelled = false;
     const requestEpoch = mutationEpochRef.current;
@@ -206,7 +228,7 @@ export default function ThreadPage(): JSX.Element {
       cancelled = true;
       setActiveThread(null);
     };
-  }, [threadId, ensureThread, applyThreadDetail, setMode, setRunning, setActiveThread]);
+  }, [threadId, ensureThread, applyThreadDetail, setMode, setPermissionProfile, setRunning, setActiveThread]);
 
   useEffect(() => {
     if (!repairRequestedAt) return;
@@ -349,6 +371,7 @@ export default function ThreadPage(): JSX.Element {
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
           ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
           ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
+          ...(effectivePermissionProfileId !== undefined ? { permissions: effectivePermissionProfileId } : {}),
           ...(collaborationMode ? { collaborationMode } : {})
         };
         const started = await codex.startTurn(startInput);
@@ -418,6 +441,7 @@ export default function ThreadPage(): JSX.Element {
       effectiveModel,
       effectiveReasoningEffort,
       effectiveReasoningSummary,
+      effectivePermissionProfileId,
       configuredModel,
       configuredReasoningEffort,
       appendEntries,
@@ -613,6 +637,20 @@ export default function ThreadPage(): JSX.Element {
     [threadId, effectiveModel, setModel, enqueueThreadSettings]
   );
 
+  const onSelectPermissionProfile = useCallback(
+    async (profileId: string | null) => {
+      setShowPermissionPicker(false);
+      setPermissionProfile(threadId, profileId);
+      saveJson(threadPermissionProfileKey(threadId), profileId);
+      try {
+        await enqueueThreadSettings({ permissions: profileId });
+      } catch (err) {
+        console.warn("update permission profile failed", err);
+      }
+    },
+    [threadId, setPermissionProfile, enqueueThreadSettings]
+  );
+
   const onToggleMode = useCallback(
     async (next: ChatMode) => {
       setMode(threadId, next);
@@ -666,10 +704,8 @@ export default function ThreadPage(): JSX.Element {
       <ThreadHeader
         title={visibleDetail.title || "新会话"}
         mode={mode}
-        modelId={modelId}
         onBack={() => router.back()}
         onToggleMode={onToggleMode}
-        onOpenModelPicker={openModelPicker}
         onOpenActions={() => setShowSheet(true)}
       />
 
@@ -717,9 +753,24 @@ export default function ThreadPage(): JSX.Element {
         running={running}
         disabled={!visibleDetail}
         draftOverride={draftOverride ?? undefined}
+        permissionLabel={permissionProfileLabel(effectivePermissionProfileId, permissionProfiles)}
+        permissionDescription={permissionProfileDescription(effectivePermissionProfileId, permissionProfiles)}
+        modelLabel={shortModel(modelId)}
+        reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
+        onOpenPermissionPicker={() => setShowPermissionPicker(true)}
+        onOpenModelPicker={openModelPicker}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
+
+      {showPermissionPicker ? (
+        <PermissionPicker
+          profiles={permissionProfiles}
+          current={effectivePermissionProfileId}
+          onSelect={onSelectPermissionProfile}
+          onClose={() => setShowPermissionPicker(false)}
+        />
+      ) : null}
 
       {showSheet ? (
         <ActionSheet
@@ -830,18 +881,14 @@ export default function ThreadPage(): JSX.Element {
 function ThreadHeader({
   title,
   mode,
-  modelId,
   onBack,
   onToggleMode,
-  onOpenModelPicker,
   onOpenActions
 }: {
   title: string;
   mode: ChatMode;
-  modelId: string;
   onBack: () => void;
   onToggleMode: (mode: ChatMode) => void;
-  onOpenModelPicker: () => void;
   onOpenActions: () => void;
 }): JSX.Element {
   return (
@@ -865,9 +912,6 @@ function ThreadHeader({
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <ModeSegmented value={mode} onChange={onToggleMode} />
-        <button type="button" onClick={onOpenModelPicker} style={modelBtn}>
-          {shortModel(modelId)}
-        </button>
         <button type="button" onClick={onOpenActions} style={iconBtn} aria-label="更多">
           ⋮
         </button>
@@ -963,6 +1007,12 @@ function ThreadComposerDock({
   running,
   disabled,
   draftOverride,
+  permissionLabel,
+  permissionDescription,
+  modelLabel,
+  reasoningEffortLabel,
+  onOpenPermissionPicker,
+  onOpenModelPicker,
   onSend,
   onInterrupt
 }: {
@@ -971,6 +1021,12 @@ function ThreadComposerDock({
   running: boolean;
   disabled: boolean;
   draftOverride?: { text: string; version: number };
+  permissionLabel: string;
+  permissionDescription?: string;
+  modelLabel: string;
+  reasoningEffortLabel?: string;
+  onOpenPermissionPicker: () => void;
+  onOpenModelPicker: () => void;
   onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 }): JSX.Element {
@@ -981,6 +1037,12 @@ function ThreadComposerDock({
       running={running}
       disabled={disabled}
       draftOverride={draftOverride}
+      permissionLabel={permissionLabel}
+      permissionDescription={permissionDescription}
+      modelLabel={modelLabel}
+      reasoningEffortLabel={reasoningEffortLabel}
+      onOpenPermissionPicker={onOpenPermissionPicker}
+      onOpenModelPicker={onOpenModelPicker}
       onSend={onSend}
       onInterrupt={onInterrupt}
     />
@@ -1143,6 +1205,45 @@ function ModelPicker({
   );
 }
 
+function PermissionPicker({
+  profiles,
+  current,
+  onSelect,
+  onClose
+}: {
+  profiles: PermissionProfile[];
+  current: string | null | undefined;
+  onSelect: (profileId: string | null) => void;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <Overlay onClose={onClose} align="bottom">
+      <div role="dialog" aria-label="权限模式" style={sheetStyle}>
+        <div style={{ padding: "8px 12px", color: "var(--cw-fg-muted)", fontSize: 13 }}>权限模式</div>
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          style={permissionRowStyle(current === null)}
+        >
+          <span style={{ fontWeight: 650 }}>自定义 config.toml</span>
+          <span style={permissionRowDescStyle}>使用 app-server 当前配置的默认权限</span>
+        </button>
+        {profiles.map((profile) => (
+          <button
+            key={profile.id}
+            type="button"
+            onClick={() => onSelect(profile.id)}
+            style={permissionRowStyle(current === profile.id)}
+          >
+            <span style={{ fontWeight: 650 }}>{permissionProfileLabel(profile.id, profiles)}</span>
+            <span style={permissionRowDescStyle}>{profile.description || profile.id}</span>
+          </button>
+        ))}
+      </div>
+    </Overlay>
+  );
+}
+
 function reasoningEffortLabel(effort: string): string {
   if (effort === "low") return "低";
   if (effort === "medium") return "中";
@@ -1240,6 +1341,26 @@ function shortModel(id: string | null): string {
   if (!id) return "模型";
   const last = id.split("/").pop() || id;
   return last.length > 14 ? last.slice(0, 12) + "…" : last;
+}
+
+function permissionProfileLabel(profileId: string | null | undefined, profiles: PermissionProfile[]): string {
+  if (profileId === null) return "自定义 config.toml";
+  if (!profileId) return "默认权限";
+  const common: Record<string, string> = {
+    "read-only": "只读",
+    "workspace-write": "工作区写入",
+    ":workspace": "工作区写入",
+    "danger-full-access": "完全访问",
+    "full-auto": "完全访问",
+    default: "默认权限"
+  };
+  return common[profileId] ?? profiles.find((profile) => profile.id === profileId)?.label ?? profileId;
+}
+
+function permissionProfileDescription(profileId: string | null | undefined, profiles: PermissionProfile[]): string | undefined {
+  if (profileId === null) return "使用 config.toml 默认权限";
+  if (!profileId) return undefined;
+  return profiles.find((profile) => profile.id === profileId)?.description ?? undefined;
 }
 
 function isThreadNotFoundError(error: unknown): boolean {
@@ -1436,15 +1557,6 @@ const iconBtn: React.CSSProperties = {
   borderRadius: 8
 };
 
-const modelBtn: React.CSSProperties = {
-  padding: "4px 8px",
-  border: "1px solid var(--cw-border)",
-  borderRadius: 8,
-  background: "transparent",
-  color: "var(--cw-fg)",
-  fontSize: 12
-};
-
 const scrollStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
@@ -1479,6 +1591,25 @@ const sheetStyle: React.CSSProperties = {
   maxHeight: "50dvh",
   overflowY: "auto",
   boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+function permissionRowStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "12px",
+    border: "none",
+    borderTop: "1px solid var(--cw-border)",
+    background: active ? "color-mix(in srgb, var(--cw-accent) 12%, transparent)" : "transparent",
+    color: active ? "var(--cw-accent)" : "var(--cw-fg)",
+    textAlign: "left",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4
+  };
+}
+
+const permissionRowDescStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--cw-fg-muted)"
 };
 
 const dialogStyle: React.CSSProperties = {

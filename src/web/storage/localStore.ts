@@ -42,7 +42,8 @@ export const StorageKeys = {
   Settings: "settings",
   Drafts: "drafts",
   ChatDraftPrefix: "draft:", // 完整 key = `draft:${threadId}`
-  ThreadModePrefix: "thread-mode:" // 完整 key = `thread-mode:${threadId}`
+  ThreadModePrefix: "thread-mode:", // 完整 key = `thread-mode:${threadId}`
+  ThreadPermissionProfilePrefix: "thread-permission-profile:" // 完整 key = `thread-permission-profile:${threadId}`
 } as const;
 
 export function draftKey(threadId: string): string {
@@ -51,4 +52,8 @@ export function draftKey(threadId: string): string {
 
 export function threadModeKey(threadId: string): string {
   return `${StorageKeys.ThreadModePrefix}${threadId}`;
+}
+
+export function threadPermissionProfileKey(threadId: string): string {
+  return `${StorageKeys.ThreadPermissionProfilePrefix}${threadId}`;
 }

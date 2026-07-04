@@ -531,7 +531,7 @@ describe("normalizeAppServerNotification", () => {
             approvalPolicy: "on-request",
             approvalsReviewer: "user",
             sandboxPolicy: { mode: "workspace-write" },
-            activePermissionProfile: null,
+            activePermissionProfile: { id: "read-only", extends: null },
             model: "gpt-5-codex",
             modelProvider: "custom",
             serviceTier: null,
@@ -556,6 +556,7 @@ describe("normalizeAppServerNotification", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
+        activePermissionProfile: { id: "read-only", extends: null },
         collaborationMode: "plan"
       }
     });

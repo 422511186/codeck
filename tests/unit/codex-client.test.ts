@@ -1382,6 +1382,19 @@ class FakePeer implements AppServerPeer {
   }
 }
 
+class ActivePermissionProfilePeer extends FakePeer {
+  async request(method: string, params: unknown): Promise<unknown> {
+    const response = await super.request(method, params);
+    if (method === "thread/resume" && response && typeof response === "object") {
+      return {
+        ...(response as Record<string, unknown>),
+        activePermissionProfile: { id: "full-auto", extends: "default" }
+      };
+    }
+    return response;
+  }
+}
+
 describe("CodexAppServerClient", () => {
   it("初始化时声明 Web 后端客户端能力", async () => {
     const peer = new FakePeer();
@@ -1992,6 +2005,25 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("能把 permissions null 转发为 turn/start 清除权限 override", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      text: "回到配置默认权限",
+      permissions: null
+    });
+
+    expect(peer.calls.at(-1)).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        permissions: null
+      }
+    });
+  });
+
   it("转发 turn/start 前会把旧版 ask collaboration mode 规整为 plan", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -2063,6 +2095,14 @@ describe("CodexAppServerClient", () => {
           { type: "skill", name: "openai-docs", path: "C:\\Users\\huang\\.codex\\skills\\openai-docs\\SKILL.md" }
         ]
       }
+    });
+  });
+
+  it("能把 thread/resume 的 activePermissionProfile 映射到移动端会话详情", async () => {
+    const client = new CodexAppServerClient(new ActivePermissionProfilePeer());
+
+    await expect(client.resumeThread("thread-1")).resolves.toMatchObject({
+      activePermissionProfile: { id: "full-auto", extends: "default" }
     });
   });
 
@@ -2195,6 +2235,26 @@ describe("CodexAppServerClient", () => {
             developer_instructions: null
           }
         }
+      }
+    });
+  });
+
+  it("能用 permissions null 更新当前会话设置以回到 config.toml", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await expect(
+      client.updateThreadSettings({
+        threadId: "thread-1",
+        permissions: null
+      })
+    ).resolves.toBeUndefined();
+
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/settings/update",
+      params: {
+        threadId: "thread-1",
+        permissions: null
       }
     });
   });

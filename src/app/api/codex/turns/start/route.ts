@@ -28,7 +28,7 @@ export async function POST(request: Request): Promise<Response> {
       model?: string;
       reasoningEffort?: string;
       reasoningSummary?: string;
-      permissions?: string;
+      permissions?: string | null;
       additionalContext?: StartTurnInput["additionalContext"];
       collaborationMode?: StartTurnInput["collaborationMode"];
     };
