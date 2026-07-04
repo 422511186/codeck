@@ -310,6 +310,7 @@ export type StartThreadInput = {
   workspaceRoots?: string[];
   model?: string;
   permissions?: string | null;
+  approvalsReviewer?: ThreadStartParams["approvalsReviewer"];
 };
 
 export type StartTurnInput = {
@@ -322,6 +323,7 @@ export type StartTurnInput = {
   reasoningEffort?: string;
   reasoningSummary?: ReasoningSummary;
   permissions?: string | null;
+  approvalsReviewer?: TurnStartParams["approvalsReviewer"];
   additionalContext?: TurnStartParams["additionalContext"];
   collaborationMode?: TurnStartParams["collaborationMode"];
 };
@@ -384,6 +386,7 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string | null;
+  approvalsReviewer?: ThreadSettingsUpdateParams["approvalsReviewer"];
   collaborationMode?: ThreadSettingsUpdateParams["collaborationMode"];
 };
 
@@ -718,6 +721,7 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
       role: "tool",
       text: item.aggregatedOutput ? `${item.command}\n${item.aggregatedOutput}` : item.command,
       toolKind: "command",
+      actionKind: commandActionKind(item.commandActions),
       server: item.cwd,
       tool: item.command,
       status: toolStatus(item.status, item.exitCode !== null && item.exitCode !== 0)
@@ -860,12 +864,32 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   }
 
   const record = item as unknown as { id?: unknown; type?: unknown };
+  const type = typeof record.type === "string" ? record.type : "item";
   return {
-    id: typeof record.id === "string" ? record.id : `unknown-${String(record.type ?? "item")}`,
-    role: "system",
+    id: typeof record.id === "string" ? record.id : `unknown-${type}`,
+    role: "tool",
     text: stringifyJson(item),
-    toolKind: "system"
+    toolKind: "dynamic",
+    server: "raw",
+    tool: type,
+    status: "success"
   };
+}
+
+function commandActionKind(actions: Array<{ type: string }> | null | undefined): "read" | "list" | "search" | "command" {
+  if (!actions?.length) {
+    return "command";
+  }
+  if (actions.some((action) => action.type === "search")) {
+    return "search";
+  }
+  if (actions.some((action) => action.type === "read")) {
+    return "read";
+  }
+  if (actions.some((action) => action.type === "listFiles")) {
+    return "list";
+  }
+  return "command";
 }
 
 function turnErrorTimelineItem(turnId: string, turnIndex: number | undefined, error: TurnError): MobileTimelineItem {
@@ -897,7 +921,7 @@ function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex?: number)
 
 function threadDetail(
   thread: Thread,
-  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor" | "activePermissionProfile">> = {}
+  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor" | "activePermissionProfile" | "approvalsReviewer">> = {}
 ): MobileThreadDetail {
   const timeline = thread.turns.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex));
 
@@ -910,9 +934,12 @@ function threadDetail(
   };
 }
 
-function isUnmaterializedIncludeTurnsError(error: unknown): boolean {
+function isUnmaterializedThreadReadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /not materialized yet/i.test(message) && /includeTurns/i.test(message);
+  return (
+    /not materialized yet/i.test(message) &&
+    (/includeTurns/i.test(message) || /thread\/turns\/list/i.test(message) || /before first user message/i.test(message))
+  );
 }
 
 function threadWithTurns(thread: Thread): Thread {
@@ -1374,6 +1401,13 @@ export class CodexAppServerClient {
     return conversationSummaryView(response);
   }
 
+  async getConversationRolloutPath(threadId: string): Promise<string | null> {
+    const response = (await this.peer.request("getConversationSummary", {
+      conversationId: threadId
+    } satisfies GetConversationSummaryParams)) as GetConversationSummaryResponse;
+    return response.summary.path || null;
+  }
+
   async gitDiffToRemote(cwd: string): Promise<MobileGitDiffView> {
     const params: GitDiffToRemoteParams = { cwd };
     const response = (await this.peer.request("gitDiffToRemote", params)) as GitDiffToRemoteResponse;
@@ -1415,7 +1449,7 @@ export class CodexAppServerClient {
         includeTurns: true
       })) as ThreadReadResponse;
     } catch (error) {
-      if (!isUnmaterializedIncludeTurnsError(error)) {
+      if (!isUnmaterializedThreadReadError(error)) {
         throw error;
       }
 
@@ -1439,6 +1473,9 @@ export class CodexAppServerClient {
       const fallbackTurns = threadWithTurns(metadataThread).turns;
       if (fallbackTurns.length) {
         return { turns: fallbackTurns, nextCursor: null };
+      }
+      if (isUnmaterializedThreadReadError(error)) {
+        return { turns: [], nextCursor: null };
       }
       throw error;
     }
@@ -1467,6 +1504,7 @@ export class CodexAppServerClient {
         model: response.model,
         reasoningEffort: response.reasoningEffort,
         activePermissionProfile: response.activePermissionProfile,
+        approvalsReviewer: response.approvalsReviewer,
         nextCursor: response.initialTurnsPage?.nextCursor ?? null
       }),
       goal
@@ -1478,11 +1516,16 @@ export class CodexAppServerClient {
       cwd: input.cwd,
       runtimeWorkspaceRoots: input.workspaceRoots,
       model: input.model,
-      permissions: input.permissions
+      permissions: input.permissions,
+      approvalsReviewer: input.approvalsReviewer
     };
 
     const response = (await this.peer.request("thread/start", params)) as ThreadStartResponse;
-    return threadSummary(response.thread);
+    return {
+      ...threadSummary(response.thread),
+      activePermissionProfile: response.activePermissionProfile,
+      approvalsReviewer: response.approvalsReviewer
+    };
   }
 
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
@@ -1494,6 +1537,7 @@ export class CodexAppServerClient {
       effort: input.reasoningEffort,
       summary: input.reasoningSummary,
       permissions: input.permissions,
+      approvalsReviewer: input.approvalsReviewer,
       additionalContext: input.additionalContext,
       collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
@@ -1511,7 +1555,8 @@ export class CodexAppServerClient {
     return threadDetail(response.thread, {
       model: response.model,
       reasoningEffort: response.reasoningEffort,
-      activePermissionProfile: response.activePermissionProfile
+      activePermissionProfile: response.activePermissionProfile,
+      approvalsReviewer: response.approvalsReviewer
     });
   }
 
@@ -1580,6 +1625,7 @@ export class CodexAppServerClient {
       model: input.model,
       effort: input.reasoningEffort,
       permissions: input.permissions,
+      approvalsReviewer: input.approvalsReviewer,
       collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
     await this.peer.request("thread/settings/update", params);

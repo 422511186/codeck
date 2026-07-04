@@ -29,6 +29,7 @@ export async function POST(request: Request): Promise<Response> {
       reasoningEffort?: string;
       reasoningSummary?: string;
       permissions?: string | null;
+      approvalsReviewer?: StartTurnInput["approvalsReviewer"];
       additionalContext?: StartTurnInput["additionalContext"];
       collaborationMode?: StartTurnInput["collaborationMode"];
     };
@@ -57,6 +58,7 @@ export async function POST(request: Request): Promise<Response> {
       reasoningEffort: body.reasoningEffort,
       reasoningSummary: body.reasoningSummary,
       permissions: body.permissions,
+      approvalsReviewer: body.approvalsReviewer,
       additionalContext: body.additionalContext,
       collaborationMode: body.collaborationMode
     });
@@ -70,6 +72,7 @@ export async function POST(request: Request): Promise<Response> {
       reasoningEffort: body.reasoningEffort,
       reasoningSummary: normalizeReasoningSummary(body.reasoningSummary),
       permissions: body.permissions,
+      approvalsReviewer: body.approvalsReviewer,
       additionalContext: body.additionalContext,
       collaborationMode: body.collaborationMode
     });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { timelineItem } from "../../src/server/app-server/client";
+import type { CommandAction } from "../../docs/generated/app-server-ts/v2/CommandAction";
 import type { ThreadItem } from "../../docs/generated/app-server-ts/v2/ThreadItem";
 
 describe("timelineItem", () => {
@@ -91,6 +92,37 @@ describe("timelineItem", () => {
     });
   });
 
+  it.each([
+    ["search", [{ type: "search", command: "rg timeline src", query: "timeline", path: "src" }], "search"],
+    ["read", [{ type: "read", command: "cat README.md", name: "README.md", path: "/repo/README.md" }], "read"],
+    ["list", [{ type: "listFiles", command: "ls src", path: "src" }], "list"]
+  ] satisfies Array<[string, CommandAction[], "search" | "read" | "list"]>)(
+    "preserves %s command action metadata for mobile activity summaries",
+    (_label, commandActions, actionKind) => {
+      const item: ThreadItem = {
+        type: "commandExecution",
+        id: "cmd-1",
+        command: "rg timeline src",
+        cwd: "/repo",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions,
+        aggregatedOutput: "src/app.ts",
+        exitCode: 0,
+        durationMs: 120
+      };
+
+      expect(timelineItem(item)).toMatchObject({
+        id: "cmd-1",
+        role: "tool",
+        toolKind: "command",
+        actionKind,
+        tool: "rg timeline src"
+      });
+    }
+  );
+
   it("maps user message skill inputs into structured skill references", () => {
     expect(
       timelineItem({
@@ -126,10 +158,14 @@ describe("timelineItem", () => {
     ).not.toContain("[skill]");
   });
 
-  it("falls back to a visible system item for unknown thread items", () => {
+  it("falls back to a visible runtime activity for unknown thread items", () => {
     expect(timelineItem({ type: "futureItem", id: "future-1", value: "visible" } as unknown as ThreadItem)).toMatchObject({
       id: "future-1",
-      role: "system",
+      role: "tool",
+      toolKind: "dynamic",
+      server: "raw",
+      tool: "futureItem",
+      status: "success",
       text: expect.stringContaining("futureItem")
     });
   });

@@ -1388,7 +1388,8 @@ class ActivePermissionProfilePeer extends FakePeer {
     if (method === "thread/resume" && response && typeof response === "object") {
       return {
         ...(response as Record<string, unknown>),
-        activePermissionProfile: { id: "full-auto", extends: "default" }
+        approvalsReviewer: "auto_review",
+        activePermissionProfile: { id: ":workspace", extends: "default" }
       };
     }
     return response;
@@ -1525,7 +1526,9 @@ describe("CodexAppServerClient", () => {
         };
       }
       if (method === "thread/turns/list") {
-        return { data: [], nextCursor: null, backwardsCursor: null };
+        throw new Error(
+          "thread empty-thread is not materialized yet; thread/turns/list is unavailable before first user message"
+        );
       }
       return originalRequest(method, params);
     };
@@ -1935,7 +1938,8 @@ describe("CodexAppServerClient", () => {
       cwd: "C:\\Users\\huang\\workspace\\demo",
       workspaceRoots: ["C:\\Users\\huang\\workspace"],
       model: "gpt-5-codex",
-      permissions: "default"
+      permissions: ":workspace",
+      approvalsReviewer: "auto_review"
     });
 
     expect(thread.id).toBe("new-thread-1");
@@ -1945,7 +1949,8 @@ describe("CodexAppServerClient", () => {
         cwd: "C:\\Users\\huang\\workspace\\demo",
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
         model: "gpt-5-codex",
-        permissions: "default"
+        permissions: ":workspace",
+        approvalsReviewer: "auto_review"
       }
     });
   });
@@ -1960,7 +1965,8 @@ describe("CodexAppServerClient", () => {
       model: "gpt-5-codex",
       reasoningEffort: "high",
       reasoningSummary: "auto",
-      permissions: "full-auto",
+      permissions: ":workspace",
+      approvalsReviewer: "auto_review",
       additionalContext: {
         "codex-web:collaboration-mode": {
           kind: "application",
@@ -1986,7 +1992,8 @@ describe("CodexAppServerClient", () => {
         model: "gpt-5-codex",
         effort: "high",
         summary: "auto",
-        permissions: "full-auto",
+        permissions: ":workspace",
+        approvalsReviewer: "auto_review",
         additionalContext: {
           "codex-web:collaboration-mode": {
             kind: "application",
@@ -2012,14 +2019,16 @@ describe("CodexAppServerClient", () => {
     await client.startTurn({
       threadId: "thread-1",
       text: "回到配置默认权限",
-      permissions: null
+      permissions: null,
+      approvalsReviewer: null
     });
 
     expect(peer.calls.at(-1)).toMatchObject({
       method: "turn/start",
       params: {
         threadId: "thread-1",
-        permissions: null
+        permissions: null,
+        approvalsReviewer: null
       }
     });
   });
@@ -2098,11 +2107,12 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("能把 thread/resume 的 activePermissionProfile 映射到移动端会话详情", async () => {
+  it("能把 thread/resume 的权限 payload 映射到移动端会话详情", async () => {
     const client = new CodexAppServerClient(new ActivePermissionProfilePeer());
 
     await expect(client.resumeThread("thread-1")).resolves.toMatchObject({
-      activePermissionProfile: { id: "full-auto", extends: "default" }
+      activePermissionProfile: { id: ":workspace", extends: "default" },
+      approvalsReviewer: "auto_review"
     });
   });
 
@@ -2208,7 +2218,8 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         model: "gpt-5-mini",
         reasoningEffort: "high",
-        permissions: "full-auto",
+        permissions: ":danger-full-access",
+        approvalsReviewer: null,
         collaborationMode: {
           mode: "default",
           settings: {
@@ -2226,7 +2237,8 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         model: "gpt-5-mini",
         effort: "high",
-        permissions: "full-auto",
+        permissions: ":danger-full-access",
+        approvalsReviewer: null,
         collaborationMode: {
           mode: "default",
           settings: {
@@ -2239,14 +2251,15 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("能用 permissions null 更新当前会话设置以回到 config.toml", async () => {
+  it("能用 permissions null 和 approvalsReviewer null 更新当前会话设置以回到 config.toml", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
     await expect(
       client.updateThreadSettings({
         threadId: "thread-1",
-        permissions: null
+        permissions: null,
+        approvalsReviewer: null
       })
     ).resolves.toBeUndefined();
 
@@ -2254,7 +2267,8 @@ describe("CodexAppServerClient", () => {
       method: "thread/settings/update",
       params: {
         threadId: "thread-1",
-        permissions: null
+        permissions: null,
+        approvalsReviewer: null
       }
     });
   });

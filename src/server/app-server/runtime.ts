@@ -112,6 +112,7 @@ import {
   type BrowserServerRequestEvent,
   type PendingServerRequestView
 } from "./pending-requests";
+import { mergeSessionTimelineItems } from "./session-timeline";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
@@ -150,6 +151,7 @@ import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-t
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
+import type { ApprovalsReviewer } from "../../../docs/generated/app-server-ts/v2/ApprovalsReviewer";
 
 type TextUserInput = { type: "text"; text: string };
 type TimelineOverlayEntry = {
@@ -260,6 +262,16 @@ function shouldExposeOverlayTimelineItem(item: MobileTimelineItem): boolean {
   return item.text.trim().length > 0;
 }
 
+function isAlreadyInitializedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /already initialized/i.test(message);
+}
+
+function isUnsupportedTurnItemsListError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /thread\/turns\/items\/list/i.test(message) && /not supported/i.test(message);
+}
+
 function shouldUseOverlayTimelineItem(base: MobileTimelineItem, overlay: MobileTimelineItem): boolean {
   if (base.role !== overlay.role) {
     return base.role === "system" && overlay.role !== "system";
@@ -331,6 +343,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private threads: Thread[] = [this.thread];
   private readonly archivedThreads = new Map<string, Thread>();
   private readonly permissionProfilesByThread = new Map<string, string | null>();
+  private readonly approvalsReviewersByThread = new Map<string, ApprovalsReviewer | null>();
   private turnCounter = 1;
   private itemCounter = 2;
   private requestCounter = 0;
@@ -597,7 +610,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
         approvalPolicy: "untrusted",
-        approvalsReviewer: "user",
+        approvalsReviewer: this.approvalsReviewerForThread(thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(thread.id),
         reasoningEffort: "medium",
@@ -642,6 +655,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         turns: []
       };
       this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
+      if ("approvalsReviewer" in startParams) {
+        this.approvalsReviewersByThread.set(this.thread.id, startParams.approvalsReviewer ?? null);
+      }
       this.upsertThread(this.thread);
 
       return {
@@ -653,7 +669,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         runtimeWorkspaceRoots: startParams.runtimeWorkspaceRoots || ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
         approvalPolicy: "untrusted",
-        approvalsReviewer: "user",
+        approvalsReviewer: this.approvalsReviewerForThread(this.thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
         reasoningEffort: null
@@ -676,6 +692,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         this.thread.id,
         this.permissionProfilesByThread.get(forkParams.threadId) ?? null
       );
+      this.approvalsReviewersByThread.set(
+        this.thread.id,
+        this.approvalsReviewersByThread.get(forkParams.threadId) ?? null
+      );
       this.upsertThread(this.thread);
 
       return {
@@ -687,7 +707,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         runtimeWorkspaceRoots: forkParams.runtimeWorkspaceRoots || ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
         approvalPolicy: "untrusted",
-        approvalsReviewer: "user",
+        approvalsReviewer: this.approvalsReviewerForThread(this.thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
         reasoningEffort: null
@@ -724,6 +744,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const thread = this.selectThread(settingsParams.threadId);
       if ("permissions" in settingsParams) {
         this.permissionProfilesByThread.set(thread.id, settingsParams.permissions ?? null);
+      }
+      if ("approvalsReviewer" in settingsParams) {
+        this.approvalsReviewersByThread.set(thread.id, settingsParams.approvalsReviewer ?? null);
       }
       return {};
     }
@@ -1021,6 +1044,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       this.selectThread(startParams.threadId);
       if ("permissions" in startParams) {
         this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
+      }
+      if ("approvalsReviewer" in startParams) {
+        this.approvalsReviewersByThread.set(this.thread.id, startParams.approvalsReviewer ?? null);
       }
       const textInput = startParams.input.find((item) => item.type === "text") as TextUserInput | undefined;
       const text = textInput?.text.trim() || "";
@@ -2179,7 +2205,11 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
   private activePermissionProfileForThread(threadId: string): { id: string; extends: string | null } | null {
     const profileId = this.permissionProfilesByThread.get(threadId);
-    return { id: profileId || "default", extends: null };
+    return profileId ? { id: profileId, extends: null } : null;
+  }
+
+  private approvalsReviewerForThread(threadId: string): ApprovalsReviewer {
+    return this.approvalsReviewersByThread.get(threadId) ?? "user";
   }
 
   private upsertThread(thread: Thread): void {
@@ -3064,7 +3094,13 @@ export class AppServerGateway {
 
     if (!this.initialized) {
       this.initialized = this.peer.connect().then(async () => {
-        await this.client.initialize();
+        try {
+          await this.client.initialize();
+        } catch (error) {
+          if (!isAlreadyInitializedError(error)) {
+            throw error;
+          }
+        }
       });
     }
 
@@ -3098,12 +3134,50 @@ export class AppServerGateway {
 
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.withTimelineGeneration(this.applyTimelineOverlay(await this.client.readThread(threadId)));
+    const detail = await this.applySessionTimelineSupplement(await this.client.readThread(threadId));
+    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
   }
 
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     await this.ensureReady();
     return this.client.readThreadSummary(threadId);
+  }
+
+  private async readSessionJsonl(threadId: string): Promise<string | null> {
+    try {
+      const rolloutPath = await this.client.getConversationRolloutPath(threadId);
+      if (!rolloutPath) {
+        return null;
+      }
+      return (await this.client.readFile(rolloutPath)).text;
+    } catch {
+      return null;
+    }
+  }
+
+  private async applySessionTimelineSupplement(detail: MobileThreadDetail): Promise<MobileThreadDetail> {
+    const jsonl = await this.readSessionJsonl(detail.id);
+    if (!jsonl) {
+      return detail;
+    }
+    return {
+      ...detail,
+      timeline: mergeSessionTimelineItems(detail.timeline, jsonl)
+    };
+  }
+
+  private async applySessionTimelinePageSupplement(
+    threadId: string,
+    page: MobileTimelinePage
+  ): Promise<MobileTimelinePage> {
+    const jsonl = await this.readSessionJsonl(threadId);
+    if (!jsonl) {
+      return page;
+    }
+    return {
+      ...page,
+      items: mergeSessionTimelineItems(page.items, jsonl)
+    };
   }
 
   private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
@@ -3154,7 +3228,8 @@ export class AppServerGateway {
 
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.withTimelineGeneration(this.applyTimelineOverlay(await this.client.resumeThread(threadId)));
+    const detail = await this.applySessionTimelineSupplement(await this.client.resumeThread(threadId));
+    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -3686,12 +3761,47 @@ export class AppServerGateway {
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
-    return this.client.listThreadTurns(input);
+    return this.applySessionTimelinePageSupplement(input.threadId, await this.client.listThreadTurns(input));
   }
 
   async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
-    return this.client.listThreadTurnItems(input);
+    let page: MobileTimelinePage;
+    try {
+      page = await this.client.listThreadTurnItems(input);
+    } catch (error) {
+      if (!isUnsupportedTurnItemsListError(error)) {
+        throw error;
+      }
+      page = await this.listThreadTurnItemsFromTurns(input);
+    }
+    return this.applySessionTimelinePageSupplement(input.threadId, page);
+  }
+
+  private async listThreadTurnItemsFromTurns(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
+    let cursor: string | null | undefined;
+    const pageLimit = Math.max(1, Math.min(input.limit ?? 30, 100));
+
+    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+      const page = await this.client.listThreadTurns({
+        threadId: input.threadId,
+        cursor,
+        limit: pageLimit
+      });
+      const items = page.items.filter((item) => item.turnId === input.turnId);
+      if (items.length) {
+        return {
+          items: typeof input.limit === "number" ? items.slice(0, input.limit) : items,
+          nextCursor: null
+        };
+      }
+      if (!page.nextCursor) {
+        return { items: [], nextCursor: null };
+      }
+      cursor = page.nextCursor;
+    }
+
+    return { items: [], nextCursor: cursor ?? null };
   }
 
   async addEnvironment(input: AddEnvironmentInput): Promise<MobileEnvironmentAddResult> {

@@ -38,6 +38,7 @@ export type ReasoningEntry = {
 export type ToolEntry = {
   kind: "tool";
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  actionKind?: "read" | "list" | "search" | "command";
   server: string;
   tool: string;
   status: CommandEntryStatus;
@@ -194,6 +195,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
         body: {
           kind: "tool",
           toolKind: item.toolKind,
+          actionKind: item.actionKind,
           server: item.server ?? item.toolKind ?? "tool",
           tool: item.tool ?? item.toolKind ?? "tool",
           status: item.status ?? "success",

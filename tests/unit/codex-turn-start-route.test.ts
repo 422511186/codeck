@@ -139,7 +139,34 @@ describe("codex turn start route", () => {
     expect(json.thread).toBeUndefined();
   });
 
-  it("把 permissions null 从 HTTP body 转发给 app-server", async () => {
+  it("把权限 payload 从 HTTP body 转发给 app-server", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-1",
+          text: "替我审批",
+          permissions: ":workspace",
+          approvalsReviewer: "auto_review"
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        text: "替我审批",
+        permissions: ":workspace",
+        approvalsReviewer: "auto_review"
+      })
+    );
+  });
+
+  it("把 permissions null 和 approvalsReviewer null 从 HTTP body 转发给 app-server", async () => {
     const { POST } = await import("../../src/app/api/codex/turns/start/route");
 
     const response = await POST(
@@ -149,7 +176,8 @@ describe("codex turn start route", () => {
         body: JSON.stringify({
           threadId: "thread-1",
           text: "回到配置默认权限",
-          permissions: null
+          permissions: null,
+          approvalsReviewer: null
         })
       })
     );
@@ -159,7 +187,8 @@ describe("codex turn start route", () => {
       expect.objectContaining({
         threadId: "thread-1",
         text: "回到配置默认权限",
-        permissions: null
+        permissions: null,
+        approvalsReviewer: null
       })
     );
   });

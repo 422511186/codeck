@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type {
   AppServerStatus,
+  ApprovalsReviewer,
   CodexSettings,
   CollaborationModePayload,
   CollaborationModePreset,
@@ -129,11 +130,25 @@ export async function listTurnsBefore(
   return { items: data.page?.items ?? [], nextCursor: data.page?.nextCursor ?? null };
 }
 
+export async function listTurnItems(
+  threadId: string,
+  turnId: string,
+  cursor?: string | null,
+  limit?: number
+): Promise<TimelinePage> {
+  const data = await api<{ page: TimelinePage }>(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/items`,
+    { query: { cursor, limit } }
+  );
+  return { items: data.page?.items ?? [], nextCursor: data.page?.nextCursor ?? null };
+}
+
 export type StartThreadInput = {
   cwd: string;
   workspaceRoots?: string[];
   model?: string;
   permissions?: string | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   clientOperationId?: string;
 };
 
@@ -155,6 +170,7 @@ export type StartTurnInput = {
   reasoningEffort?: string;
   reasoningSummary?: string;
   permissions?: string | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   additionalContext?: Record<string, { value: string; kind: "untrusted" | "application" }>;
   collaborationMode?: CollaborationModePayload;
 };
@@ -224,6 +240,7 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   collaborationMode?: CollaborationModePayload;
 };
 
@@ -346,6 +363,7 @@ export const codex = {
   readThread,
   resumeThread,
   listTurnsBefore,
+  listTurnItems,
   startThread,
   startTurn,
   interruptTurn,

@@ -51,18 +51,23 @@ describe("codex thread start route", () => {
       cwd: "C:\\repo",
       workspaceRoots: undefined,
       model: undefined,
-      permissions: undefined
+      permissions: undefined,
+      approvalsReviewer: undefined
     });
   });
 
-  it("把 permissions null 从 HTTP body 转发给 app-server", async () => {
+  it("把权限 payload 从 HTTP body 转发给 app-server", async () => {
     const { POST } = await import("../../src/app/api/codex/threads/start/route");
 
     const response = await POST(
       new Request("http://localhost/api/codex/threads/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd: "C:\\repo", permissions: null })
+        body: JSON.stringify({
+          cwd: "C:\\repo",
+          permissions: ":workspace",
+          approvalsReviewer: "auto_review"
+        })
       })
     );
 
@@ -71,7 +76,29 @@ describe("codex thread start route", () => {
       cwd: "C:\\repo",
       workspaceRoots: undefined,
       model: undefined,
-      permissions: null
+      permissions: ":workspace",
+      approvalsReviewer: "auto_review"
+    });
+  });
+
+  it("把 permissions null 和 approvalsReviewer null 从 HTTP body 转发给 app-server", async () => {
+    const { POST } = await import("../../src/app/api/codex/threads/start/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "C:\\repo", permissions: null, approvalsReviewer: null })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockStartThread).toHaveBeenCalledWith({
+      cwd: "C:\\repo",
+      workspaceRoots: undefined,
+      model: undefined,
+      permissions: null,
+      approvalsReviewer: null
     });
   });
 

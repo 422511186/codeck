@@ -4,16 +4,16 @@
 TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
 ## Requirements
 ### Requirement: 所有长输出默认折叠为卡片
-Agent 流式产生的所有「长内容」（命令调用、文件 diff、推理过程、MCP 工具调用、计划事件之外的长块）SHALL 默认以折叠卡片形式插入 timeline，用户点击后就地展开 / 收起，不弹出新页或抽屉。
+Agent 流式产生的长详情内容（命令完整输出、文件 diff、MCP/dynamic 工具长结果、raw response fallback、公开 reasoning 长文本）SHALL 默认折叠在内联活动日志的详情区域中，用户点击后就地展开 / 收起，不弹出新页或抽屉。短活动本身 MUST 以内联日志行默认可见，MUST NOT 因为属于工具或 reasoning 就被强制显示为独立折叠卡片。
 
-#### Scenario: 默认折叠
-- **WHEN** agent 输出命令、diff、推理、MCP 工具调用等内容
-- **THEN** timeline MUST 用折叠卡片占位
-- **AND** 卡片 MUST 默认收起
+#### Scenario: 短活动默认可见
+- **WHEN** agent 输出工具加载、读取文件、搜索、短命令名或文件变更摘要
+- **THEN** timeline MUST 在内联活动日志中默认显示这些短明细
+- **AND** MUST NOT 只用一张折叠卡片隐藏所有短明细
 
-#### Scenario: 就地展开
-- **WHEN** 用户点击折叠卡片
-- **THEN** 卡片 MUST 在原位置就地展开
+#### Scenario: 长详情就地展开
+- **WHEN** 用户点击内联活动日志的展开按钮
+- **THEN** 长详情 MUST 在原位置就地展开
 - **AND** MUST 不跳转到任何新页面或弹出抽屉
 
 ### Requirement: 命令折叠态只显示命令
@@ -32,17 +32,22 @@ Agent 流式产生的所有「长内容」（命令调用、文件 diff、推理
 - **AND** 若存在工作目录等元数据，展开后 MUST 仍可查看
 
 ### Requirement: 工具卡片折叠态摘要面向移动端阅读优化
-工具卡片折叠态 SHALL 优先展示用户能快速理解的动作、工具名或命令摘要，低优先级元数据（如 cwd、完整路径、长 JSON 参数）SHALL 放到次要区域或展开内容中。卡片 SHALL 保留可追踪性，但默认展示 MUST 避免把 agent 正文回答明显下推。
+工具、命令、MCP、dynamic、file、web、image 或 runtime loading 活动在移动端 SHALL 优先以内联活动日志行呈现。默认状态 SHALL 展示用户能快速理解的动作、工具名、命令摘要或短明细；低优先级元数据（如 cwd、完整路径、长 JSON 参数）SHALL 放到展开详情中。系统 SHALL 保留可追踪性，但默认展示 MUST 避免把 agent 正文明显下推。
 
 #### Scenario: 命令工具优先显示命令
-- **WHEN** timeline 渲染 `toolKind` 为 `command` 的工具卡片
-- **THEN** 折叠态标题 MUST 优先显示命令内容
-- **AND** cwd MUST 不作为标题最前面的主要文本
+- **WHEN** timeline 渲染 `toolKind` 为 `command` 的工具活动
+- **THEN** 默认明细 MUST 优先显示命令内容或短命令摘要
+- **AND** cwd MUST 不作为默认明细最前面的主要文本
 
 #### Scenario: 非命令工具保留工具身份
-- **WHEN** timeline 渲染 MCP、dynamic、file、web 或 image 工具卡片
-- **THEN** 折叠态 MUST 显示工具身份或动作名称
+- **WHEN** timeline 渲染 MCP、dynamic、file、web 或 image 工具活动
+- **THEN** 默认明细 MUST 显示工具身份或动作名称
 - **AND** 长参数或长路径 MUST 不导致标题横向溢出
+
+#### Scenario: 连续工具活动合并为内联日志
+- **WHEN** 同一 turn 内连续出现多个 read、list、search、command、MCP、dynamic 或 runtime loading 活动
+- **THEN** timeline MAY 将它们合并到同一个内联活动日志组
+- **AND** 该日志组 MUST 使用具体动作摘要和默认可见短明细
 
 ### Requirement: 正在运行的命令卡片显示 spinner
 agent 当前仍在执行的命令卡片 SHALL 在右侧显示 spinner 并附「运行中」标签，与已完成命令区分。
@@ -77,15 +82,18 @@ agent 调用 MCP 工具时 SHALL 在 timeline 上使用与 shell 命令一致的
 - **AND** 展开后 MUST 显示完整调用结果
 
 ### Requirement: 文件 diff 每个文件一张卡片
-当 agent 修改文件、`turn_diff_updated` 事件到达时 SHALL 为每个被修改文件生成一张折叠卡片，多个文件不合并到同一张卡。
+当 agent 修改文件或 `turn_diff_updated` 事件到达时，移动端 timeline SHALL 默认以内联活动日志显示文件变更汇总；用户展开后 SHALL 能按文件查看每个被修改文件的 diff 详情。多个文件默认 MUST 不以多张同等重量的折叠卡片挤占首屏。
 
 #### Scenario: 单文件改动
 - **WHEN** agent 修改了 1 个文件
-- **THEN** timeline MUST 出现 1 张 diff 卡片
+- **THEN** timeline MUST 显示文件变更内联日志
+- **AND** 默认明细 MUST 包含该文件路径或文件名以及增删行数
+- **AND** 展开后 MUST 能查看该文件的 unified diff
 
 #### Scenario: 多文件改动
 - **WHEN** agent 一次修改了 N 个文件
-- **THEN** timeline MUST 出现 N 张 diff 卡片，依次排列
+- **THEN** timeline MUST 默认显示一条文件变更汇总，包含文件数量和总增删行数
+- **AND** 展开后 MUST 能按文件查看 N 个 diff 详情
 
 ### Requirement: diff 卡片折叠态显示文件路径与行数变化
 diff 卡片折叠状态下 SHALL 显示文件路径以及增删行数（如 `+12 / -5`）。
@@ -112,28 +120,28 @@ diff 卡片 SHALL 不提供任何「采纳」「回滚」「撤销」之类的�
 - **THEN** 卡片 MUST 不显示采纳、撤销、回滚等操作按钮
 
 ### Requirement: 推理过程默认折叠为「思考中…」并保留可展开
-`reasoning_delta` 事件在 agent 进行中 SHALL 渲染为运行中的推理卡片；卡片 SHALL 保留「思考中…」状态，并在已经收到推理文本时允许用户查看已到达内容。turn 完成后 SHALL 保留为「推理过程」卡片，仍默认折叠，可点击展开查看完整推理文本。
+`reasoning_delta` 事件在 agent 进行中 SHALL 渲染为内联 `Thinking...` 活动日志；日志 SHALL 保留运行中状态，并在已经收到公开 reasoning 文本时允许用户展开查看已到达内容。turn 完成后 SHALL 保留为 `Thinking` 活动，仍默认只显示短摘要，可点击展开查看完整公开 reasoning 文本。
 
 #### Scenario: 进行中且尚无文本
 - **WHEN** agent 开始 reasoning 但尚未收到任何 `reasoning_delta` 文本
-- **THEN** timeline MUST 显示一张「思考中…」折叠卡片
-- **AND** 卡片 MUST 有微动效以表明在进行
+- **THEN** timeline MUST 显示一条运行中的 `Thinking...` 内联活动
+- **AND** 活动 MUST 有微动效以表明在进行
 
 #### Scenario: 进行中且已有文本
 - **WHEN** agent 仍在产生 `reasoning_delta` 且至少已有一段推理文本到达
-- **THEN** timeline MUST 显示运行中的推理卡片
-- **AND** 用户 MUST 能在卡片中看到或展开查看已到达的推理文本
-- **AND** 卡片 MUST 继续显示运行中状态
+- **THEN** timeline MUST 显示运行中的 `Thinking...` 内联活动
+- **AND** 用户 MUST 能展开查看已到达的公开推理文本
+- **AND** 活动 MUST 继续显示运行中状态
 
 #### Scenario: summary 分段事件不中断展示
-- **WHEN** WebSocket 收到 `item/reasoning/summaryPartAdded` 后继续收到 `item/reasoning/summaryTextDelta`
-- **THEN** timeline MUST 继续把 summary delta 追加到对应推理卡片
+- **WHEN** WebSocket 或 SSE 收到 `item/reasoning/summaryPartAdded` 后继续收到 `item/reasoning/summaryTextDelta`
+- **THEN** timeline MUST 继续把 summary delta 追加到对应 Thinking 活动
 - **AND** MUST 不因为 summary part 事件本身没有文本而丢弃后续推理内容
 
-#### Scenario: summary 分段先创建思考卡片
-- **WHEN** WebSocket 收到 `item/reasoning/summaryPartAdded` 或 reasoning `item/started` 且尚无文本 delta
-- **THEN** timeline MUST 立即显示一张运行中的「思考中…」推理卡片
-- **AND** 后续 `item/reasoning/summaryTextDelta` 或 `item/reasoning/textDelta` MUST 追加到同一张卡片
+#### Scenario: summary 分段先创建思考活动
+- **WHEN** WebSocket 或 SSE 收到 `item/reasoning/summaryPartAdded` 或 reasoning `item/started` 且尚无文本 delta
+- **THEN** timeline MUST 立即显示一条运行中的 `Thinking...` 内联活动
+- **AND** 后续 `item/reasoning/summaryTextDelta` 或 `item/reasoning/textDelta` MUST 追加到同一条 Thinking 活动
 
 #### Scenario: reasoning summary 请求与展示链路完整
 - **WHEN** Web 发起一个支持 reasoning 的 turn
@@ -143,10 +151,10 @@ diff 卡片 SHALL 不提供任何「采纳」「回滚」「撤销」之类的�
 
 #### Scenario: turn 完成
 - **WHEN** 该 turn 的 reasoning 流结束
-- **THEN** 卡片 MUST 保留在 timeline 中
-- **AND** 卡片标题 MUST 改为「推理过程」
-- **AND** 卡片 MUST 仍默认折叠
-- **AND** 用户点击 MUST 可展开查看完整推理文本
+- **THEN** Thinking 活动 MUST 保留在 timeline 中
+- **AND** 活动标题 MUST 改为 `Thinking`
+- **AND** 活动 MUST 仍默认只显示短摘要
+- **AND** 用户点击 MUST 可展开查看完整公开推理文本
 
 ### Requirement: 推理卡片折叠态高度与其他卡片一致
 推理过程卡片折叠状态下的高度 SHALL 与命令、diff、MCP 等其他折叠卡片保持一致，不显得突兀。
@@ -242,33 +250,27 @@ Markdown 代码块的复制按钮 SHALL 在明亮主题和暗黑主题下都清�
 - **AND** 成功状态 MUST 在当前主题下保持可读
 
 ### Requirement: Timeline execution events are never silently dropped
-Web timeline SHALL render every app-server execution-related historical item and realtime notification that represents user-visible agent work, including shell commands, command/process output, file changes, MCP/dynamic tools, collaboration or exploration tool calls, sub-agent activity, web search, image operations, and raw response items that have no later normalized `ThreadItem`.
+Web timeline SHALL render every app-server execution-related historical item and realtime notification that represents user-visible agent work, including shell commands, command/process output, file changes, MCP/dynamic tools, collaboration or exploration tool calls, sub-agent activity, web search, image operations, skill loading activity, and raw response items that have no later normalized `ThreadItem`.
 
 #### Scenario: Historical command item is visible
 - **WHEN** `thread/read` or turns pagination returns a `commandExecution` item
-- **THEN** timeline MUST render a command or tool card for that item
-- **AND** the card MUST include the command text, status, and any aggregated output that exists
+- **THEN** timeline MUST render a command or tool activity for that item
+- **AND** the activity MUST include the command text, status, and any aggregated output that exists
 
 #### Scenario: Realtime command output is visible
-- **WHEN** WebSocket receives command output through `item/commandExecution/outputDelta`, `command/exec/outputDelta`, or `process/outputDelta`
-- **THEN** timeline MUST append the output to a visible running command or tool card
-- **AND** subsequent deltas for the same execution MUST update the same card instead of creating unrelated orphan text
+- **WHEN** WebSocket 或 SSE receives command output through `item/commandExecution/outputDelta`, `command/exec/outputDelta`, or `process/outputDelta`
+- **THEN** timeline MUST append the output to a visible running command or tool activity
+- **AND** subsequent deltas for the same execution MUST update the same activity instead of creating unrelated orphan text
 
 #### Scenario: Exploration and collaboration tool calls are visible
-- **WHEN** app-server returns or emits an exploration, collaboration, sub-agent, MCP, dynamic tool, or file change item
-- **THEN** timeline MUST render a visible card that identifies the event kind and status
+- **WHEN** app-server returns or emits an exploration, collaboration, sub-agent, MCP, dynamic tool, file change, skill loading, web, image, or search item
+- **THEN** timeline MUST render a visible activity that identifies the event kind and status
 - **AND** the item MUST NOT be dropped solely because the exact protocol variant is newer than the original Web adapter
 
-#### Scenario: Realtime tool progress preserves the original kind
-- **WHEN** WebSocket receives realtime progress for MCP, dynamic tool, exploration, collaboration, sub-agent, command, process, or file-change work
-- **THEN** timeline MUST append the progress to a visible card that identifies the original work kind
-- **AND** non-file events MUST NOT be normalized or rendered as `fileChange`
-- **AND** file-specific cards MUST only be used for actual file-change protocol events
-
-#### Scenario: Unknown execution item preserves observability
-- **WHEN** app-server sends a user-visible execution item that Web cannot map to a specialized card
-- **THEN** timeline MUST render a generic system or tool card with the item type and available text/JSON summary
-- **AND** the event MUST NOT disappear without any timeline representation
+#### Scenario: Raw response message items remain readable
+- **WHEN** app-server emits raw response items of type `message`, `agent_message`, reasoning, shell, function, custom tool, or tool output before a normalized `ThreadItem` exists
+- **THEN** timeline MUST normalize each item into a readable agent message, Thinking activity, command activity, tool activity, or system/error fallback
+- **AND** user-visible agent text MUST NOT be shown only as raw JSON
 
 ### Requirement: Live timeline snapshots preserve streamed output
 running 会话中，HTTP thread snapshot SHALL NOT 无条件覆盖已经通过 timeline event stream 追加到 timeline 的 live entries。系统 SHALL 以事件流作为运行中输出主路径；snapshot 仅用于初始化、显式 repair、断线缺口恢复或 turn 完成后的权威替换。任何 snapshot 与事件流合并都 MUST 保留 turn 元数据并遵守幂等规则，避免重复追加 agent message、reasoning、command/tool output。
@@ -493,4 +495,106 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 - **AND** 用户请求查看完整 diff
 - **THEN** 系统 MUST 提供完整 diff 的可读路径
 - **AND** MUST 保持移动端页面主 timeline 不被完整 diff DOM 卡死
+
+### Requirement: Timeline 活动按 turn 聚合为可展开摘要
+移动端 timeline SHALL 将同一 turn 内连续的 Thinking、工具调用、shell/bash、read/list/search、文件变更和验证类输出聚合为轻量 activity block。activity block SHALL 默认展示摘要行，并允许用户展开查看原始活动详情。
+
+#### Scenario: 默认显示活动摘要
+- **WHEN** 一个 turn 内产生多个 reasoning、tool、command 或 diff entry
+- **THEN** timeline MUST 默认显示一个或多个 activity block 摘要
+- **AND** 摘要 MUST 不把每个底层 entry 都以同等重量的独立卡片铺满首屏
+
+#### Scenario: 展开后保留原始详情
+- **WHEN** 用户展开 activity block
+- **THEN** 系统 MUST 显示被聚合的原始活动详情
+- **AND** 详情 MUST 包含原始命令、工具名、参数、输出、路径、diff 或错误信息中可用的内容
+
+#### Scenario: 活动分组不改变 timeline 事实源
+- **WHEN** timeline 执行 rewind、fork、snapshot repair 或 SSE delta 幂等处理
+- **THEN** 系统 MUST 继续基于底层 timeline entry 的稳定身份和 turn metadata 处理
+- **AND** activity block MUST NOT 引入新的可见重复项或丢弃底层事件
+
+#### Scenario: 失败活动在摘要层可见
+- **WHEN** 被聚合的活动中包含失败命令、错误工具调用或错误事件
+- **THEN** activity block 摘要 MUST 明确显示失败状态
+- **AND** 用户 MUST 不需要展开才能知道该组活动存在失败
+
+### Requirement: 活动摘要使用移动端可扫读文案
+活动摘要 SHALL 使用短文案表达动作类别和数量，例如 `Read files · 6`、`Searched files · 1`、`Ran commands · 2`、`Files changed · 7 · +55 -36`。摘要 SHALL 避免显示完整绝对路径、长 JSON 参数或 Markdown 原始标记。
+
+#### Scenario: read/list/search 动作摘要
+- **WHEN** 工具或命令活动包含 read、list、search 等结构化动作
+- **THEN** 摘要 MUST 分别显示读取文件、浏览目录或搜索文件的动作类别和数量
+- **AND** 展开后 MUST 能查看具体路径或搜索结果摘要
+
+#### Scenario: shell/bash 命令摘要
+- **WHEN** 工具活动表示 shell/bash 命令
+- **THEN** 摘要 MUST 优先显示命令摘要和运行状态
+- **AND** cwd、完整路径和长输出 MUST 放在展开详情中
+
+#### Scenario: 纯文本预览清洗
+- **WHEN** 摘要预览来自 Markdown、reasoning 文本、工具参数或输出
+- **THEN** 预览 MUST 移除明显 Markdown 控制标记
+- **AND** 预览 MUST 在移动端宽度内截断或换行，不能横向溢出
+
+#### Scenario: 未识别工具兜底
+- **WHEN** 系统收到尚未识别的工具或 raw response variant
+- **THEN** timeline MUST 显示通用活动摘要
+- **AND** 展开详情 MUST 保留可读的工具名、类型、参数或结果
+- **AND** 系统 MUST NOT 只显示未经整理的大段 JSON 作为默认摘要
+
+### Requirement: 移动端活动以内联日志穿插展示
+移动端 timeline SHALL 将 agent 运行中的工具、读取、搜索、命令、Skill/工具加载、文件变更和公开 reasoning 等活动渲染为 Codex App 风格的内联活动日志。内联活动日志 SHALL 作为消息流的一部分穿插在 assistant 消息之间，MUST NOT 显示统一的 `Activity` 标题、厚卡片边框、强调色左边框或独立卡片容器。
+
+#### Scenario: 活动不显示 Activity 卡片
+- **WHEN** 一个 turn 产生 tool、command、diff、reasoning 或 runtime loading 活动
+- **THEN** timeline MUST 渲染具体活动标题和明细行
+- **AND** timeline MUST NOT 显示 `Activity` 作为用户可见标题
+- **AND** 活动 MUST NOT 使用厚卡片、蓝色左侧强调条或独立卡片容器
+
+#### Scenario: 活动按真实顺序穿插
+- **WHEN** 同一 turn 内真实顺序为 assistant 消息、工具活动、assistant 消息、文件变更、assistant 消息
+- **THEN** timeline MUST 按该原始顺序渲染为 assistant 消息、内联活动日志、assistant 消息、内联活动日志、assistant 消息
+- **AND** 系统 MUST NOT 将该 turn 的所有活动集中堆到用户消息下方或所有 assistant 文本之前
+
+#### Scenario: 只合并连续活动
+- **WHEN** 多个 activity entries 在同一 turn 中连续出现
+- **THEN** timeline MAY 将这些连续 entry 派生为同一个内联活动日志组
+- **AND** 合并 MUST 在遇到 assistant、user、system 或 error entry 时停止
+
+### Requirement: 内联活动标题使用具体动作摘要
+内联活动日志 SHALL 使用具体动作摘要作为标题，例如 `Loaded 4 tools`、`已读取 2 个文件已运行 1 条命令`、`Files changed · 3 · +42 -18`、`Thinking...` 或 `Thinking`。标题 MUST 表达发生了什么，MUST NOT 使用泛化的 `Activity`、`Used activity` 或类似无语义标签。
+
+#### Scenario: Loaded tools 标题
+- **WHEN** 活动组只包含 runtime Skill、tool instruction 或工具加载类活动
+- **THEN** 标题 MUST 显示 `Loaded N tools` 或等价的具体加载摘要
+- **AND** 明细 MUST 默认显示每个已知 Skill 或工具名称
+
+#### Scenario: 文件读取和命令组合标题
+- **WHEN** 活动组包含 read/search/list/command 等执行动作
+- **THEN** 标题 MUST 汇总每类动作的数量
+- **AND** 标题 MUST 能表达读取、搜索、浏览目录或运行命令中实际发生的动作
+
+#### Scenario: 文件变更标题
+- **WHEN** 活动组包含文件变更或 diff
+- **THEN** 标题 MUST 显示被修改文件数量和总增删行数
+- **AND** 标题 MUST 不要求用户展开才能知道有文件被改动
+
+### Requirement: 短活动明细默认可见
+内联活动日志 SHALL 默认显示短明细行。短明细包括 Skill/工具读取名称、文件读取路径、搜索目标、短命令名、简短工具动作和文件变更路径摘要。长输出、unified diff、完整命令 stdout/stderr、长 JSON 参数或结果 SHALL 放入展开详情。
+
+#### Scenario: Skill 明细默认显示
+- **WHEN** 活动组包含 runtime loaded tools 或 Skill 读取明细
+- **THEN** timeline MUST 默认显示 `读取 <name> 技能` 或等价短明细
+- **AND** 用户 MUST 不需要展开才能看到加载了哪些已知 Skill 或工具
+
+#### Scenario: 文件读取明细默认显示
+- **WHEN** 活动组包含 read、list 或 search 动作
+- **THEN** timeline MUST 默认显示短路径、搜索词或动作名称
+- **AND** 绝对路径、长参数和完整输出 MUST 不挤占默认明细
+
+#### Scenario: 长详情折叠
+- **WHEN** 活动包含完整命令输出、diff、长 JSON 或大段 reasoning 文本
+- **THEN** 默认明细 MUST 只显示短摘要
+- **AND** 用户展开后 MUST 能查看完整可用详情
 

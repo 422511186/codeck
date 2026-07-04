@@ -149,10 +149,14 @@ export type BrowserCodexEvent =
       kind: "settings_invalidated";
     }
   | {
+      kind: "skills_changed";
+    }
+  | {
       kind: "thread_settings_updated";
       threadId: string;
       model: string | null;
       reasoningEffort: string | null;
+      approvalsReviewer: string | null;
       activePermissionProfile: BrowserActivePermissionProfile | null;
       collaborationMode: "plan" | "default" | null;
     }
@@ -330,6 +334,17 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
         ? value.call_id
         : `${value.type}-${metadata?.turn_id ?? "item"}`;
 
+  if (value.type === "message" || value.type === "agent_message") {
+    const text = rawMessageText(value);
+    if (text) {
+      return {
+        id,
+        role: "agent",
+        text
+      };
+    }
+  }
+
   if (value.type === "reasoning") {
     const summary = Array.isArray(value.summary)
       ? value.summary
@@ -426,10 +441,46 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
 
   return {
     id,
-    role: "system",
+    role: "tool",
     text: stringifyForEvent(value),
-    toolKind: "system"
+    toolKind: "dynamic",
+    server: "raw",
+    tool: typeof value.name === "string" ? value.name : value.type,
+    status: eventStatus(value.status)
   };
+}
+
+function rawMessageText(value: Record<string, unknown>): string {
+  if (typeof value.text === "string" && value.text.trim()) {
+    return value.text;
+  }
+  if (typeof value.output_text === "string" && value.output_text.trim()) {
+    return value.output_text;
+  }
+  if (typeof value.content === "string" && value.content.trim()) {
+    return value.content;
+  }
+  if (!Array.isArray(value.content)) {
+    return "";
+  }
+  return value.content
+    .map((part) => {
+      if (!isRecord(part)) {
+        return "";
+      }
+      if (typeof part.text === "string") {
+        return part.text;
+      }
+      if (typeof part.output_text === "string") {
+        return part.output_text;
+      }
+      if (typeof part.content === "string") {
+        return part.content;
+      }
+      return "";
+    })
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
 }
 
 function stringifyForEvent(value: unknown): string {
@@ -958,6 +1009,15 @@ export function normalizeAppServerNotification(
     };
   }
 
+  if (message.method === "skills/changed") {
+    return {
+      type: "codex-event",
+      event: {
+        kind: "skills_changed"
+      }
+    };
+  }
+
   if (message.method === "thread/settings/updated") {
     const params = message.params as { threadId?: unknown; threadSettings?: unknown } | null | undefined;
     if (!params || typeof params.threadId !== "string" || !isRecord(params.threadSettings)) {
@@ -971,6 +1031,7 @@ export function normalizeAppServerNotification(
         threadId: params.threadId,
         model: stringOrNull(params.threadSettings.model),
         reasoningEffort: stringOrNull(params.threadSettings.effort),
+        approvalsReviewer: stringOrNull(params.threadSettings.approvalsReviewer),
         activePermissionProfile: activePermissionProfileOrNull(params.threadSettings.activePermissionProfile),
         collaborationMode: collaborationModeKind(params.threadSettings.collaborationMode)
       }

@@ -18,6 +18,7 @@ export async function POST(
       model?: string;
       reasoningEffort?: string;
       permissions?: string | null;
+      approvalsReviewer?: UpdateThreadSettingsInput["approvalsReviewer"];
       collaborationMode?: UpdateThreadSettingsInput["collaborationMode"];
     };
     await audit("thread.settings.update", {
@@ -25,6 +26,7 @@ export async function POST(
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       permissions: body.permissions,
+      approvalsReviewer: body.approvalsReviewer,
       collaborationMode: body.collaborationMode
     });
     await getAppServerGateway().updateThreadSettings({
@@ -32,6 +34,7 @@ export async function POST(
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       permissions: body.permissions,
+      approvalsReviewer: body.approvalsReviewer,
       collaborationMode: body.collaborationMode
     });
     return NextResponse.json({ ok: true });

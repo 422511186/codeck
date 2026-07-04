@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineEntry } from "../state/timeline";
-import type { PendingServerRequest } from "../api/types";
+import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
 import { CommandCard } from "./cards/CommandCard";
 import { DiffCard } from "./cards/DiffCard";
@@ -37,7 +37,7 @@ type Props = {
   running?: boolean;
   activeTurnId?: string | null;
   onResolveApproval?: (req: PendingServerRequest, value: string) => Promise<void>;
-  onResendUser?: (text: string) => void;
+  onResendUser?: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
 };
@@ -61,6 +61,7 @@ export function Timeline({
     lastId: entries[entries.length - 1]?.id ?? null
   });
   const visibleEntries = windowStartIndex > 0 ? entries.slice(windowStartIndex) : entries;
+  const visibleBlocks = useMemo(() => deriveTimelineRenderBlocks(visibleEntries), [visibleEntries]);
   const topSpacerHeight = windowStartIndex * ESTIMATED_TIMELINE_ROW_HEIGHT;
   const longTimeline = entries.length > MAX_INITIAL_TIMELINE_ROWS;
   const rowState = useMemo(
@@ -148,19 +149,23 @@ export function Timeline({
         {topSpacerHeight > 0 ? (
           <div aria-hidden="true" data-timeline-spacer="top" style={{ minHeight: topSpacerHeight }} />
         ) : null}
-        {visibleEntries.map((entry, visibleIndex) => (
-          <div key={entry.id} data-timeline-row="true">
-            <TimelineRow
-              entry={entry}
-              live={rowState.liveAgentEntryIds.has(entry.id)}
-              actionAvailable={rowState.messageActionAvailableById.get(entry.id) ?? false}
-              running={running}
-              eagerMarkdown={!longTimeline || visibleIndex >= visibleEntries.length - EAGER_MARKDOWN_TAIL_ROWS}
-              onResendUser={onResendUser}
-              onRewindToMessage={onRewindToMessage}
-              onForkFromMessage={onForkFromMessage}
-              onPreviewImage={setPreviewSrc}
-            />
+        {visibleBlocks.map((block, visibleIndex) => (
+          <div key={block.id} data-timeline-row="true">
+            {block.kind === "inline-activity-log" ? (
+              <InlineActivityLog entries={block.entries} />
+            ) : (
+              <TimelineRow
+                entry={block.entry}
+                live={rowState.liveAgentEntryIds.has(block.entry.id)}
+                actionAvailable={rowState.messageActionAvailableById.get(block.entry.id) ?? false}
+                running={running}
+                eagerMarkdown={!longTimeline || visibleIndex >= visibleBlocks.length - EAGER_MARKDOWN_TAIL_ROWS}
+                onResendUser={onResendUser}
+                onRewindToMessage={onRewindToMessage}
+                onForkFromMessage={onForkFromMessage}
+                onPreviewImage={setPreviewSrc}
+              />
+            )}
           </div>
         ))}
         {approvals?.map((approval) => (
@@ -175,6 +180,52 @@ export function Timeline({
       </div>
       {previewSrc ? <ImagePreviewDialog src={previewSrc} onClose={() => setPreviewSrc(null)} /> : null}
     </>
+  );
+}
+
+export type TimelineRenderBlock =
+  | { kind: "entry"; id: string; entry: TimelineEntry }
+  | { kind: "inline-activity-log"; id: string; turnId?: string; entries: TimelineEntry[] };
+
+export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
+  const blocks: TimelineRenderBlock[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    if (!isActivityEntry(entry)) {
+      blocks.push({ kind: "entry", id: entry.id, entry });
+      index += 1;
+      continue;
+    }
+
+    const turnId = entry.turnId;
+    const activityEntries: TimelineEntry[] = [entry];
+    index += 1;
+    while (index < entries.length) {
+      const next = entries[index]!;
+      if (!isActivityEntry(next) || next.turnId !== turnId) {
+        break;
+      }
+      activityEntries.push(next);
+      index += 1;
+    }
+
+    blocks.push({
+      kind: "inline-activity-log",
+      id: `inline-activity-${turnId ?? activityEntries[0]!.id}-${activityEntries.at(-1)!.id}`,
+      ...(turnId ? { turnId } : {}),
+      entries: activityEntries
+    });
+  }
+  return blocks;
+}
+
+function isActivityEntry(entry: TimelineEntry): boolean {
+  return (
+    entry.body.kind === "reasoning" ||
+    entry.body.kind === "tool" ||
+    entry.body.kind === "command" ||
+    entry.body.kind === "diff"
   );
 }
 
@@ -215,7 +266,7 @@ function TimelineRow({
   actionAvailable: boolean;
   running: boolean;
   eagerMarkdown: boolean;
-  onResendUser?: (text: string) => void;
+  onResendUser?: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onPreviewImage: (src: string) => void;
@@ -228,7 +279,7 @@ function TimelineRow({
           entry={entry}
           actionAvailable={!running && actionAvailable}
           running={running}
-          onResend={() => onResendUser?.(body.text)}
+          onResend={() => onResendUser?.(body.text, body.imagePaths ?? [], body.skillReferences ?? [])}
           onRewind={() => onRewindToMessage?.(entry)}
           onFork={() => onForkFromMessage?.(entry)}
           onPreviewImage={onPreviewImage}
@@ -251,6 +302,423 @@ function TimelineRow({
     default:
       return <></>;
   }
+}
+
+function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
+  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const sections = inlineActivitySections(entries);
+
+  function toggle(key: string): void {
+    setOpenKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <div style={inlineActivityLogStyle}>
+      {sections.map((section) => {
+        const canExpand = section.entries.length > 0;
+        const open = canExpand && openKeys.has(section.key);
+        return (
+          <div key={section.key} style={inlineActivitySectionStyle}>
+            <button
+              type="button"
+              {...(canExpand ? { "aria-expanded": open } : {})}
+              onClick={() => {
+                if (canExpand) {
+                  toggle(section.key);
+                }
+              }}
+              style={inlineActivityButtonStyle}
+            >
+              <span aria-hidden="true" style={inlineActivityIconStyle}>
+                ▣
+              </span>
+              <span style={inlineActivityTitleStyle}>{section.title}</span>
+              {section.failed ? <span style={inlineActivityFailedStyle}>Failed</span> : null}
+              {canExpand ? (
+                <span aria-hidden="true" style={inlineActivityChevronStyle}>
+                  {open ? "⌄" : "›"}
+                </span>
+              ) : null}
+            </button>
+            {section.details.length ? (
+              <div style={inlineActivityRowsStyle}>
+                {section.details.map((detail, index) => (
+                  <div key={`${section.key}-detail-${index}`} style={inlineActivityRowStyle}>
+                    {detail}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {open ? (
+              <div style={activityDetailsStyle}>
+                {section.entries.map((entry) => (
+                  <ActivityDetail key={entry.id} entry={entry} />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type InlineActivitySection = {
+  key: string;
+  title: string;
+  details: string[];
+  entries: TimelineEntry[];
+  failed: boolean;
+};
+
+type InlineActivitySectionKind = "thinking" | "skills" | "commands" | "tools" | "files" | "fallback";
+
+function inlineActivitySections(entries: TimelineEntry[]): InlineActivitySection[] {
+  const sections: InlineActivitySection[] = [];
+  let currentKind: InlineActivitySectionKind | null = null;
+  let currentEntries: TimelineEntry[] = [];
+
+  const flush = () => {
+    if (!currentKind || !currentEntries.length) {
+      return;
+    }
+    sections.push(inlineActivitySection(currentKind, currentEntries, sections.length));
+    currentKind = null;
+    currentEntries = [];
+  };
+
+  for (const entry of entries) {
+    const kind = inlineActivitySectionKind(entry);
+    if (currentKind && kind !== currentKind) {
+      flush();
+    }
+    currentKind = kind;
+    currentEntries.push(entry);
+  }
+  flush();
+
+  return sections.length
+    ? sections
+    : [
+        {
+          key: "fallback-0",
+          title: `Used ${entries.length} tools`,
+          details: entries.map(genericToolDetail),
+          entries,
+          failed: entries.some((entry) => activityEntryFailed(entry))
+        }
+      ];
+}
+
+function inlineActivitySectionKind(entry: TimelineEntry): InlineActivitySectionKind {
+  if (entry.body.kind === "reasoning") {
+    return "thinking";
+  }
+  if (isSkillsLoadedActivity(entry)) {
+    return "skills";
+  }
+  if (isCommandActivity(entry) || isReadActivity(entry) || isListActivity(entry) || isSearchActivity(entry)) {
+    return "commands";
+  }
+  if (entry.body.kind === "diff" || isFileChangeActivity(entry)) {
+    return "files";
+  }
+  if (entry.body.kind === "tool") {
+    return "tools";
+  }
+  return "fallback";
+}
+
+function inlineActivitySection(
+  kind: InlineActivitySectionKind,
+  entries: TimelineEntry[],
+  index: number
+): InlineActivitySection {
+  if (kind === "thinking") {
+    const running = entries.some((entry) => entry.body.kind === "reasoning" && !entry.body.done);
+    return {
+      key: `thinking-${index}`,
+      title: running ? "Thinking..." : "Thinking",
+      details: [],
+      entries,
+      failed: entries.some((entry) => activityEntryFailed(entry))
+    };
+  }
+
+  if (kind === "skills") {
+    const names = entries.flatMap((entry) => skillNamesFromActivity(entry));
+    const count = names.length || entries.length;
+    return {
+      key: `skills-${index}`,
+      title: count === 1 ? "Loaded a tool" : `Loaded ${count} tools`,
+      details: names.length ? names.map((name) => `读取 ${name} 技能`) : [`${count} tools`],
+      entries,
+      failed: entries.some((entry) => activityEntryFailed(entry))
+    };
+  }
+
+  if (kind === "commands") {
+    const commandActions = entries.filter(
+      (entry) => isCommandActivity(entry) && !isReadActivity(entry) && !isListActivity(entry) && !isSearchActivity(entry)
+    );
+    const readActions = entries.filter((entry) => isReadActivity(entry));
+    const listActions = entries.filter((entry) => isListActivity(entry));
+    const searchActions = entries.filter((entry) => isSearchActivity(entry));
+    return {
+      key: `commands-${index}`,
+      title: commandActivityTitle({
+        read: readActions.length,
+        list: listActions.length,
+        search: searchActions.length,
+        command: commandActions.length
+      }),
+      details: entries.map(commandActivityDetail),
+      entries,
+      failed: entries.some((entry) => activityEntryFailed(entry))
+    };
+  }
+
+  if (kind === "tools") {
+    return {
+      key: `tools-${index}`,
+      title: `Used ${entries.length} tools`,
+      details: entries.map(genericToolDetail),
+      entries,
+      failed: entries.some((entry) => activityEntryFailed(entry))
+    };
+  }
+
+  if (kind === "files") {
+    const stats = entries.reduce(
+      (sum, entry) => {
+        if (entry.body.kind === "diff") {
+          return { added: sum.added + entry.body.added, removed: sum.removed + entry.body.removed };
+        }
+        if (entry.body.kind === "tool") {
+          return { added: sum.added + (entry.body.added ?? 0), removed: sum.removed + (entry.body.removed ?? 0) };
+        }
+        return sum;
+      },
+      { added: 0, removed: 0 }
+    );
+    return {
+      key: `files-${index}`,
+      title: `Files changed · ${entries.length} · +${stats.added} -${stats.removed}`,
+      details: entries.map(fileChangeDetail),
+      entries,
+      failed: entries.some((entry) => activityEntryFailed(entry))
+    };
+  }
+
+  return {
+    key: `fallback-${index}`,
+    title: `Used ${entries.length} tools`,
+    details: entries.map(genericToolDetail),
+    entries,
+    failed: entries.some((entry) => activityEntryFailed(entry))
+  };
+}
+
+function commandActivityTitle(counts: { read: number; list: number; search: number; command: number }): string {
+  const parts: string[] = [];
+  if (counts.read) {
+    parts.push(`已读取 ${counts.read} 个文件`);
+  }
+  if (counts.list) {
+    parts.push(`已浏览 ${counts.list} 个目录`);
+  }
+  if (counts.search) {
+    parts.push(`已搜索 ${counts.search} 次`);
+  }
+  if (counts.command) {
+    parts.push(`已运行 ${counts.command} 条命令`);
+  }
+  return parts.join("") || "已运行命令";
+}
+
+function commandActivityDetail(entry: TimelineEntry): string {
+  const command = activityCommandText(entry);
+  if (isReadActivity(entry)) {
+    return `Read ${commandTarget(command, "read")}`;
+  }
+  if (isListActivity(entry)) {
+    return `List ${commandTarget(command, "list")}`;
+  }
+  if (isSearchActivity(entry)) {
+    return `Searched ${commandTarget(command, "search")}`;
+  }
+  return `已运行 ${shortInlineText(command || "command")}`;
+}
+
+function fileChangeDetail(entry: TimelineEntry): string {
+  if (entry.body.kind === "diff") {
+    return `${shortInlineText(entry.body.path)} · +${entry.body.added} -${entry.body.removed}`;
+  }
+  if (entry.body.kind === "tool") {
+    return `${shortInlineText(entry.body.diffPath ?? entry.body.tool)} · +${entry.body.added ?? 0} -${entry.body.removed ?? 0}`;
+  }
+  return genericToolDetail(entry);
+}
+
+function genericToolDetail(entry: TimelineEntry): string {
+  const body = entry.body;
+  if (body.kind === "tool") {
+    return shortInlineText([body.server, body.tool].filter(Boolean).join(" · "));
+  }
+  if (body.kind === "command") {
+    return `已运行 ${shortInlineText(body.command)}`;
+  }
+  if (body.kind === "reasoning") {
+    return body.done ? "Thinking" : "Thinking...";
+  }
+  if (body.kind === "diff") {
+    return fileChangeDetail(entry);
+  }
+  return shortInlineText(entry.id);
+}
+
+function activityCommandText(entry: TimelineEntry): string {
+  if (entry.body.kind === "command") {
+    return entry.body.command;
+  }
+  if (entry.body.kind === "tool") {
+    return entry.body.tool;
+  }
+  return "";
+}
+
+function commandTarget(command: string, kind: "read" | "list" | "search"): string {
+  const words = shellWords(command);
+  if (!words.length) {
+    return kind === "search" ? "search" : "target";
+  }
+  if (kind === "search") {
+    const query = words.slice(1).find((word) => !word.startsWith("-"));
+    return shortInlineText(query ?? words.at(-1) ?? "search");
+  }
+  const target = [...words].reverse().find((word) => !word.startsWith("-") && !/^\d+(,\d+)?p$/.test(word));
+  return shortInlineText(target ?? words.at(-1) ?? "target");
+}
+
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (const match of command.matchAll(pattern)) {
+    const word = match[1] ?? match[2] ?? match[3] ?? "";
+    if (word) {
+      words.push(word);
+    }
+  }
+  return words;
+}
+
+function shortInlineText(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > 88 ? `${clean.slice(0, 85)}...` : clean;
+}
+
+function isCommandActivity(entry: TimelineEntry): boolean {
+  return entry.body.kind === "command" || (entry.body.kind === "tool" && entry.body.toolKind === "command");
+}
+
+function isFileChangeActivity(entry: TimelineEntry): boolean {
+  return entry.body.kind === "tool" && entry.body.toolKind === "file";
+}
+
+function isSkillsLoadedActivity(entry: TimelineEntry): boolean {
+  return entry.body.kind === "tool" && entry.body.server === "skills" && entry.body.tool === "loaded";
+}
+
+function skillNamesFromActivity(entry: TimelineEntry): string[] {
+  if (!isSkillsLoadedActivity(entry) || entry.body.kind !== "tool") {
+    return [];
+  }
+  return (entry.body.result ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function isToolNamed(entry: TimelineEntry, pattern: RegExp): boolean {
+  if (entry.body.kind === "command") {
+    return pattern.test(entry.body.command.split(/\s+/)[0] ?? "");
+  }
+  if (entry.body.kind !== "tool") {
+    return false;
+  }
+  return pattern.test(entry.body.tool.split(/\s+/)[0] ?? "");
+}
+
+function isReadActivity(entry: TimelineEntry): boolean {
+  if (entry.body.kind === "tool" && entry.body.actionKind === "read") {
+    return true;
+  }
+  return isToolNamed(entry, /^(read|cat|sed|head|tail|less|nl)$/i);
+}
+
+function isListActivity(entry: TimelineEntry): boolean {
+  if (entry.body.kind === "tool" && entry.body.actionKind === "list") {
+    return true;
+  }
+  return isToolNamed(entry, /^(list|ls|dir|tree)$/i);
+}
+
+function isSearchActivity(entry: TimelineEntry): boolean {
+  if (entry.body.kind === "tool" && entry.body.actionKind === "search") {
+    return true;
+  }
+  return isToolNamed(entry, /^(search|rg|grep|find)$/i);
+}
+
+function activityEntryFailed(entry: TimelineEntry): boolean {
+  return (
+    (entry.body.kind === "tool" && entry.body.status === "failed") ||
+    (entry.body.kind === "command" && entry.body.status === "failed")
+  );
+}
+
+function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
+  const body = entry.body;
+  if (body.kind === "reasoning") {
+    return (
+      <ActivityDetailText
+        title={body.done ? "Thinking" : "Thinking..."}
+        text={body.text.trim() || (body.done ? "" : "Thinking...")}
+      />
+    );
+  }
+  if (body.kind === "tool") {
+    return (
+      <ActivityDetailText
+        title={body.toolKind === "command" ? body.tool : `${body.server} · ${body.diffPath ?? body.tool}`}
+        text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
+      />
+    );
+  }
+  if (body.kind === "command") {
+    return <ActivityDetailText title={body.command} text={body.output ?? body.command} />;
+  }
+  if (body.kind === "diff") {
+    return <ActivityDetailText title={body.path} text={body.diff} />;
+  }
+  return <></>;
+}
+
+function ActivityDetailText({ title, text }: { title: string; text: string }): JSX.Element {
+  return (
+    <div style={activityDetailItemStyle}>
+      <div style={activityDetailTitleStyle}>{title}</div>
+      {text.trim() ? <pre style={activityDetailPreStyle}>{text}</pre> : null}
+    </div>
+  );
 }
 
 function AgentMessage({ text, live, eagerMarkdown }: { text: string; live: boolean; eagerMarkdown: boolean }): JSX.Element {
@@ -427,6 +895,114 @@ const agentMessageStyle: React.CSSProperties = {
 const plainAgentTextStyle: React.CSSProperties = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
+  overflowWrap: "anywhere"
+};
+
+const inlineActivityLogStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  padding: "2px 14px 4px",
+  color: "var(--cw-fg-muted)"
+};
+
+const inlineActivitySectionStyle: React.CSSProperties = {
+  minWidth: 0
+};
+
+const inlineActivityButtonStyle: React.CSSProperties = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "2px 0",
+  background: "transparent",
+  border: "none",
+  minWidth: 0,
+  color: "var(--cw-fg-muted)",
+  textAlign: "left"
+};
+
+const inlineActivityIconStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  width: 14,
+  color: "var(--cw-fg-muted)",
+  fontSize: 12,
+  lineHeight: 1
+};
+
+const inlineActivityTitleStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontSize: 13,
+  fontWeight: 500,
+  lineHeight: 1.35
+};
+
+const inlineActivityFailedStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  color: "var(--cw-danger)",
+  fontSize: 12
+};
+
+const inlineActivityChevronStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  width: 12,
+  color: "var(--cw-fg-muted)"
+};
+
+const inlineActivityRowsStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  padding: "0 0 2px 20px"
+};
+
+const inlineActivityRowStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "var(--cw-fg-muted)",
+  fontSize: 13,
+  lineHeight: 1.45
+};
+
+const activityDetailsStyle: React.CSSProperties = {
+  margin: "4px 0 2px 20px",
+  padding: "6px 0 0",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  maxHeight: 520,
+  overflowY: "auto"
+};
+
+const activityDetailItemStyle: React.CSSProperties = {
+  minWidth: 0
+};
+
+const activityDetailTitleStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--cw-fg-muted)",
+  fontFamily: "var(--font-mono)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap"
+};
+
+const activityDetailPreStyle: React.CSSProperties = {
+  margin: "4px 0 0",
+  padding: 8,
+  borderRadius: 8,
+  background: "var(--cw-bg-elevated)",
+  color: "var(--cw-fg)",
+  fontSize: 12,
+  lineHeight: 1.5,
+  whiteSpace: "pre-wrap",
   overflowWrap: "anywhere"
 };
 

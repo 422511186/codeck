@@ -343,6 +343,335 @@ describe("Timeline", () => {
     expect(writeText).toHaveBeenCalledWith("自建 agent 的意义是什么？");
   });
 
+  it("将同一 turn 内连续活动渲染为内联日志而不是 Activity 卡片", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "reasoning-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: { kind: "reasoning", text: "**先看结构**\n再运行测试", done: true }
+          },
+          {
+            id: "tool-1",
+            turnId: "turn-1",
+            createdAt: 3,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: "passed"
+            }
+          },
+          {
+            id: "diff-1",
+            turnId: "turn-1",
+            createdAt: 4,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 2,
+              removed: 1,
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n-old\n+new\n+added"
+            }
+          },
+          {
+            id: "agent-1",
+            turnId: "turn-1",
+            createdAt: 5,
+            body: { kind: "agent-message", text: "已完成" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("先看结构")).not.toBeInTheDocument();
+    expect(screen.queryByText("再运行测试")).not.toBeInTheDocument();
+    expect(screen.getByText("已运行 1 条命令")).toBeInTheDocument();
+    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+    expect(screen.getByText("Files changed · 1 · +2 -1")).toBeInTheDocument();
+    expect(container.innerHTML).not.toContain("border-left: 3px solid");
+
+    await user.click(screen.getByText("Thinking").closest("button")!);
+
+    expect(screen.getByText(/\*\*先看结构\*\*/)).toBeInTheDocument();
+    expect(screen.getByText(/再运行测试/)).toBeInTheDocument();
+
+    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
+
+    expect(screen.getByText("src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("已完成")).toBeInTheDocument();
+  });
+
+  it("read/search/list/command 混合活动显示具体组合摘要和默认短明细", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "read-1",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "sed -n '1,80p' src/app.ts",
+              status: "success",
+              result: "content"
+            }
+          },
+          {
+            id: "search-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "rg timeline src",
+              status: "success",
+              result: "src/app.ts"
+            }
+          },
+          {
+            id: "list-1",
+            turnId: "turn-1",
+            createdAt: 2.5,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              actionKind: "list",
+              server: "/repo",
+              tool: "ls src",
+              status: "success",
+              result: "app.ts"
+            }
+          },
+          {
+            id: "cmd-1",
+            turnId: "turn-1",
+            createdAt: 3,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: "passed"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("已读取 1 个文件已浏览 1 个目录已搜索 1 次已运行 1 条命令")).toBeInTheDocument();
+    expect(screen.getByText("Read src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("List src")).toBeInTheDocument();
+    expect(screen.getByText("Searched timeline")).toBeInTheDocument();
+    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+  });
+
+  it("Loaded tools 活动显示 Codex App 风格标题和默认 Skill 明细", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "turn-1-skills-loaded",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "dynamic",
+              server: "skills",
+              tool: "loaded",
+              status: "success",
+              result: "openspec-explore, systematic-debugging"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Loaded 2 tools")).toBeInTheDocument();
+    expect(screen.getByText("读取 openspec-explore 技能")).toBeInTheDocument();
+    expect(screen.getByText("读取 systematic-debugging 技能")).toBeInTheDocument();
+    expect(screen.queryByText(/Skills loaded/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Used tools/)).not.toBeInTheDocument();
+  });
+
+  it("单个 Loaded tool 活动使用 Codex App 风格单数标题", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "turn-1-skill-loaded",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "dynamic",
+              server: "skills",
+              tool: "loaded",
+              status: "success",
+              result: "systematic-debugging"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Loaded a tool")).toBeInTheDocument();
+    expect(screen.queryByText("Loaded 1 tools")).not.toBeInTheDocument();
+  });
+
+  it("assistant 消息和内联活动按真实顺序穿插渲染", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "agent-1",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: { kind: "agent-message", text: "先说明第一段" }
+          },
+          {
+            id: "cmd-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: "passed"
+            }
+          },
+          {
+            id: "agent-2",
+            turnId: "turn-1",
+            createdAt: 3,
+            body: { kind: "agent-message", text: "再说明第二段" }
+          },
+          {
+            id: "diff-1",
+            turnId: "turn-1",
+            createdAt: 4,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 1,
+              removed: 0,
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n old\n+new"
+            }
+          },
+          {
+            id: "agent-3",
+            turnId: "turn-1",
+            createdAt: 5,
+            body: { kind: "agent-message", text: "最后说明第三段" }
+          }
+        ]}
+      />
+    );
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("先说明第一段")).toBeLessThan(text.indexOf("已运行 npm test"));
+    expect(text.indexOf("已运行 npm test")).toBeLessThan(text.indexOf("再说明第二段"));
+    expect(text.indexOf("再说明第二段")).toBeLessThan(text.indexOf("Files changed · 1 · +1 -0"));
+    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("最后说明第三段"));
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+  });
+
+  it("同一内联活动组内部也按原始事件顺序显示短明细", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "diff-1",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 1,
+              removed: 0,
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n old\n+new"
+            }
+          },
+          {
+            id: "cmd-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: "passed"
+            }
+          }
+        ]}
+      />
+    );
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("已运行 npm test"));
+  });
+
+  it("长输出和 diff 默认折叠，展开后显示完整详情", async () => {
+    const user = userEvent.setup();
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "cmd-1",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: "line 1\nline 2\nline 3"
+            }
+          },
+          {
+            id: "diff-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 1,
+              removed: 1,
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+    expect(screen.getByText("Files changed · 1 · +1 -1")).toBeInTheDocument();
+    expect(screen.queryByText("line 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("--- a/src/app.ts")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
+
+    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+    expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
+  });
+
   it("长按用户消息显示复制、回滚和 Fork 操作", async () => {
     vi.useFakeTimers();
     const onRewindToMessage = vi.fn();

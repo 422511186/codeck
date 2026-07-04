@@ -56,6 +56,138 @@ class ReconnectablePeer implements ManagedAppServerPeer {
   }
 }
 
+class AlreadyInitializedPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "ready" };
+  connectCount = 0;
+  initializeCount = 0;
+  notifications: string[] = [];
+
+  async connect(): Promise<void> {
+    this.connectCount += 1;
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(method: string): Promise<void> {
+    this.notifications.push(method);
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      this.initializeCount += 1;
+      throw new Error("Already initialized");
+    }
+    if (method === "thread/list") {
+      return { data: [], nextCursor: null };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class UnsupportedTurnItemsPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  calls: Array<{ method: string; params?: unknown }> = [];
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+    if (method === "thread/turns/items/list") {
+      throw new Error("thread/turns/items/list is not supported yet");
+    }
+    if (method === "thread/turns/list") {
+      return {
+        data: [
+          {
+            id: "turn-other",
+            itemsView: { type: "complete" },
+            status: { type: "completed" },
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1000,
+            items: []
+          },
+          {
+            id: "turn-target",
+            itemsView: { type: "complete" },
+            status: { type: "completed" },
+            error: null,
+            startedAt: 3,
+            completedAt: 4,
+            durationMs: 1000,
+            items: [
+              {
+                type: "agentMessage",
+                id: "item-target-agent",
+                text: "fallback item",
+                phase: "final_answer",
+                memoryCitation: null
+              }
+            ]
+          }
+        ],
+        nextCursor: null,
+        backwardsCursor: null
+      };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
 class RejectingServerRequestPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "ready" };
   responses: Array<{ id: number; result: unknown }> = [];
@@ -386,6 +518,139 @@ class SnapshotReasoningPeer implements ManagedAppServerPeer {
   }
 }
 
+class SessionResponseItemsPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  readonly calls: Array<{ method: string; params?: unknown }> = [];
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+    if (method === "thread/read") {
+      return { thread: { ...sessionThread(), turns: [] } };
+    }
+    if (method === "thread/turns/list") {
+      return { data: sessionThread().turns, nextCursor: null, backwardsCursor: null };
+    }
+    if (method === "thread/turns/items/list") {
+      return {
+        data: sessionThread().turns[0]!.items,
+        nextCursor: null
+      };
+    }
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+    if (method === "getConversationSummary") {
+      return {
+        summary: {
+          conversationId: "thread-1",
+          path: "/tmp/codex-session.jsonl",
+          preview: "session supplement",
+          timestamp: "2026-07-04T19:00:00.000Z",
+          updatedAt: "2026-07-04T19:01:00.000Z",
+          modelProvider: "openai",
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          gitInfo: null
+        }
+      };
+    }
+    if (method === "fs/readFile") {
+      return {
+        dataBase64: Buffer.from(sessionJsonl(), "utf8").toString("base64")
+      };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class SessionResponseItemsWithNativePatchPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+    if (method === "thread/read") {
+      return { thread: { ...sessionThreadWithNativePatch(), turns: [] } };
+    }
+    if (method === "thread/turns/list") {
+      return { data: sessionThreadWithNativePatch().turns, nextCursor: null, backwardsCursor: null };
+    }
+    if (method === "thread/turns/items/list") {
+      return {
+        data: sessionThreadWithNativePatch().turns[0]!.items,
+        nextCursor: null
+      };
+    }
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+    if (method === "getConversationSummary") {
+      return {
+        summary: {
+          conversationId: "thread-1",
+          path: "/tmp/codex-session.jsonl",
+          preview: "session supplement",
+          timestamp: "2026-07-04T19:00:00.000Z",
+          updatedAt: "2026-07-04T19:01:00.000Z",
+          modelProvider: "openai",
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          gitInfo: null
+        }
+      };
+    }
+    if (method === "fs/readFile") {
+      return {
+        dataBase64: Buffer.from(sessionJsonl(), "utf8").toString("base64")
+      };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
 function threadWithTurns(turnIds: string[]): unknown {
   return {
     id: "thread-1",
@@ -425,6 +690,228 @@ function threadWithTurns(turnIds: string[]): unknown {
       ]
     }))
   };
+}
+
+type SessionThreadFixture = Record<string, unknown> & {
+  turns: Array<Record<string, unknown> & { items: unknown[] }>;
+};
+
+function sessionThread(): SessionThreadFixture {
+  return {
+    id: "thread-1",
+    sessionId: "session-1",
+    forkedFromId: null,
+    parentThreadId: null,
+    preview: "session supplement",
+    ephemeral: false,
+    modelProvider: "openai",
+    createdAt: 1,
+    updatedAt: 3,
+    status: { type: "idle" },
+    path: "/tmp/codex-session.jsonl",
+    cwd: "/tmp/workspace",
+    cliVersion: "0.141.0",
+    source: "appServer",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: "Session",
+    turns: [
+      {
+        id: "turn-1",
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1,
+        items: [
+          {
+            type: "userMessage",
+            id: "user-1",
+            clientId: "client-user-1",
+            content: [{ type: "text", text: "排查活动缺失", text_elements: [] }]
+          },
+          {
+            type: "agentMessage",
+            id: "agent-1",
+            text: "我先看链路。",
+            phase: "commentary",
+            memoryCitation: null
+          },
+          {
+            type: "agentMessage",
+            id: "agent-2",
+            text: "证据已经清楚。",
+            phase: "commentary",
+            memoryCitation: null
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function sessionThreadWithNativePatch(): SessionThreadFixture {
+  const thread = sessionThread();
+  thread.turns[0]!.items.splice(2, 0, {
+    type: "fileChange",
+    id: "native-patch",
+    status: "success",
+    changes: [
+      {
+        path: "/tmp/workspace/src/web/components/Timeline.tsx",
+        diff: "@@ -1 +1\n-old line\n+new line"
+      }
+    ]
+  });
+  return thread;
+}
+
+function sessionJsonl(): string {
+  const turnMeta = { turn_id: "turn-1" };
+  const line = (payload: Record<string, unknown>, timestamp: string) =>
+    JSON.stringify({ timestamp, type: "response_item", payload: { ...payload, internal_chat_message_metadata_passthrough: turnMeta } });
+  return [
+    line(
+      {
+        type: "message",
+        id: "msg-1",
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "我先看链路。" }]
+      },
+      "2026-07-04T19:00:00.000Z"
+    ),
+    line(
+      {
+        type: "function_call",
+        id: "fc-skill",
+        call_id: "call-skill",
+        name: "exec_command",
+        arguments: JSON.stringify({
+          cmd: "sed -n '1,160p' /home/hzy/.codex/plugins/cache/demo/skills/systematic-debugging/SKILL.md",
+          workdir: "/tmp/workspace"
+        })
+      },
+      "2026-07-04T19:00:01.000Z"
+    ),
+    line(
+      {
+        type: "function_call_output",
+        call_id: "call-skill",
+        output: "---\nname: systematic-debugging\ndescription: Debug carefully\n---"
+      },
+      "2026-07-04T19:00:02.000Z"
+    ),
+    line(
+      {
+        type: "function_call",
+        id: "fc-read",
+        call_id: "call-read",
+        name: "exec_command",
+        arguments: JSON.stringify({
+          cmd: "sed -n '650,820p' src/server/app-server/client.ts",
+          workdir: "/tmp/workspace"
+        })
+      },
+      "2026-07-04T19:00:03.000Z"
+    ),
+    line(
+      {
+        type: "function_call_output",
+        call_id: "call-read",
+        output: "Chunk ID: read\nProcess exited with code 0\nOutput:\nclient code"
+      },
+      "2026-07-04T19:00:04.000Z"
+    ),
+    line(
+      {
+        type: "function_call",
+        id: "fc-search",
+        call_id: "call-search",
+        name: "exec_command",
+        arguments: JSON.stringify({
+          cmd: "rg -n \"timeline\" src/server src/web",
+          workdir: "/tmp/workspace"
+        })
+      },
+      "2026-07-04T19:00:05.000Z"
+    ),
+    line(
+      {
+        type: "function_call_output",
+        call_id: "call-search",
+        output: "Chunk ID: search\nProcess exited with code 0\nOutput:\nsrc/web/components/Timeline.tsx"
+      },
+      "2026-07-04T19:00:06.000Z"
+    ),
+    line(
+      {
+        type: "tool_search_call",
+        id: "tsc-search",
+        call_id: "call-tool-search",
+        status: "completed",
+        execution: "client",
+        arguments: {
+          query: "image generation built-in image_gen generate image",
+          limit: 10
+        }
+      },
+      "2026-07-04T19:00:06.100Z"
+    ),
+    line(
+      {
+        type: "tool_search_output",
+        call_id: "call-tool-search",
+        output: { results: [] }
+      },
+      "2026-07-04T19:00:06.200Z"
+    ),
+    line(
+      {
+        type: "custom_tool_call",
+        id: "ctc-patch",
+        call_id: "call-patch",
+        name: "apply_patch",
+        status: "completed",
+        input:
+          "*** Begin Patch\n*** Update File: src/web/components/Timeline.tsx\n@@\n-old line\n+new line\n*** End Patch\n"
+      },
+      "2026-07-04T19:00:06.300Z"
+    ),
+    line(
+      {
+        type: "custom_tool_call_output",
+        call_id: "call-patch",
+        output: "Success. Updated the following files:\nM /tmp/workspace/src/web/components/Timeline.tsx"
+      },
+      "2026-07-04T19:00:06.400Z"
+    ),
+    line(
+      {
+        type: "function_call",
+        id: "fc-plan",
+        call_id: "call-plan",
+        name: "update_plan",
+        arguments: JSON.stringify({
+          plan: [{ step: "复现真实事件", status: "in_progress" }]
+        })
+      },
+      "2026-07-04T19:00:06.500Z"
+    ),
+    line(
+      {
+        type: "message",
+        id: "msg-2",
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "证据已经清楚。" }]
+      },
+      "2026-07-04T19:00:07.000Z"
+    )
+  ].join("\n");
 }
 
 describe("createAppServerGateway", () => {
@@ -478,6 +965,19 @@ describe("createAppServerGateway", () => {
     expect(peer.connectCount).toBe(2);
     expect(peer.initializeCount).toBe(2);
     expect(peer.notifications).toEqual(["initialized", "initialized"]);
+  });
+
+  it("连接到已初始化的 app-server 时把 Already initialized 视为 ready", async () => {
+    const peer = new AlreadyInitializedPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await expect(gateway.listThreads()).resolves.toEqual({
+      threads: [],
+      nextCursor: null
+    });
+    expect(peer.connectCount).toBe(1);
+    expect(peer.initializeCount).toBe(1);
+    expect(peer.notifications).toEqual([]);
   });
 
   it("刷新读取会合并尚未 materialized 的实时工具输出", async () => {
@@ -734,6 +1234,111 @@ describe("createAppServerGateway", () => {
       turnId: "turn-1",
       text: "Checking working directory in Chinese"
     });
+  });
+
+  it("读取会话详情时从 rollout JSONL 补齐 app-server 历史缺失的工具活动", async () => {
+    const peer = new SessionResponseItemsPeer();
+    const gateway = new AppServerGateway(peer);
+
+    const detail = await gateway.readThread("thread-1");
+
+    const ids = detail.timeline.map((item) => item.id);
+    expect(ids.indexOf("agent-1")).toBeLessThan(ids.indexOf("fc-skill"));
+    expect(ids.indexOf("fc-skill")).toBeLessThan(ids.indexOf("fc-read"));
+    expect(ids.indexOf("fc-read")).toBeLessThan(ids.indexOf("fc-search"));
+    expect(ids.indexOf("fc-search")).toBeLessThan(ids.indexOf("tsc-search"));
+    expect(ids.indexOf("tsc-search")).toBeLessThan(ids.indexOf("ctc-patch"));
+    expect(ids.indexOf("ctc-patch")).toBeLessThan(ids.indexOf("agent-2"));
+    expect(ids).not.toContain("fc-plan");
+    expect(detail.timeline.filter((item) => item.role === "agent")).toHaveLength(2);
+    expect(detail.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "fc-skill",
+          turnId: "turn-1",
+          role: "tool",
+          toolKind: "dynamic",
+          server: "skills",
+          tool: "loaded",
+          text: "systematic-debugging",
+          status: "success"
+        }),
+        expect.objectContaining({
+          id: "fc-read",
+          turnId: "turn-1",
+          role: "tool",
+          toolKind: "command",
+          actionKind: "read",
+          server: "/tmp/workspace",
+          tool: "sed -n '650,820p' src/server/app-server/client.ts",
+          status: "success"
+        }),
+        expect.objectContaining({
+          id: "fc-search",
+          turnId: "turn-1",
+          role: "tool",
+          toolKind: "command",
+          actionKind: "search",
+          server: "/tmp/workspace",
+          tool: "rg -n \"timeline\" src/server src/web",
+          status: "success"
+        }),
+        expect.objectContaining({
+          id: "tsc-search",
+          turnId: "turn-1",
+          role: "tool",
+          toolKind: "command",
+          actionKind: "search",
+          server: "tool-search",
+          tool: "search image generation built-in image_gen generate image",
+          status: "success"
+        }),
+        expect.objectContaining({
+          id: "ctc-patch",
+          turnId: "turn-1",
+          role: "tool",
+          toolKind: "file",
+          server: "file",
+          tool: "src/web/components/Timeline.tsx",
+          added: 1,
+          removed: 1,
+          status: "success"
+        })
+      ])
+    );
+  });
+
+  it("读取单个 turn items 时也从 rollout JSONL 补齐缺失工具活动", async () => {
+    const peer = new SessionResponseItemsPeer();
+    const gateway = new AppServerGateway(peer);
+
+    const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
+
+    expect(page.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fc-skill", turnId: "turn-1", server: "skills", tool: "loaded" }),
+        expect.objectContaining({ id: "fc-read", turnId: "turn-1", actionKind: "read" }),
+        expect.objectContaining({ id: "fc-search", turnId: "turn-1", actionKind: "search" }),
+        expect.objectContaining({ id: "tsc-search", turnId: "turn-1", actionKind: "search" }),
+        expect.objectContaining({ id: "ctc-patch", turnId: "turn-1", toolKind: "file" })
+      ])
+    );
+    expect(page.items.map((item) => item.id)).not.toContain("fc-plan");
+  });
+
+  it("app-server 已有 fileChange 时不会把 JSONL apply_patch 补成重复文件活动", async () => {
+    const peer = new SessionResponseItemsWithNativePatchPeer();
+    const gateway = new AppServerGateway(peer);
+
+    const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
+    const fileItems = page.items.filter((item) => item.role === "tool" && item.toolKind === "file");
+
+    expect(fileItems).toHaveLength(1);
+    expect(fileItems[0]).toMatchObject({
+      id: "native-patch",
+      tool: "/tmp/workspace/src/web/components/Timeline.tsx"
+    });
+    expect(page.items.map((item) => item.id)).not.toContain("ctc-patch");
   });
 
   it("rollback 后旧 generation 的 backlog 可见事件不会重新进入 timeline", async () => {
@@ -1399,6 +2004,34 @@ describe("createAppServerGateway", () => {
     await expect(gateway.listThreadTurnItems({ threadId: "mock-thread-1", turnId: "mock-turn-1", limit: 2 })).resolves.toMatchObject({
       items: expect.arrayContaining([expect.objectContaining({ role: "agent", text: expect.stringContaining("Codex app-server") })]),
       nextCursor: null
+    });
+  });
+
+  it("app-server 不支持 turn items 分页时回退到 turns/list 读取目标 turn", async () => {
+    const peer = new UnsupportedTurnItemsPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await expect(
+      gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-target", limit: 100 })
+    ).resolves.toEqual({
+      items: [
+        {
+          id: "item-target-agent",
+          turnId: "turn-target",
+          role: "agent",
+          text: "fallback item"
+        }
+      ],
+      nextCursor: null
+    });
+    expect(peer.calls.map((call) => call.method)).toContain("thread/turns/items/list");
+    expect(peer.calls).toContainEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        limit: 100,
+        itemsView: "full"
+      }
     });
   });
 

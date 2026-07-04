@@ -370,6 +370,101 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 raw response message/agent_message 完成项映射为可读 agent 回复", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "message",
+            id: "msg-1",
+            role: "assistant",
+            content: [
+              { type: "output_text", text: "第一段" },
+              { type: "text", text: "第二段" }
+            ],
+            metadata: { turn_id: "turn-1" }
+          }
+        }
+      })
+    ).toMatchObject({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "msg-1",
+          role: "agent",
+          text: "第一段\n第二段"
+        }
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agent_message",
+            id: "agent-raw-1",
+            text: "最终回答",
+            metadata: { turn_id: "turn-1" }
+          }
+        }
+      })
+    ).toMatchObject({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        item: {
+          id: "agent-raw-1",
+          role: "agent",
+          text: "最终回答"
+        }
+      }
+    });
+  });
+
+  it("把未知 raw response 完成项映射为可见运行活动 fallback", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "future-raw-1",
+            type: "future_tool_call",
+            name: "future_lookup",
+            status: "completed",
+            payload: { value: "visible" }
+          }
+        }
+      })
+    ).toMatchObject({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "future-raw-1",
+          role: "tool",
+          toolKind: "dynamic",
+          server: "raw",
+          tool: "future_lookup",
+          status: "success",
+          text: expect.stringContaining("future_tool_call")
+        }
+      }
+    });
+  });
+
   it("把 item/completed 映射为完整 timeline item 更新", () => {
     expect(
       normalizeAppServerNotification({
@@ -520,6 +615,29 @@ describe("normalizeAppServerNotification", () => {
     }
   });
 
+  it("把 Skills 变更通知映射为无归属缓存失效事件", () => {
+    expect(normalizeAppServerNotification({ method: "skills/changed", params: {} })).toEqual({
+      type: "codex-event",
+      event: { kind: "skills_changed" }
+    });
+  });
+
+  it("即使 Skills 变更通知携带额外字段也只作为缓存失效事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "skills/changed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          skills: [{ name: "openspec-explore" }, "systematic-debugging"]
+        }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: { kind: "skills_changed" }
+    });
+  });
+
   it("把会话设置更新映射为浏览器会话设置事件", () => {
     expect(
       normalizeAppServerNotification({
@@ -556,6 +674,7 @@ describe("normalizeAppServerNotification", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
+        approvalsReviewer: "user",
         activePermissionProfile: { id: "read-only", extends: null },
         collaborationMode: "plan"
       }

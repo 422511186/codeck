@@ -26,6 +26,7 @@ export async function POST(request: Request): Promise<Response> {
       workspaceRoots?: string[];
       model?: string;
       permissions?: string | null;
+      approvalsReviewer?: "user" | "auto_review" | "guardian_subagent" | null;
       clientOperationId?: string;
     };
     const input = {
@@ -38,6 +39,7 @@ export async function POST(request: Request): Promise<Response> {
       workspaceRoots: input.workspaceRoots,
       model: input.model,
       permissions: input.permissions,
+      approvalsReviewer: input.approvalsReviewer,
       clientOperationId: body.clientOperationId
     });
     const start = () => startThreadOnly(input);
@@ -59,6 +61,7 @@ async function startThreadOnly(input: {
   workspaceRoots?: string[];
   model?: string;
   permissions?: string | null;
+  approvalsReviewer?: "user" | "auto_review" | "guardian_subagent" | null;
 }): Promise<StartThreadRouteResult> {
   const thread = await getAppServerGateway().startThread(input);
   return { thread };

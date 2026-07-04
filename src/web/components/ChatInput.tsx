@@ -5,6 +5,7 @@ import { codex } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { getDraft, setDraft } from "../storage/drafts";
 import type { SkillOption, SkillReference } from "../api/types";
+import { useStore } from "../state/store";
 
 export type ChatInputProps = {
   threadId: string;
@@ -44,6 +45,7 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const skillLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const skillsCacheVersion = useStore((s) => s.skillsCacheVersion);
 
   useEffect(() => {
     setText(getDraft(props.threadId));
@@ -74,6 +76,13 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
     setText(props.draftOverride.text);
   }, [props.draftOverride?.version]);
+
+  useEffect(() => {
+    setSkillOptions([]);
+    setSkillsError(null);
+    loadedSkillKeyRef.current = null;
+    skillLoadRef.current = null;
+  }, [skillsCacheVersion]);
 
   useEffect(() => {
     setDraft(props.threadId, text);
@@ -330,7 +339,7 @@ function skillLoadKey(cwd?: string): string {
 }
 
 function modelChipText(modelLabel: string, effortLabel?: string): string {
-  return effortLabel ? `${modelLabel}，${effortLabel}` : modelLabel;
+  return effortLabel ? `${modelLabel} ${effortLabel}` : modelLabel;
 }
 
 function AddPanel({

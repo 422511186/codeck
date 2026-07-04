@@ -39,7 +39,7 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **THEN** 调用 `gateway.readPluginSkill({remoteMarketplaceName, remotePluginId, skillName})`，返回技能内容
 
 ### Requirement: Skills management
-系统 SHALL 支持列出技能、写入技能配置和设置额外根路径。返回给移动端的 `MobileSkillView` MUST 包含 `cwd`、`name`、`path`、`description`、`shortDescription`、`scope` 和 `enabled`，其中 `path` 用于构造 app-server `UserInput.skill`。
+系统 SHALL 支持列出技能、写入技能配置和设置额外根路径。返回给移动端的 `MobileSkillView` MUST 包含 `cwd`、`name`、`path`、`description`、`shortDescription`、`scope` 和 `enabled`，其中 `path` 用于构造 app-server `UserInput.skill`。Skills 加载、启用状态或 roots 变化通知 SHALL 使移动端 Skills picker 缓存失效，并在具备可靠 thread/turn 归属时作为 timeline 轻量活动展示。
 
 #### Scenario: List skills
 - **WHEN** 已认证用户通过 settings 聚合请求 `skills/list`
@@ -60,10 +60,24 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 #### Scenario: Write skill config
 - **WHEN** 已认证用户 POST `/api/codex/skills/config` 并提供 `name`、`path`、`enabled`
 - **THEN** 调用 `gateway.writeSkillConfig()`，返回 `{effectiveEnabled}`
+- **AND** 移动端 MUST 使 Skills picker 缓存失效
 
 #### Scenario: Set skills extra roots
 - **WHEN** 已认证用户 POST `/api/codex/skills/extra-roots` 并提供 `extraRoots`
 - **THEN** 调用 `gateway.setSkillsExtraRoots(extraRoots)`
+- **AND** 移动端 MUST 使 Skills picker 缓存失效
+
+#### Scenario: Skills changed notification refreshes picker cache
+- **WHEN** app-server 通知 Skills 已加载、变更、启用状态变化或 roots 变化
+- **THEN** 移动端 MUST 使已缓存的 chat picker Skills 列表失效
+- **AND** 下一次打开 picker 或强制刷新时 MUST 重新请求 `/api/codex/skills`
+
+#### Scenario: Runtime loaded Skills are distinct from selected Skill references
+- **WHEN** 用户消息中包含用户主动选择的 Skill 引用
+- **AND** 同一 turn 中 runtime 又发送 Skills 加载活动
+- **THEN** 用户消息 MUST 继续以 chips 展示主动选择的 Skill 引用
+- **AND** runtime 加载活动 MUST 作为 timeline activity 展示
+- **AND** 两者 MUST NOT 互相覆盖或重复去重
 
 ### Requirement: Hooks management
 系统 SHALL 支持列出 hooks 信息。
@@ -156,7 +170,7 @@ MCP 服务器启动状态变更 SHALL 通过 `mcpServer/startupStatus/updated` �
 - **THEN** 调用 `gateway.startWindowsSandboxSetup()`
 
 ### Requirement: Chat Skill 引用在 timeline 中保持可回放
-通过聊天输入区选择的 Skill 引用 SHALL 作为结构化输入发送，并在后续 timeline 展示、历史分页、刷新修复中保持可识别。系统 SHALL 使用 Skill `name` 作为主要展示文案，使用 `path` 作为稳定标识和发送协议字段。
+通过聊天输入区选择的 Skill 引用 SHALL 作为结构化输入发送，并在后续 timeline 展示、历史分页、刷新修复中保持可识别。系统 SHALL 使用 Skill `name` 作为主要展示文案，使用 `path` 作为稳定标识和发送协议字段。发送失败后的重试 SHALL 保留原用户消息中的 Skill 引用。
 
 #### Scenario: 发送结构化 Skill 引用
 - **WHEN** 用户通过聊天输入区选择 Skill 后发送消息
@@ -173,11 +187,9 @@ MCP 服务器启动状态变更 SHALL 通过 `mcpServer/startupStatus/updated` �
 - **THEN** timeline MUST 展示每个 Skill 的名称
 - **AND** 每个 Skill MUST 使用其 `name/path` 组合保持稳定去重和渲染 key
 
-**Open Questions**
+#### Scenario: 失败消息重试保留 Skill 引用
+- **WHEN** 包含 Skill 引用的用户消息发送失败
+- **AND** 用户从失败消息触发重试
+- **THEN** 重试请求 MUST 继续携带原消息的 Skill 引用
+- **AND** timeline 中的新用户消息 MUST 继续展示这些 Skill chips
 
-1. **插件安装/卸载无审计记录**：`plugin/install` 和 `plugin/uninstall` 路由不记录审计日志。插件可能引入新的代码执行能力（hooks、MCP servers），是否需要审计？
-2. **MCP 资源读取无路径校验**：`readMcpResource` 接收 server 和 uri 参数，但不做路径校验或内容审查。MCP 服务器可能返回敏感数据。是否需要限制？
-3. **MCP OAuth login 无审计**：`mcpServer/oauth/login` 不记录审计日志。OAuth 流程可能涉及外部认证。是否需要记录？
-4. **Skills extra roots 无校验**：`setSkillsExtraRoots` 接收 extraRoots 数组，但不校验这些路径是否在工作区范围内。是否应该校验？
-5. **Windows sandbox readiness 无审计**：sandbox 操作不记录审计日志。
-6. **Mock experimental method 无安全限制**：`mock/experimentalMethod` 是一个调试端点，在生产模式（spawn/external）下仍然可访问。是否应该仅在 mock 模式下可用？

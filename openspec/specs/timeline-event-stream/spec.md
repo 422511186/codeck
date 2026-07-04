@@ -294,3 +294,145 @@ timeline event stream 触发的 snapshot repair SHALL 使用有界最新 timelin
 - **THEN** 客户端 MUST 继续忽略重复事件
 - **AND** MUST NOT 因 repair 缩小了 timeline 窗口而重复追加文本
 
+### Requirement: Skills notifications are normalized for browser consumption
+timeline event stream SHALL normalize app-server Skills 加载、变更或失效通知为浏览器可消费事件。该事件 SHALL 至少能驱动 Skills picker 缓存失效；当事件具备可靠 thread/turn 归属且代表用户可见 agent 工作时，timeline SHALL 能将其显示为轻量 activity。
+
+#### Scenario: Skills notification invalidates browser cache
+- **WHEN** app-server 发送 Skills 加载、变更、启用状态变化或 roots 变化通知
+- **THEN** 浏览器 MUST 收到可识别的 Skills 失效事件或带 Skills scope 的 settings invalidation 事件
+- **AND** 前端 MUST 使后续 Skills picker 打开时重新读取 Skills 列表
+
+#### Scenario: Thread-scoped Skills activity is visible
+- **WHEN** Skills 通知包含可靠的 `threadId` 或 `turnId`
+- **AND** 该通知表示当前 turn 中 agent/runtime 加载或使用了 Skills
+- **THEN** timeline MUST 能显示 `Skills loaded` 或等价轻量 activity
+- **AND** activity MUST 显示 Skill 名称列表或数量中可用的信息
+
+#### Scenario: Ownerless Skills notification is not misattributed
+- **WHEN** Skills 通知没有可靠的 thread 归属
+- **THEN** 前端 MUST NOT 默认把该事件追加到当前 active thread
+- **AND** 前端 MUST 仍执行 Skills picker 缓存失效或 settings 刷新
+
+### Requirement: Activity-related events preserve stream identity
+所有会影响 timeline 可见 activity 的 Skills、tool、command、diff、reasoning 或 raw response 事件 SHALL 携带或获得稳定的浏览器事件身份。客户端 SHALL 对这些事件应用与现有 timeline delta 相同的去重、generation、revision 和 snapshot repair 规则。
+
+#### Scenario: Duplicate Skills activity is ignored
+- **WHEN** 浏览器因重连、补发或双通道竞态重复收到同一 Skills activity event
+- **THEN** timeline MUST 只显示一次对应 Skills activity
+- **AND** Skills picker 缓存失效 MUST 不导致重复 UI 插入
+
+#### Scenario: Skills activity respects generation
+- **WHEN** thread rollback、message rewind 或 snapshot repair 后 generation 已推进
+- **AND** 浏览器收到旧 generation 的 Skills activity event
+- **THEN** 前端 MUST 忽略该可见 activity
+- **AND** timeline MUST NOT 重新显示已删除历史中的 Skills 加载活动
+
+#### Scenario: Reconnect preserves activity grouping
+- **WHEN** timeline event stream 断线后补发 command、tool、reasoning、diff 或 Skills activity events
+- **THEN** 前端 MUST 按原始 event identity 去重
+- **AND** activity block MUST 不因为补发而重复显示同一摘要行或重复累加数量
+
+### Requirement: Sent turn output appears without manual refresh
+移动端 timeline SHALL 在用户发送消息并成功启动 turn 后，自动显示该 turn 的 agent 回复、工具活动和完成状态。即使 `POST /api/codex/turns/start` 只返回 `turnId`，客户端也 MUST 通过实时事件或 snapshot repair/read-thread 兜底让可见 timeline 与真实 thread history 收敛，不能要求用户手动刷新页面。
+
+#### Scenario: Started turn receives live visible events
+- **WHEN** 用户发送消息
+- **AND** `POST /api/codex/turns/start` 成功返回 `turnId`
+- **AND** app-server 随后发送 agent message、tool、raw response 或 turn progress 相关通知
+- **THEN** 浏览器 MUST 将这些通知归一化为当前 thread 的可见 timeline entries 或 activity entries
+- **AND** 用户 MUST 能在不刷新页面的情况下看到 agent 回复或活动进展
+
+#### Scenario: Turn completion without visible server entries triggers repair
+- **WHEN** 当前 active turn 已收到 `turn_completed` 或等价完成事件
+- **AND** 该 turn 在当前 timeline 中没有任何可见的 agent message、tool、raw response 或 activity entry
+- **THEN** 前端 MUST 触发 snapshot repair 或重新读取 thread history
+- **AND** repair 后 MUST 将 thread history 中属于该 turn 的回复和活动合并到 timeline
+
+#### Scenario: Missing live item event is repaired from history
+- **WHEN** `startTurn` 已成功
+- **AND** 实时流没有送达可见 item/raw response 事件
+- **AND** 重新读取 thread history 后发现该 turn 已产生 agent 回复
+- **THEN** 前端 MUST 合并该回复
+- **AND** timeline MUST 从“需要刷新才可见”的状态恢复为当前页面可见
+
+#### Scenario: Repaired entries do not duplicate delayed live events
+- **WHEN** snapshot repair 已把某个 turn 的 agent 回复或活动合并进 timeline
+- **AND** 后续又收到同一内容对应的延迟 live event 或重连补发 event
+- **THEN** 前端 MUST 根据 event identity、thread item id、turn id、generation 或 revision 去重
+- **AND** timeline MUST NOT 显示重复的 agent 回复、activity 摘要或完成状态
+
+### Requirement: Runtime activity events are semantically classified
+timeline event stream SHALL preserve enough structured semantics for runtime activity rendering. Browser-visible historical items and realtime notifications that represent tool loading, Skill reading, file reads, directory listing, search, command execution, file changes, MCP/dynamic tools, web/image operations, public reasoning, and raw response tool calls MUST be classified so the mobile timeline can render Codex App style inline activity logs.
+
+#### Scenario: Loaded tools activity has runtime scope
+- **WHEN** app-server history or live notifications contain a turn-scoped activity representing loaded tools, loaded Skill instruction files, or equivalent runtime tool preparation
+- **THEN** browser events or timeline items MUST preserve the `threadId`, `turnId`, stable item identity, loaded count, and known tool or Skill names
+- **AND** the mobile timeline MUST be able to render a `Loaded N tools` inline activity log without relying on ownerless cache invalidation events
+
+#### Scenario: Read search command activity keeps action kind
+- **WHEN** app-server history or live notifications contain read, list, search, grep, shell, bash, process, MCP or dynamic tool activity
+- **THEN** browser-visible events MUST preserve or derive an action kind suitable for `Read files`、`Searched files`、`Ran commands` 或等价摘要
+- **AND** full output and low-priority metadata MUST remain available for expanded details when provided
+
+#### Scenario: Unknown runtime activity falls back readably
+- **WHEN** app-server emits a newer runtime activity variant not yet fully recognized by the Web adapter
+- **THEN** timeline event stream MUST expose a readable fallback with type, name, status and available text
+- **AND** the fallback MUST remain eligible for inline activity rendering instead of being silently dropped
+
+### Requirement: Skills cache invalidation is not runtime activity
+ownerless Skills change notifications SHALL be treated as cache invalidation, not as visible timeline runtime activity. A Skills-related event MAY become visible only when it has reliable `threadId`/`turnId` ownership and represents work performed during a turn, such as runtime Skill/tool loading or reading.
+
+#### Scenario: Ownerless skills changed event only invalidates cache
+- **WHEN** app-server sends `skills/changed` without reliable thread or turn ownership
+- **THEN** browser state MUST invalidate the Skills picker cache
+- **AND** timeline MUST NOT append `Loaded tools`、`Skills loaded` 或任何 visible activity to the active thread
+
+#### Scenario: Thread scoped runtime skill loading is visible
+- **WHEN** app-server sends or history returns a Skills/tool loading event with reliable `threadId` and `turnId`
+- **AND** the event represents runtime work performed for that turn
+- **THEN** timeline MUST render it as an inline activity log
+- **AND** the log MUST include known Skill/tool names or a count
+
+#### Scenario: Ambiguous skills event is conservative
+- **WHEN** a Skills-related event contains names but does not prove it belongs to the active turn
+- **THEN** browser state MUST treat it as cache invalidation only
+- **AND** MUST NOT infer ownership from the currently open page
+
+### Requirement: Inline activity ordering preserves event order
+timeline event stream and browser store SHALL preserve the relative order between assistant messages and runtime activity entries within the same turn. Sorting, repair, completion merging, or equivalent-output merging MUST NOT reorder activity entries ahead of assistant messages solely because of role or kind.
+
+#### Scenario: Activity remains between assistant messages
+- **WHEN** live events or repaired history arrive in the order assistant A, command activity, assistant B, file change activity, assistant C
+- **THEN** browser timeline MUST preserve that order
+- **AND** inline activity logs MUST render between the corresponding assistant messages
+
+#### Scenario: Snapshot repair does not bucket activities
+- **WHEN** snapshot repair merges main timeline entries with turn item details
+- **THEN** repair MUST use the most precise available item order as the skeleton
+- **AND** MUST NOT group all tool/diff/reasoning entries before all assistant messages in the same turn
+
+#### Scenario: Equivalent item merge keeps position
+- **WHEN** a live delta entry and a later completed item are equivalent
+- **THEN** browser store MUST merge them without moving the visible entry across unrelated assistant or activity entries
+- **AND** the resulting inline activity log order MUST remain stable
+
+### Requirement: Inline activity event identity is deduplicated
+All events that can produce inline activity logs SHALL participate in the same event id, generation, revision, snapshot suppression and equivalent-output deduplication model as agent messages and reasoning. Reconnect, live completion, and snapshot repair MUST NOT duplicate visible inline activity rows or inflate activity counts.
+
+#### Scenario: Duplicate loaded tools event is ignored
+- **WHEN** browser receives the same turn-scoped loaded tools event twice due to reconnect or dual channel delivery
+- **THEN** timeline MUST render one inline activity log row for that event
+- **AND** loaded count and visible detail rows MUST NOT be doubled
+
+#### Scenario: Repair and delayed live activity render once
+- **WHEN** snapshot repair inserts a command/read/file activity
+- **AND** a delayed live event for the same item arrives later
+- **THEN** browser store MUST merge or ignore the delayed event
+- **AND** inline activity logs MUST NOT show duplicate command, read or file change rows
+
+#### Scenario: Old generation activity is rejected
+- **WHEN** rollback、rewind 或 fork 后 timeline generation 已推进
+- **AND** browser receives an inline-activity-producing event from an older generation
+- **THEN** browser store MUST ignore that visible activity event
+- **AND** timeline MUST NOT reintroduce deleted turn activity
+

@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { AppServerStatus, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
+import type { AppServerStatus, ApprovalsReviewer, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
@@ -48,6 +48,7 @@ export type ThreadState = {
   model: string | null;
   modelEffort: string | null;
   permissionProfileId?: string | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
 };
@@ -57,6 +58,7 @@ type State = {
   appServer: AppServerStatus | null;
   threads: Record<string, ThreadState>;
   activeThreadId: string | null;
+  skillsCacheVersion: number;
 };
 
 type Actions = {
@@ -88,7 +90,7 @@ type Actions = {
   clearSnapshotRepair: (threadId: string) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
-  setPermissionProfile: (threadId: string, profileId: string | null) => void;
+  setPermissionProfile: (threadId: string, profileId: string | null, approvalsReviewer?: ApprovalsReviewer | null) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
   addApproval: (threadId: string, req: PendingServerRequest) => void;
   setPendingRequests: (reqs: PendingServerRequest[]) => void;
@@ -121,6 +123,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     model: null,
     modelEffort: null,
     permissionProfileId: undefined,
+    approvalsReviewer: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
     ...init,
@@ -134,6 +137,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   appServer: null,
   threads: {},
   activeThreadId: null,
+  skillsCacheVersion: 0,
   setWsState: (s) => set({ wsState: s }),
   setAppServer: (s) => set({ appServer: s }),
   setActiveThread: (id) => set({ activeThreadId: id }),
@@ -492,10 +496,19 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
-  setPermissionProfile: (threadId, profileId) =>
+  setPermissionProfile: (threadId, profileId, approvalsReviewer) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      return { threads: { ...state.threads, [threadId]: { ...prev, permissionProfileId: profileId } } };
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            permissionProfileId: profileId,
+            approvalsReviewer: approvalsReviewer === undefined ? prev.approvalsReviewer : approvalsReviewer
+          }
+        }
+      };
     }),
   setPlan: (threadId, plan) =>
     set((state) => {
@@ -563,6 +576,10 @@ export const useStore = create<State & Actions>((set, get) => ({
     }
     if (event.type === "codex-event") {
       const ev = event.event as { kind: string; threadId?: string; [k: string]: unknown };
+      if (ev.kind === "skills_changed") {
+        set((state) => ({ skillsCacheVersion: state.skillsCacheVersion + 1 }));
+        return;
+      }
       const threadId = ev.threadId;
       if (!threadId) return;
       get().ensureThread(threadId);
@@ -607,6 +624,14 @@ export const useStore = create<State & Actions>((set, get) => ({
             get().setRunning(threadId, false);
           }
           get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
+          if (
+            eventTurnId &&
+            currentActiveTurnId === eventTurnId &&
+            (ev.kind === "turn.completed" || ev.kind === "turn_completed" || ev.status === "completed") &&
+            !hasVisibleServerOutputForTurn(get().threads[threadId]?.entries ?? [], eventTurnId)
+          ) {
+            get().requestSnapshotRepair(threadId);
+          }
           break;
         }
         case "plan.delta": {
@@ -752,10 +777,14 @@ export const useStore = create<State & Actions>((set, get) => ({
           }
           if ("activePermissionProfile" in ev) {
             const activeProfile = ev.activePermissionProfile as { id?: unknown } | null;
-            get().setPermissionProfile(
-              threadId,
-              activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null
-            );
+            const profileId = activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null;
+            const reviewer = "approvalsReviewer" in ev ? approvalsReviewerOrNull(ev.approvalsReviewer) : undefined;
+            const current = get().threads[threadId];
+            const preserveReviewer =
+              reviewer === undefined &&
+              current?.permissionProfileId === profileId &&
+              current.approvalsReviewer !== undefined;
+            get().setPermissionProfile(threadId, profileId, preserveReviewer ? undefined : reviewer ?? null);
           }
           break;
         }
@@ -1094,6 +1123,7 @@ function appendDeltaToExistingEntry(current: TimelineEntry, entry: TimelineEntry
       body: {
         ...current.body,
         toolKind: entry.body.toolKind ?? current.body.toolKind,
+        actionKind: entry.body.actionKind ?? current.body.actionKind,
         server: entry.body.server || current.body.server,
         tool: entry.body.tool || current.body.tool,
         result: `${current.body.result ?? ""}${entry.body.result ?? ""}`,
@@ -1143,6 +1173,29 @@ function isVisibleTimelineEvent(kind: string): boolean {
     "item.updated",
     "item_updated"
   ]).has(kind);
+}
+
+function hasVisibleServerOutputForTurn(entries: TimelineEntry[], turnId: string): boolean {
+  return entries.some((entry) => {
+    if (entry.turnId !== turnId) {
+      return false;
+    }
+    switch (entry.body.kind) {
+      case "agent-message":
+        return entry.body.text.trim().length > 0;
+      case "reasoning":
+        return entry.body.text.trim().length > 0;
+      case "tool":
+        return Boolean((entry.body.result ?? entry.body.arguments ?? entry.body.tool).trim());
+      case "command":
+        return Boolean((entry.body.output ?? entry.body.command).trim());
+      case "diff":
+      case "error":
+        return true;
+      default:
+        return false;
+    }
+  });
 }
 
 function shouldIgnoreStaleItemRevision(
@@ -1312,6 +1365,7 @@ function mergeEquivalentOutputEntry(current: TimelineEntry, next: TimelineEntry)
       snapshotSequence: base.snapshotSequence ?? other.snapshotSequence,
       body: {
         ...baseBody,
+        actionKind: baseBody.actionKind ?? otherBody.actionKind,
         arguments: baseBody.arguments ?? otherBody.arguments,
         result: longerText(current.body.result ?? "", next.body.result ?? "") || undefined,
         imagePaths: baseBody.imagePaths ?? otherBody.imagePaths
@@ -1485,13 +1539,6 @@ function orderTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => {
-      if (left.entry.turnId && right.entry.turnId && left.entry.turnId === right.entry.turnId) {
-        const rank = roleRank(left.entry) - roleRank(right.entry);
-        if (rank !== 0) {
-          return rank;
-        }
-      }
-
       const leftTurn = left.entry.turnId ? turnOrder.get(left.entry.turnId) : undefined;
       const rightTurn = right.entry.turnId ? turnOrder.get(right.entry.turnId) : undefined;
       if (typeof leftTurn === "number" && typeof rightTurn === "number" && leftTurn !== rightTurn) {
@@ -1501,24 +1548,6 @@ function orderTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
       return left.index - right.index;
     })
     .map(({ entry }) => entry);
-}
-
-function roleRank(entry: TimelineEntry): number {
-  switch (entry.body.kind) {
-    case "user-message":
-      return 0;
-    case "reasoning":
-      return 1;
-    case "tool":
-    case "command":
-      return 2;
-    case "diff":
-      return 3;
-    case "agent-message":
-      return 4;
-    default:
-      return 5;
-  }
 }
 
 function removeConfirmedLocalUserMessages(entries: TimelineEntry[]): TimelineEntry[] {
@@ -1640,4 +1669,8 @@ function normalizePendingRequest(req: PendingServerRequest): PendingServerReques
     requestId: String(req.requestId),
     request: req.request ?? (typeof req.params === "object" && req.params !== null ? (req.params as Record<string, unknown>) : {})
   };
+}
+
+function approvalsReviewerOrNull(value: unknown): ApprovalsReviewer | null {
+  return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : null;
 }

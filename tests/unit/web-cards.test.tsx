@@ -198,11 +198,10 @@ describe("ReasoningCard", () => {
       />
     );
 
-    expect(screen.getByText("思考中…")).toBeInTheDocument();
+    expect(screen.getByText("Thinking...")).toBeInTheDocument();
   });
 
-  it("should show streamed reasoning text while running", async () => {
-    const user = userEvent.setup();
+  it("should hide streamed reasoning text while running", () => {
     const fullText = "先检查 timeline 数据流\n再定位 UI 渲染问题";
     render(
       <ReasoningCard
@@ -213,18 +212,13 @@ describe("ReasoningCard", () => {
       />
     );
 
-    expect(screen.getByText(/思考中/)).toBeInTheDocument();
-    expect(screen.getByText(/先检查 timeline 数据流/)).toBeInTheDocument();
-
-    const card = screen.getByText(/思考中/).closest("button");
-    await user.click(card!);
-
-    await waitFor(() => {
-      expect(screen.getByText(/再定位 UI 渲染问题/)).toBeInTheDocument();
-    });
+    expect(screen.getByText(/Thinking\.\.\./)).toBeInTheDocument();
+    expect(screen.queryByText(/先检查 timeline 数据流/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/再定位 UI 渲染问题/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制完整推理" })).not.toBeInTheDocument();
   });
 
-  it("should show a recognizable reasoning title when completed", () => {
+  it("should show a recognizable reasoning title when completed without reasoning text", () => {
     render(
       <ReasoningCard
         entry={{
@@ -234,12 +228,11 @@ describe("ReasoningCard", () => {
       />
     );
 
-    expect(screen.getByText("推理过程")).toBeInTheDocument();
-    expect(screen.getByText(/Analysis of the problem/)).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText(/Analysis of the problem/)).not.toBeInTheDocument();
   });
 
-  it("should expand and show full reasoning content", async () => {
-    const user = userEvent.setup();
+  it("should not expand completed reasoning content", () => {
     const fullText = "First, I need to check the structure\nThen analyze the dependencies";
     render(
       <ReasoningCard
@@ -250,14 +243,10 @@ describe("ReasoningCard", () => {
       />
     );
 
-    const card = screen.getByText("推理过程").closest("button");
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText(/First, I need to check/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Then analyze the dependencies/)).not.toBeInTheDocument();
-
-    await user.click(card!);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Then analyze the dependencies/)).toBeInTheDocument();
-    });
+    expect(screen.queryByRole("button", { name: "复制完整推理" })).not.toBeInTheDocument();
   });
 });
 

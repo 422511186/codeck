@@ -7,7 +7,8 @@ describe("web store codex events", () => {
       wsState: "idle",
       appServer: null,
       threads: {},
-      activeThreadId: null
+      activeThreadId: null,
+      skillsCacheVersion: 0
     });
   });
 
@@ -100,6 +101,43 @@ describe("web store codex events", () => {
         turnId: "turn-1",
         body: { kind: "agent-message", text: "第一段第二段" }
       })
+    ]);
+  });
+
+  it("preserves interleaved activity order inside a turn instead of hoisting activity before agent messages", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "agent-1", role: "agent", text: "先说明第一段" }
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        delta: "npm test\npassed\n"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "agent-2", role: "agent", text: "再说明第二段" }
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "agent-1",
+      "cmd-1",
+      "agent-2"
     ]);
   });
 
@@ -1080,6 +1118,89 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
   });
 
+  it("requests snapshot repair when a completed active turn has no visible server output", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
+  });
+
+  it("does not request repair when the completed active turn already has visible server output", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "实时回复"
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeNull();
+  });
+
+  it("invalidates the Skills cache from an ownerless skills_changed event", () => {
+    expect(useStore.getState().skillsCacheVersion).toBe(0);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "skills_changed" }
+    });
+
+    expect(useStore.getState().skillsCacheVersion).toBe(1);
+    expect(useStore.getState().threads["thread-1"]).toBeUndefined();
+  });
+
+  it("treats thread-scoped skills_changed as cache invalidation unless it is runtime activity", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "skills-evt-1",
+        kind: "skills_changed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        skills: ["openspec-explore", "systematic-debugging"],
+        count: 2
+      }
+    });
+
+    expect(useStore.getState().skillsCacheVersion).toBe(1);
+    expect(useStore.getState().threads["thread-1"]).toBeUndefined();
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "skills-evt-1",
+        kind: "skills_changed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        skills: ["openspec-explore", "systematic-debugging"],
+        count: 2
+      }
+    });
+
+    expect(useStore.getState().skillsCacheVersion).toBe(2);
+    expect(useStore.getState().threads["thread-1"]).toBeUndefined();
+  });
+
   it("streams command output deltas into the same running tool entry", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -1279,6 +1400,96 @@ describe("web store codex events", () => {
       expect.objectContaining({
         id: "agent-live",
         body: { kind: "agent-message", text: "直播输出完成" }
+      })
+    );
+  });
+
+  it("preserves structured tool action kind when merging live output deltas", () => {
+    useStore.getState().appendTextToEntry("thread-1", {
+      id: "tool-1",
+      turnId: "turn-1",
+      createdAt: 1,
+      body: {
+        kind: "tool",
+        toolKind: "command",
+        server: "/repo",
+        tool: "ls src",
+        status: "running",
+        result: "app"
+      }
+    });
+
+    useStore.getState().appendTextToEntry("thread-1", {
+      id: "tool-1",
+      turnId: "turn-1",
+      createdAt: 2,
+      body: {
+        kind: "tool",
+        toolKind: "command",
+        actionKind: "list",
+        server: "/repo",
+        tool: "ls src",
+        status: "success",
+        result: ".ts"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries[0]?.body).toEqual(
+      expect.objectContaining({
+        kind: "tool",
+        actionKind: "list",
+        result: "app.ts"
+      })
+    );
+  });
+
+  it("preserves structured tool action kind when merging equivalent snapshot output", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "tool-live",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: {
+            kind: "tool",
+            toolKind: "command",
+            server: "/repo",
+            tool: "rg timeline src",
+            status: "success",
+            result: "src/app.ts\nsrc/test.ts"
+          }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().mergeThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "tool-snapshot",
+          turnId: "turn-1",
+          createdAt: 2,
+          body: {
+            kind: "tool",
+            toolKind: "command",
+            actionKind: "search",
+            server: "/repo",
+            tool: "rg timeline src",
+            status: "success",
+            result: "src/app.ts"
+          }
+        }
+      ],
+      null
+    );
+
+    expect(useStore.getState().threads["thread-1"]?.entries[0]?.body).toEqual(
+      expect.objectContaining({
+        kind: "tool",
+        actionKind: "search",
+        result: "src/app.ts\nsrc/test.ts"
       })
     );
   });
@@ -1525,7 +1736,8 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
-        activePermissionProfile: { id: "read-only", extends: null },
+        activePermissionProfile: { id: ":workspace", extends: null },
+        approvalsReviewer: "auto_review",
         collaborationMode: "plan"
       }
     });
@@ -1535,7 +1747,31 @@ describe("web store codex events", () => {
         mode: "plan",
         model: "gpt-5-codex",
         modelEffort: "high",
-        permissionProfileId: "read-only"
+        permissionProfileId: ":workspace",
+        approvalsReviewer: "auto_review"
+      })
+    );
+  });
+
+  it("does not overwrite a complete local permission mode with an incomplete settings event", () => {
+    useStore.getState().setPermissionProfile("thread-1", ":workspace", "auto_review");
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_settings_updated",
+        threadId: "thread-1",
+        model: null,
+        reasoningEffort: null,
+        activePermissionProfile: { id: ":workspace", extends: null },
+        collaborationMode: null
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]).toEqual(
+      expect.objectContaining({
+        permissionProfileId: ":workspace",
+        approvalsReviewer: "auto_review"
       })
     );
   });

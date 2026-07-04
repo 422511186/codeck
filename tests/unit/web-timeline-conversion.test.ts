@@ -194,6 +194,22 @@ describe("timeline conversion", () => {
     expect((entry.body as any).arguments).toContain("README.md");
   });
 
+  it("should preserve tool action kind for activity grouping", () => {
+    const item: TimelineItem = {
+      id: "6b",
+      role: "tool",
+      text: "src/app.ts",
+      toolKind: "command",
+      actionKind: "search",
+      server: "/repo",
+      tool: "rg timeline src",
+      status: "success"
+    };
+    const entry = timelineItemToEntry(item, 6001);
+    expect(entry.body.kind).toBe("tool");
+    expect((entry.body as any).actionKind).toBe("search");
+  });
+
   it("should convert diff items and compute line stats", () => {
     const item: TimelineItem = {
       id: "diff-1",

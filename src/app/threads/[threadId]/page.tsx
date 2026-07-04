@@ -14,10 +14,10 @@ import { ChatInput } from "../../../web/components/ChatInput";
 import {
   DEFAULT_COLLABORATION_MODEL,
   collaborationModeForChatMode,
+  type ApprovalsReviewer,
   type ChatMode,
   type ModelOption,
   type PendingServerRequest,
-  type PermissionProfile,
   type SkillReference,
   type ThreadDetail
 } from "../../../web/api/types";
@@ -28,6 +28,7 @@ import { settingsStore } from "../../../web/storage/settings";
 const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
+const STARTED_TURN_EMPTY_OUTPUT_REPAIR_DELAY_MS = 2_500;
 
 export default function ThreadPage(): JSX.Element {
   const params = useParams<{ threadId: string }>();
@@ -60,6 +61,7 @@ export default function ThreadPage(): JSX.Element {
   const threadModel = useStore((s) => s.threads[threadId]?.model ?? null);
   const threadModelEffort = useStore((s) => s.threads[threadId]?.modelEffort ?? null);
   const threadPermissionProfileId = useStore((s) => s.threads[threadId]?.permissionProfileId);
+  const threadApprovalsReviewer = useStore((s) => s.threads[threadId]?.approvalsReviewer);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
@@ -72,7 +74,6 @@ export default function ThreadPage(): JSX.Element {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showPermissionPicker, setShowPermissionPicker] = useState(false);
   const [models, setModels] = useState<ModelOption[] | null>(null);
-  const [permissionProfiles, setPermissionProfiles] = useState<PermissionProfile[]>([]);
   const [serverDefaults, setServerDefaults] = useState<{
     model: string | null;
     reasoningEffort: string | null;
@@ -96,22 +97,65 @@ export default function ThreadPage(): JSX.Element {
   const loadingPageCursorsRef = useRef(new Set<string>());
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
+  const startedTurnRepairTimersRef = useRef(new Map<string, number>());
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
   const configuredReasoningEffort = threadModelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
   const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
-  const effectivePermissionProfileId =
+  const detailPermissionProfileId =
     detail && "activePermissionProfile" in detail
       ? detail.activePermissionProfile?.id ?? null
-      : threadPermissionProfileId;
-  const availablePermissionProfiles = mergePermissionProfiles(permissionProfiles);
+      : undefined;
+  const detailApprovalsReviewer =
+    detail && "approvalsReviewer" in detail
+      ? detail.approvalsReviewer ?? null
+      : undefined;
+  const effectivePermissionPayload = resolveEffectivePermissionPayload({
+    localProfileId: threadPermissionProfileId,
+    localApprovalsReviewer: threadApprovalsReviewer,
+    detailProfileId: detailPermissionProfileId,
+    detailApprovalsReviewer
+  });
+  const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
   const bumpMutationEpoch = useCallback(() => {
     mutationEpochRef.current += 1;
     return mutationEpochRef.current;
   }, []);
+
+  const scheduleStartedTurnRepair = useCallback(
+    (turnId: string) => {
+      const key = `${threadId}\u0001${turnId}`;
+      const existingTimer = startedTurnRepairTimersRef.current.get(key);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+      }
+      const timer = window.setTimeout(() => {
+        startedTurnRepairTimersRef.current.delete(key);
+        const currentThread = useStore.getState().threads[threadId];
+        if (!currentThread?.running || currentThread.activeTurnId !== turnId) {
+          return;
+        }
+        if (hasVisibleServerOutputForStartedTurn(currentThread.entries, turnId)) {
+          return;
+        }
+        requestSnapshotRepair(threadId);
+      }, STARTED_TURN_EMPTY_OUTPUT_REPAIR_DELAY_MS);
+      startedTurnRepairTimersRef.current.set(key, timer);
+    },
+    [threadId, requestSnapshotRepair]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of startedTurnRepairTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      startedTurnRepairTimersRef.current.clear();
+    };
+  }, [threadId]);
 
   const enqueueThreadSettings = useCallback(
     (input: UpdateThreadSettingsInput) => {
@@ -142,7 +186,6 @@ export default function ThreadPage(): JSX.Element {
             reasoningEffort: settings.reasoningEffort,
             reasoningSummary: settings.reasoningSummary
           });
-          setPermissionProfiles(settings.permissionProfiles ?? []);
         }
       })
       .catch((err) => {
@@ -181,8 +224,14 @@ export default function ThreadPage(): JSX.Element {
       }
       if ("activePermissionProfile" in td) {
         const profileId = td.activePermissionProfile?.id ?? null;
-        setPermissionProfile(targetThreadId, profileId);
-        saveJson(threadPermissionProfileKey(targetThreadId), profileId);
+        const approvalsReviewer = "approvalsReviewer" in td ? td.approvalsReviewer ?? null : undefined;
+        setPermissionProfile(targetThreadId, profileId, approvalsReviewer);
+        if (approvalsReviewer !== undefined) {
+          savePermissionSelection(targetThreadId, {
+            permissions: profileId,
+            approvalsReviewer
+          });
+        }
       }
       setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
@@ -196,12 +245,14 @@ export default function ThreadPage(): JSX.Element {
     if (savedMode) {
       setMode(threadId, savedMode);
     }
-    const savedPermissionProfile = loadJson<string | null | undefined>(
-      threadPermissionProfileKey(threadId),
-      undefined
+    const savedPermissionProfile = normalizeStoredPermissionSelection(
+      loadJson<StoredPermissionSelection | undefined>(
+        threadPermissionProfileKey(threadId),
+        undefined
+      )
     );
     if (savedPermissionProfile !== undefined) {
-      setPermissionProfile(threadId, savedPermissionProfile);
+      setPermissionProfile(threadId, savedPermissionProfile.permissions, savedPermissionProfile.approvalsReviewer);
     }
     let cancelled = false;
     const requestEpoch = mutationEpochRef.current;
@@ -246,7 +297,9 @@ export default function ThreadPage(): JSX.Element {
           requestSnapshotRepair(threadId);
           return;
         }
-        applyThreadDetail(td, "replace");
+        const entries = await threadDetailEntriesWithTurnItems(td, threadId);
+        if (cancelled) return;
+        applyThreadDetail(td, "replace", threadId, entries);
         setRunning(threadId, isThreadRunningStatus(td.status));
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -372,7 +425,8 @@ export default function ThreadPage(): JSX.Element {
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
           ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
           ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
-          ...(effectivePermissionProfileId !== undefined ? { permissions: effectivePermissionProfileId } : {}),
+          permissions: effectivePermissionPayload.permissions,
+          approvalsReviewer: effectivePermissionPayload.approvalsReviewer,
           ...(collaborationMode ? { collaborationMode } : {})
         };
         const started = await codex.startTurn(startInput);
@@ -382,6 +436,9 @@ export default function ThreadPage(): JSX.Element {
           setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
         } else if (useStore.getState().threads[threadId]?.running) {
           setActiveTurnId(threadId, started.turnId);
+        }
+        if (!started.thread) {
+          scheduleStartedTurnRepair(started.turnId);
         }
         const serverHasUserMessage = started.thread?.timeline.some(
           (item) => item.role === "user" && item.text.trim() === text.trim()
@@ -420,6 +477,7 @@ export default function ThreadPage(): JSX.Element {
             kind: "user-message",
             text,
             ...(imagePaths.length ? { imagePaths } : {}),
+            ...(skillReferences.length ? { skillReferences } : {}),
             status: "failed"
           }
         });
@@ -442,7 +500,7 @@ export default function ThreadPage(): JSX.Element {
       effectiveModel,
       effectiveReasoningEffort,
       effectiveReasoningSummary,
-      effectivePermissionProfileId,
+      effectivePermissionPayload,
       configuredModel,
       configuredReasoningEffort,
       appendEntries,
@@ -451,7 +509,8 @@ export default function ThreadPage(): JSX.Element {
       setRunning,
       setActiveTurnId,
       bindLocalUserMessageTurn,
-      bumpMutationEpoch
+      bumpMutationEpoch,
+      scheduleStartedTurnRepair
     ]
   );
 
@@ -638,18 +697,32 @@ export default function ThreadPage(): JSX.Element {
     [threadId, effectiveModel, setModel, enqueueThreadSettings]
   );
 
-  const onSelectPermissionProfile = useCallback(
-    async (profileId: string | null) => {
+  const onSelectPermissionMode = useCallback(
+    async (modeId: PermissionModeId) => {
+      const mode = permissionModeById(modeId);
+      const previous = effectivePermissionPayload;
       setShowPermissionPicker(false);
-      setPermissionProfile(threadId, profileId);
-      saveJson(threadPermissionProfileKey(threadId), profileId);
+      setPermissionProfile(threadId, mode.permissions, mode.approvalsReviewer);
+      savePermissionSelection(threadId, mode);
       try {
-        await enqueueThreadSettings({ permissions: profileId });
+        await enqueueThreadSettings({
+          permissions: mode.permissions,
+          approvalsReviewer: mode.approvalsReviewer
+        });
       } catch (err) {
+        setPermissionProfile(threadId, previous.permissions, previous.approvalsReviewer);
+        savePermissionSelection(threadId, previous);
+        appendEntries(threadId, [
+          {
+            id: uniqueTimelineId("permission-error"),
+            createdAt: Date.now(),
+            body: { kind: "error", text: `权限切换失败：${errorMessage(err)}` }
+          }
+        ]);
         console.warn("update permission profile failed", err);
       }
     },
-    [threadId, setPermissionProfile, enqueueThreadSettings]
+    [threadId, effectivePermissionPayload, setPermissionProfile, enqueueThreadSettings, appendEntries]
   );
 
   const onToggleMode = useCallback(
@@ -754,8 +827,8 @@ export default function ThreadPage(): JSX.Element {
         running={running}
         disabled={!visibleDetail}
         draftOverride={draftOverride ?? undefined}
-        permissionLabel={permissionProfileLabel(effectivePermissionProfileId, availablePermissionProfiles)}
-        permissionDescription={permissionProfileDescription(effectivePermissionProfileId, availablePermissionProfiles)}
+        permissionLabel={effectivePermissionMode.label}
+        permissionDescription={effectivePermissionMode.description}
         modelLabel={shortModel(modelId)}
         reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
         onOpenPermissionPicker={() => setShowPermissionPicker(true)}
@@ -766,9 +839,8 @@ export default function ThreadPage(): JSX.Element {
 
       {showPermissionPicker ? (
         <PermissionPicker
-          profiles={availablePermissionProfiles}
-          current={effectivePermissionProfileId}
-          onSelect={onSelectPermissionProfile}
+          current={effectivePermissionMode.id}
+          onSelect={onSelectPermissionMode}
           onClose={() => setShowPermissionPicker(false)}
         />
       ) : null}
@@ -962,8 +1034,8 @@ function ThreadTimelineViewport({
         approvals={approvals}
         running={running}
         activeTurnId={activeTurnId}
-        onResendUser={async (text) => {
-          await onSend(text, []);
+        onResendUser={async (text, imagePaths, skillReferences) => {
+          await onSend(text, imagePaths, skillReferences);
         }}
         onRewindToMessage={onRewindToMessage}
         onForkFromMessage={onForkFromMessage}
@@ -1207,37 +1279,28 @@ function ModelPicker({
 }
 
 function PermissionPicker({
-  profiles,
   current,
   onSelect,
   onClose
 }: {
-  profiles: PermissionProfile[];
-  current: string | null | undefined;
-  onSelect: (profileId: string | null) => void;
+  current: PermissionModeId;
+  onSelect: (modeId: PermissionModeId) => void;
   onClose: () => void;
 }): JSX.Element {
   return (
     <Overlay onClose={onClose} align="bottom">
       <div role="dialog" aria-label="权限模式" style={sheetStyle}>
         <div style={{ padding: "8px 12px", color: "var(--cw-fg-muted)", fontSize: 13 }}>权限模式</div>
-        <button
-          type="button"
-          onClick={() => onSelect(null)}
-          style={permissionRowStyle(current === null)}
-        >
-          <span style={{ fontWeight: 650 }}>自定义 config.toml</span>
-          <span style={permissionRowDescStyle}>使用 app-server 当前配置的默认权限</span>
-        </button>
-        {profiles.map((profile) => (
+        {PERMISSION_MODES.map((mode) => (
           <button
-            key={profile.id}
+            key={mode.id}
             type="button"
-            onClick={() => onSelect(profile.id)}
-            style={permissionRowStyle(current === profile.id)}
+            aria-label={mode.label}
+            onClick={() => onSelect(mode.id)}
+            style={permissionRowStyle(current === mode.id)}
           >
-            <span style={{ fontWeight: 650 }}>{permissionProfileLabel(profile.id, profiles)}</span>
-            <span style={permissionRowDescStyle}>{profile.description || profile.id}</span>
+            <span style={{ fontWeight: 650 }}>{mode.label}</span>
+            <span style={permissionRowDescStyle}>{mode.description}</span>
           </button>
         ))}
       </div>
@@ -1246,10 +1309,14 @@ function PermissionPicker({
 }
 
 function reasoningEffortLabel(effort: string): string {
-  if (effort === "low") return "低";
-  if (effort === "medium") return "中";
-  if (effort === "high") return "高";
-  return effort;
+  if (effort === "low") return "Low";
+  if (effort === "medium") return "Medium";
+  if (effort === "high") return "High";
+  return effort
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || effort;
 }
 
 function RenameDialog({
@@ -1344,53 +1411,137 @@ function shortModel(id: string | null): string {
   return last.length > 14 ? last.slice(0, 12) + "…" : last;
 }
 
-const FALLBACK_PERMISSION_PROFILES: PermissionProfile[] = [
+type PermissionModeId = "request-approval" | "auto-approve" | "full-access" | "config-default";
+
+type PermissionPayload = {
+  permissions: string | null;
+  approvalsReviewer: ApprovalsReviewer | null;
+};
+
+type PermissionMode = PermissionPayload & {
+  id: PermissionModeId;
+  label: string;
+  description: string;
+};
+
+type StoredPermissionSelection = PermissionPayload | string | null;
+
+const PERMISSION_MODES: PermissionMode[] = [
   {
-    id: "read-only",
-    label: "只读",
-    description: "只允许读取和查看，不主动修改工作区"
+    id: "request-approval",
+    label: "请求批准",
+    description: "编辑外部文件和使用互联网时始终询问",
+    permissions: ":workspace",
+    approvalsReviewer: "user"
   },
   {
-    id: "workspace-write",
-    label: "工作区写入",
-    description: "允许修改工作区文件，命令执行仍按配置审批"
+    id: "auto-approve",
+    label: "替我审批",
+    description: "仅对检测到的风险操作请求批准",
+    permissions: ":workspace",
+    approvalsReviewer: "auto_review"
   },
   {
-    id: "full-auto",
-    label: "完全访问",
-    description: "允许自动执行命令和文件修改"
+    id: "full-access",
+    label: "完全访问权限",
+    description: "可不受限制地访问互联网和电脑上的任何文件",
+    permissions: ":danger-full-access",
+    approvalsReviewer: null
+  },
+  {
+    id: "config-default",
+    label: "自定义 config.toml",
+    description: "使用 config.toml 中定义的权限",
+    permissions: null,
+    approvalsReviewer: null
   }
 ];
 
-function mergePermissionProfiles(profiles: PermissionProfile[]): PermissionProfile[] {
-  const merged = new Map<string, PermissionProfile>();
-  for (const profile of FALLBACK_PERMISSION_PROFILES) {
-    merged.set(profile.id, profile);
-  }
-  for (const profile of profiles) {
-    merged.set(profile.id, profile);
-  }
-  return [...merged.values()];
+const CONFIG_DEFAULT_PERMISSION_MODE = PERMISSION_MODES[3];
+
+function permissionModeById(id: PermissionModeId): PermissionMode {
+  return PERMISSION_MODES.find((mode) => mode.id === id) ?? CONFIG_DEFAULT_PERMISSION_MODE;
 }
 
-function permissionProfileLabel(profileId: string | null | undefined, profiles: PermissionProfile[]): string {
-  if (profileId === null) return "自定义 config.toml";
-  if (!profileId) return "默认权限";
-  const common: Record<string, string> = {
-    "read-only": "只读",
-    "workspace-write": "工作区写入",
-    ":workspace": "工作区写入",
-    "danger-full-access": "完全访问",
-    "full-auto": "完全访问",
-    default: "默认权限"
-  };
-  return common[profileId] ?? profiles.find((profile) => profile.id === profileId)?.label ?? profileId;
+function permissionModeFromPayload(payload: PermissionPayload): PermissionMode {
+  if (payload.permissions === ":workspace" && payload.approvalsReviewer === "auto_review") {
+    return permissionModeById("auto-approve");
+  }
+  if (payload.permissions === ":workspace") {
+    return permissionModeById("request-approval");
+  }
+  if (payload.permissions === ":danger-full-access") {
+    return permissionModeById("full-access");
+  }
+  return CONFIG_DEFAULT_PERMISSION_MODE;
 }
 
-function permissionProfileDescription(profileId: string | null | undefined, profiles: PermissionProfile[]): string | undefined {
-  if (profileId === null) return "使用 config.toml 默认权限";
-  if (!profileId) return undefined;
-  return profiles.find((profile) => profile.id === profileId)?.description ?? undefined;
+function resolveEffectivePermissionPayload({
+  localProfileId,
+  localApprovalsReviewer,
+  detailProfileId,
+  detailApprovalsReviewer
+}: {
+  localProfileId?: string | null;
+  localApprovalsReviewer?: ApprovalsReviewer | null;
+  detailProfileId?: string | null;
+  detailApprovalsReviewer?: ApprovalsReviewer | null;
+}): PermissionPayload {
+  if (localProfileId !== undefined) {
+    return normalizePermissionPayload(localProfileId, localApprovalsReviewer);
+  }
+  if (detailProfileId !== undefined) {
+    return normalizePermissionPayload(detailProfileId, detailApprovalsReviewer);
+  }
+  return CONFIG_DEFAULT_PERMISSION_MODE;
+}
+
+function normalizePermissionPayload(
+  permissions: string | null | undefined,
+  approvalsReviewer: ApprovalsReviewer | null | undefined
+): PermissionPayload {
+  if (permissions === ":workspace" || permissions === "workspace-write" || permissions === "read-only") {
+    return {
+      permissions: ":workspace",
+      approvalsReviewer: approvalsReviewer === "auto_review" ? "auto_review" : "user"
+    };
+  }
+  if (
+    permissions === ":danger-full-access" ||
+    permissions === "danger-full-access" ||
+    permissions === "full-auto"
+  ) {
+    return {
+      permissions: ":danger-full-access",
+      approvalsReviewer: null
+    };
+  }
+  return CONFIG_DEFAULT_PERMISSION_MODE;
+}
+
+function savePermissionSelection(threadId: string, selection: PermissionPayload): void {
+  saveJson(threadPermissionProfileKey(threadId), {
+    permissions: selection.permissions,
+    approvalsReviewer: selection.approvalsReviewer
+  });
+}
+
+function normalizeStoredPermissionSelection(value: StoredPermissionSelection | undefined): PermissionPayload | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return CONFIG_DEFAULT_PERMISSION_MODE;
+  if (typeof value === "string") {
+    return normalizePermissionPayload(value, undefined);
+  }
+  if (typeof value === "object") {
+    const rawPermissions = value.permissions;
+    const permissions = typeof rawPermissions === "string" || rawPermissions === null ? rawPermissions : undefined;
+    return normalizePermissionPayload(permissions, approvalsReviewerOrNull(value.approvalsReviewer));
+  }
+  return undefined;
+}
+
+function approvalsReviewerOrNull(value: unknown): ApprovalsReviewer | null {
+  return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : null;
 }
 
 function isThreadNotFoundError(error: unknown): boolean {
@@ -1422,6 +1573,108 @@ function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
   );
 }
 
+const TURN_ITEM_DETAIL_PAGE_LIMIT = 100;
+const TURN_ITEM_DETAIL_MAX_PAGES = 5;
+
+async function threadDetailEntriesWithTurnItems(td: ThreadDetail, threadId: string): Promise<TimelineEntry[]> {
+  const baseEntries = threadDetailEntries(td);
+  const turnId = td.lastTurnId ?? lastTurnIdFromEntries(baseEntries);
+  if (!turnId) {
+    return baseEntries;
+  }
+
+  try {
+    const itemEntries: TimelineEntry[] = [];
+    let cursor: string | null | undefined;
+    for (let pageIndex = 0; pageIndex < TURN_ITEM_DETAIL_MAX_PAGES; pageIndex += 1) {
+      const page = await codex.listTurnItems(threadId, turnId, cursor, TURN_ITEM_DETAIL_PAGE_LIMIT);
+      itemEntries.push(
+        ...page.items.map((item, idx) =>
+          timelineItemToEntry(
+            {
+              ...item,
+              turnId: item.turnId ?? turnId,
+              ...(typeof item.generation !== "number" && typeof td.generation === "number"
+                ? { generation: td.generation }
+                : {}),
+              ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
+                ? { snapshotSequence: td.snapshotSequence }
+                : {})
+            },
+            td.updatedAt - itemEntries.length - page.items.length + idx
+          )
+        )
+      );
+      cursor = page.nextCursor ?? null;
+      if (!cursor) {
+        break;
+      }
+    }
+
+    return mergeTurnItemDetailsIntoTimeline(baseEntries, itemEntries, turnId);
+  } catch {
+    return baseEntries;
+  }
+}
+
+function lastTurnIdFromEntries(entries: TimelineEntry[]): string | null {
+  for (let idx = entries.length - 1; idx >= 0; idx -= 1) {
+    const turnId = entries[idx]?.turnId;
+    if (turnId) {
+      return turnId;
+    }
+  }
+  return null;
+}
+
+function mergeTurnItemDetailsIntoTimeline(
+  baseEntries: TimelineEntry[],
+  itemEntries: TimelineEntry[],
+  turnId: string
+): TimelineEntry[] {
+  if (!itemEntries.length) {
+    return baseEntries;
+  }
+  const turnItemEntries = itemEntries.filter((entry) => entry.turnId === turnId);
+  if (!turnItemEntries.length) {
+    return baseEntries;
+  }
+
+  const baseEntriesById = new Map(baseEntries.map((entry) => [entry.id, entry]));
+  const turnItemIds = new Set(turnItemEntries.map((entry) => entry.id));
+  const orderedTurnEntries = turnItemEntries.map((entry) =>
+    mergeTurnDetailEntry(baseEntriesById.get(entry.id), entry)
+  );
+  const baseOnlyTurnEntries = baseEntries.filter((entry) => entry.turnId === turnId && !turnItemIds.has(entry.id));
+  const firstTurnIndex = baseEntries.findIndex((entry) => entry.turnId === turnId);
+  if (firstTurnIndex < 0) {
+    return [...baseEntries, ...orderedTurnEntries, ...baseOnlyTurnEntries];
+  }
+
+  const beforeTurn = baseEntries.slice(0, firstTurnIndex);
+  const afterTurn = baseEntries.slice(firstTurnIndex).filter((entry) => entry.turnId !== turnId);
+  return [
+    ...beforeTurn,
+    ...orderedTurnEntries,
+    ...baseOnlyTurnEntries,
+    ...afterTurn
+  ];
+}
+
+function mergeTurnDetailEntry(baseEntry: TimelineEntry | undefined, detailEntry: TimelineEntry): TimelineEntry {
+  if (!baseEntry) {
+    return detailEntry;
+  }
+  return {
+    ...detailEntry,
+    createdAt: baseEntry.createdAt,
+    turnIndex: detailEntry.turnIndex ?? baseEntry.turnIndex,
+    generation: detailEntry.generation ?? baseEntry.generation,
+    snapshotSequence: detailEntry.snapshotSequence ?? baseEntry.snapshotSequence,
+    clientUserMessageId: detailEntry.clientUserMessageId ?? baseEntry.clientUserMessageId
+  };
+}
+
 function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: string | null): ThreadDetail {
   return {
     id: threadId,
@@ -1436,6 +1689,29 @@ function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: st
     nextCursor: null,
     timeline: []
   };
+}
+
+function hasVisibleServerOutputForStartedTurn(entries: TimelineEntry[], turnId: string): boolean {
+  return entries.some((entry) => {
+    if (entry.turnId !== turnId) {
+      return false;
+    }
+    switch (entry.body.kind) {
+      case "agent-message":
+        return entry.body.text.trim().length > 0;
+      case "reasoning":
+        return entry.body.text.trim().length > 0;
+      case "tool":
+        return Boolean((entry.body.result ?? entry.body.arguments ?? entry.body.tool).trim());
+      case "command":
+        return Boolean((entry.body.output ?? entry.body.command).trim());
+      case "diff":
+      case "error":
+        return true;
+      default:
+        return false;
+    }
+  });
 }
 
 function restorePrependScrollAnchor(

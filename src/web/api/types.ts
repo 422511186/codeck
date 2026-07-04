@@ -10,6 +10,8 @@ export type ThreadSummary = {
   modelProvider: string;
   status: string;
   updatedAt: number;
+  activePermissionProfile?: ActivePermissionProfile | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
 };
 
 export type ThreadPage = {
@@ -32,6 +34,7 @@ export type TimelineItem = {
   imagePaths?: string[];
   skillReferences?: SkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
   arguments?: string;
@@ -50,6 +53,7 @@ export type ThreadDetail = ThreadSummary & {
   model?: string | null;
   reasoningEffort?: string | null;
   activePermissionProfile?: ActivePermissionProfile | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
 };
 
 export type TimelinePage = {
@@ -83,6 +87,8 @@ export type ActivePermissionProfile = {
   id: string;
   extends: string | null;
 };
+
+export type ApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 
 export type UploadedImage = {
   path: string;

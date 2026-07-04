@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { ChatInput } from "../../src/web/components/ChatInput";
+import { useStore } from "../../src/web/state/store";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -22,7 +23,7 @@ function renderInput(overrides: Partial<React.ComponentProps<typeof ChatInput>> 
     permissionLabel: "完全访问",
     permissionDescription: "允许自动执行命令",
     modelLabel: "gpt-5-codex",
-    reasoningEffortLabel: "中",
+    reasoningEffortLabel: "Medium",
     onOpenPermissionPicker: vi.fn(),
     onOpenModelPicker: vi.fn(),
     onSend: vi.fn().mockResolvedValue(undefined),
@@ -45,6 +46,13 @@ async function openSkillPickerFromAddPanel(user: ReturnType<typeof userEvent.set
 describe("ChatInput", () => {
   beforeEach(() => {
     localStorage.clear();
+    useStore.setState({
+      wsState: "idle",
+      appServer: null,
+      threads: {},
+      activeThreadId: null,
+      skillsCacheVersion: 0
+    });
     mockUploadImage.mockReset();
     mockListSkills.mockReset();
     mockUploadImage.mockResolvedValue({ path: "uploads/image.png" });
@@ -157,7 +165,7 @@ describe("ChatInput", () => {
     expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("展开编辑")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "权限 完全访问" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "模型 gpt-5-codex，中" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "模型 gpt-5-codex Medium" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
 
@@ -343,6 +351,27 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByText("没有匹配的 Skill")).toBeInTheDocument());
   });
 
+  it("reloads the skill list after a Skills changed event invalidates the cache", async () => {
+    const user = userEvent.setup();
+    renderInput({ cwd: "/repo" });
+
+    await openSkillPickerFromAddPanel(user);
+    expect(await screen.findByText("openai-docs")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await openSkillPickerFromAddPanel(user);
+    expect(mockListSkills).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "skills_changed" }
+    });
+
+    await openSkillPickerFromAddPanel(user);
+    expect(mockListSkills).toHaveBeenCalledTimes(2);
+    expect(mockListSkills).toHaveBeenNthCalledWith(2, true, "/repo");
+  });
+
   it("shows skill list load failure and retries", async () => {
     const user = userEvent.setup();
     mockListSkills.mockRejectedValueOnce(new Error("skills unavailable")).mockResolvedValueOnce({
@@ -377,13 +406,16 @@ describe("ChatInput", () => {
     renderInput({ onOpenPermissionPicker, onOpenModelPicker });
 
     await user.click(screen.getByRole("button", { name: "权限 完全访问" }));
-    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex，中" }));
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex Medium" }));
 
     expect(onOpenPermissionPicker).toHaveBeenCalledTimes(1);
     expect(onOpenModelPicker).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "权限 完全访问" })).toHaveTextContent("完全访问");
     expect(screen.getByRole("button", { name: "权限 完全访问" })).not.toHaveTextContent("⌄");
-    expect(screen.getByRole("button", { name: "模型 gpt-5-codex，中" })).toHaveTextContent("gpt-5-codex，中");
-    expect(screen.getByRole("button", { name: "模型 gpt-5-codex，中" })).not.toHaveTextContent("⌄");
+    const modelButton = screen.getByRole("button", { name: "模型 gpt-5-codex Medium" });
+    expect(modelButton).toHaveTextContent("gpt-5-codex Medium");
+    expect(modelButton).not.toHaveTextContent("，");
+    expect(modelButton).not.toHaveTextContent(",");
+    expect(modelButton).not.toHaveTextContent("⌄");
   });
 });

@@ -17,6 +17,8 @@ export type MobileThreadSummary = {
   modelProvider: string;
   status: string;
   updatedAt: number;
+  activePermissionProfile?: MobileActivePermissionProfile | null;
+  approvalsReviewer?: MobileApprovalsReviewer | null;
 };
 
 export type MobileThreadPage = {
@@ -41,6 +43,13 @@ export type MobilePermissionProfileOption = {
 export type MobileActivePermissionProfile = {
   id: string;
   extends: string | null;
+};
+
+export type MobileApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+
+export type MobilePermissionPayload = {
+  activePermissionProfile?: MobileActivePermissionProfile | null;
+  approvalsReviewer?: MobileApprovalsReviewer | null;
 };
 
 export type MobileAccountView = {
@@ -619,6 +628,7 @@ export type MobileTimelineItem = {
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
   arguments?: string;
@@ -648,6 +658,7 @@ export type MobileThreadDetail = MobileThreadSummary & {
   model?: string | null;
   reasoningEffort?: string | null;
   activePermissionProfile?: MobileActivePermissionProfile | null;
+  approvalsReviewer?: MobileApprovalsReviewer | null;
   tokenUsageTotal?: number;
   goal?: MobileThreadGoalView | null;
 };
