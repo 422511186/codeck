@@ -59,7 +59,7 @@
 
 - [x] 8.1 运行 `npm run typecheck` 和相关单元测试，修复类型和行为回归。
 - [x] 8.2 运行长会话刷新和流式输出性能测试，记录优化前后关键指标：首屏 turns 数、store 更新次数、挂载 row 数量和 Markdown 渲染数量。
-- [ ] 8.3 使用手机尺寸浏览器验证会话刷新、连续 agent 输出、向上分页、回到底部、interrupt、rewind、fork 和审批流程。
+- [x] 8.3 使用手机尺寸浏览器验证会话刷新、连续 agent 输出、向上分页、回到底部、interrupt、rewind、fork 和审批流程。
 - [x] 8.4 验证 app-server lifecycle：`external` 复用、自动模式并发启动、异常退出残留识别、状态诊断和重复启动防护。
 - [x] 8.5 更新必要的中文文档或测试说明，记录长会话性能验证方法、app-server 复用建议和已知限制。
 - [x] 8.6 执行 `openspec validate optimize-thread-chat-performance` 和最终 `npm run verify`。

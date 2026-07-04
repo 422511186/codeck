@@ -17,6 +17,7 @@ const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
 const LAZY_MARKDOWN_ROOT_MARGIN = "720px 0px";
 const MAX_INITIAL_TIMELINE_ROWS = 80;
+const TIMELINE_WINDOW_EXPAND_ROWS = 80;
 const EAGER_MARKDOWN_TAIL_ROWS = 2;
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 72;
 
@@ -52,7 +53,13 @@ export function Timeline({
   onForkFromMessage
 }: Props): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
-  const windowStartIndex = Math.max(0, entries.length - MAX_INITIAL_TIMELINE_ROWS);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [windowStartIndex, setWindowStartIndex] = useState(() => initialTimelineWindowStart(entries.length));
+  const previousEntriesRef = useRef<{ length: number; firstId: string | null; lastId: string | null }>({
+    length: entries.length,
+    firstId: entries[0]?.id ?? null,
+    lastId: entries[entries.length - 1]?.id ?? null
+  });
   const visibleEntries = windowStartIndex > 0 ? entries.slice(windowStartIndex) : entries;
   const topSpacerHeight = windowStartIndex * ESTIMATED_TIMELINE_ROW_HEIGHT;
   const longTimeline = entries.length > MAX_INITIAL_TIMELINE_ROWS;
@@ -60,9 +67,84 @@ export function Timeline({
     () => deriveTimelineRowState(entries, running, activeTurnId),
     [entries, running, activeTurnId]
   );
+
+  useEffect(() => {
+    const previous = previousEntriesRef.current;
+    const nextFirstId = entries[0]?.id ?? null;
+    const nextLastId = entries[entries.length - 1]?.id ?? null;
+    const maxWindowStart = initialTimelineWindowStart(entries.length);
+    const previousMaxWindowStart = initialTimelineWindowStart(previous.length);
+    const prependedAtHead =
+      previous.length > 0 &&
+      entries.length > previous.length &&
+      previous.lastId !== null &&
+      nextLastId === previous.lastId &&
+      nextFirstId !== previous.firstId;
+    const appendedAtTail =
+      previous.length > 0 &&
+      entries.length > previous.length &&
+      previous.firstId !== null &&
+      nextFirstId === previous.firstId &&
+      nextLastId !== previous.lastId;
+
+    setWindowStartIndex((current) => {
+      if (entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
+        return 0;
+      }
+      if (previous.length === 0 || entries.length < previous.length) {
+        return maxWindowStart;
+      }
+      if (prependedAtHead) {
+        return current === 0 ? 0 : Math.min(current + (entries.length - previous.length), maxWindowStart);
+      }
+      if (appendedAtTail && current >= previousMaxWindowStart) {
+        return maxWindowStart;
+      }
+      return Math.min(current, maxWindowStart);
+    });
+
+    previousEntriesRef.current = {
+      length: entries.length,
+      firstId: nextFirstId,
+      lastId: nextLastId
+    };
+  }, [entries]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
+      return;
+    }
+
+    const scroller = findTimelineScrollContainer(root);
+    if (!scroller) {
+      return;
+    }
+
+    const expandVisibleWindow = () => {
+      const preloadDistance = Math.max(scroller.clientHeight * 1.5, ESTIMATED_TIMELINE_ROW_HEIGHT * 10);
+      setWindowStartIndex((current) => {
+        if (current <= 0) {
+          return current;
+        }
+        const targetSpacerHeight = Math.max(0, scroller.scrollTop - preloadDistance);
+        const targetStartIndex = Math.floor(targetSpacerHeight / ESTIMATED_TIMELINE_ROW_HEIGHT);
+        if (targetStartIndex >= current) {
+          return current;
+        }
+        return Math.max(0, Math.min(current - TIMELINE_WINDOW_EXPAND_ROWS, targetStartIndex));
+      });
+    };
+
+    scroller.addEventListener("scroll", expandVisibleWindow, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", expandVisibleWindow);
+    };
+  }, [entries.length]);
+
   return (
     <>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {topSpacerHeight > 0 ? (
           <div aria-hidden="true" data-timeline-spacer="top" style={{ minHeight: topSpacerHeight }} />
         ) : null}
@@ -94,6 +176,27 @@ export function Timeline({
       {previewSrc ? <ImagePreviewDialog src={previewSrc} onClose={() => setPreviewSrc(null)} /> : null}
     </>
   );
+}
+
+function initialTimelineWindowStart(entryCount: number): number {
+  return Math.max(0, entryCount - MAX_INITIAL_TIMELINE_ROWS);
+}
+
+function findTimelineScrollContainer(root: HTMLElement): HTMLElement | null {
+  const explicit = root.closest(".cw-thread-scroller");
+  if (explicit instanceof HTMLElement) {
+    return explicit;
+  }
+
+  let current: HTMLElement | null = root.parentElement;
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function TimelineRow({

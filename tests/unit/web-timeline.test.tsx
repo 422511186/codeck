@@ -159,6 +159,45 @@ describe("Timeline", () => {
     expect(screen.queryAllByRole("button", { name: "复制代码" }).length).toBeLessThanOrEqual(2);
   });
 
+  it("滚入顶部占位区域时扩展可见窗口，避免出现空白历史区域", () => {
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "agent-message" as const,
+        text: `历史回复 ${index}`
+      }
+    }));
+
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 10_000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 600
+    });
+
+    expect(screen.queryByText("历史回复 130")).not.toBeInTheDocument();
+
+    fireEvent.scroll(scroller);
+
+    expect(screen.getByText("历史回复 130")).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThan(entries.length);
+  });
+
   it("窗口化后仍渲染尾部系统消息、错误卡片和审批卡片", async () => {
     const user = userEvent.setup();
     const entries = [
