@@ -106,6 +106,7 @@ export default function ThreadPage(): JSX.Element {
     detail && "activePermissionProfile" in detail
       ? detail.activePermissionProfile?.id ?? null
       : threadPermissionProfileId;
+  const availablePermissionProfiles = mergePermissionProfiles(permissionProfiles);
 
   const bumpMutationEpoch = useCallback(() => {
     mutationEpochRef.current += 1;
@@ -753,8 +754,8 @@ export default function ThreadPage(): JSX.Element {
         running={running}
         disabled={!visibleDetail}
         draftOverride={draftOverride ?? undefined}
-        permissionLabel={permissionProfileLabel(effectivePermissionProfileId, permissionProfiles)}
-        permissionDescription={permissionProfileDescription(effectivePermissionProfileId, permissionProfiles)}
+        permissionLabel={permissionProfileLabel(effectivePermissionProfileId, availablePermissionProfiles)}
+        permissionDescription={permissionProfileDescription(effectivePermissionProfileId, availablePermissionProfiles)}
         modelLabel={shortModel(modelId)}
         reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
         onOpenPermissionPicker={() => setShowPermissionPicker(true)}
@@ -765,7 +766,7 @@ export default function ThreadPage(): JSX.Element {
 
       {showPermissionPicker ? (
         <PermissionPicker
-          profiles={permissionProfiles}
+          profiles={availablePermissionProfiles}
           current={effectivePermissionProfileId}
           onSelect={onSelectPermissionProfile}
           onClose={() => setShowPermissionPicker(false)}
@@ -1341,6 +1342,35 @@ function shortModel(id: string | null): string {
   if (!id) return "模型";
   const last = id.split("/").pop() || id;
   return last.length > 14 ? last.slice(0, 12) + "…" : last;
+}
+
+const FALLBACK_PERMISSION_PROFILES: PermissionProfile[] = [
+  {
+    id: "read-only",
+    label: "只读",
+    description: "只允许读取和查看，不主动修改工作区"
+  },
+  {
+    id: "workspace-write",
+    label: "工作区写入",
+    description: "允许修改工作区文件，命令执行仍按配置审批"
+  },
+  {
+    id: "full-auto",
+    label: "完全访问",
+    description: "允许自动执行命令和文件修改"
+  }
+];
+
+function mergePermissionProfiles(profiles: PermissionProfile[]): PermissionProfile[] {
+  const merged = new Map<string, PermissionProfile>();
+  for (const profile of FALLBACK_PERMISSION_PROFILES) {
+    merged.set(profile.id, profile);
+  }
+  for (const profile of profiles) {
+    merged.set(profile.id, profile);
+  }
+  return [...merged.values()];
 }
 
 function permissionProfileLabel(profileId: string | null | undefined, profiles: PermissionProfile[]): string {

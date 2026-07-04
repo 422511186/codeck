@@ -261,7 +261,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
                   disabled={disabled}
                 >
                   {props.permissionLabel}
-                  <span aria-hidden="true">⌄</span>
                 </button>
               ) : null}
               {props.modelLabel && props.onOpenModelPicker ? (
@@ -273,7 +272,6 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
                   disabled={disabled}
                 >
                   {modelChipText(props.modelLabel, props.reasoningEffortLabel)}
-                  <span aria-hidden="true">⌄</span>
                 </button>
               ) : null}
             </div>

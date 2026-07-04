@@ -381,5 +381,9 @@ describe("ChatInput", () => {
 
     expect(onOpenPermissionPicker).toHaveBeenCalledTimes(1);
     expect(onOpenModelPicker).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "权限 完全访问" })).toHaveTextContent("完全访问");
+    expect(screen.getByRole("button", { name: "权限 完全访问" })).not.toHaveTextContent("⌄");
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex，中" })).toHaveTextContent("gpt-5-codex，中");
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex，中" })).not.toHaveTextContent("⌄");
   });
 });

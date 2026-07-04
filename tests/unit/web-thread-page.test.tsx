@@ -1210,6 +1210,31 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should show built-in permission modes when settings has no permission profiles", async () => {
+    const user = userEvent.setup();
+    mockReadSettings.mockResolvedValueOnce({
+      model: null,
+      modelProvider: null,
+      reasoningEffort: null,
+      reasoningSummary: null,
+      permissionProfiles: []
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "权限 默认权限" }));
+    const picker = screen.getByRole("dialog", { name: "权限模式" });
+
+    expect(within(picker).getByRole("button", { name: /自定义 config\.toml/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /只读/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /工作区写入/ })).toBeInTheDocument();
+    expect(within(picker).getByRole("button", { name: /完全访问/ })).toBeInTheDocument();
+  });
+
   it("should clear permission override with permissions null when selecting config.toml defaults", async () => {
     const user = userEvent.setup();
     mockThreadState.mockReturnValue({
