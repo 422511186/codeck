@@ -48,8 +48,8 @@
 
 - [x] 7.1 运行 `npm run typecheck`。
 - [x] 7.2 运行 `npm run test` 或变更相关的 Vitest 子集后再补全全量测试。
-- [ ] 7.3 使用手机尺寸视口验证 composer 空闲态、输入自动增高、添加面板、图片缩略图、Skill chip、权限面板、模型选择、运行态中断和 safe-area。
-- [ ] 7.4 检查中文文案、按钮尺寸、chip 溢出、键盘弹出时的滚动行为和底部遮挡。
+- [x] 7.3 使用手机尺寸视口验证 composer 空闲态、输入自动增高、添加面板、图片缩略图、Skill chip、权限面板、模型选择、运行态中断和 safe-area。
+- [x] 7.4 检查中文文案、按钮尺寸、chip 溢出、键盘弹出时的滚动行为和底部遮挡。
 - [x] 7.5 更新必要的中文文档或测试说明，避免保留半屏编辑器和头部模型按钮的旧描述。
 
-备注：7.3/7.4 已尝试使用 Playwright + Chromium 在 `390x844` 手机视口验证 mock 服务，但当前宿主缺少 Chromium 运行所需系统库（`libatk1.0-0t64`、`libxcomposite1`、`libgbm1` 等），且需要 sudo 安装系统依赖，暂无法完成真实浏览器截图验证。
+备注：7.3/7.4 此前已尝试使用 Playwright + Chromium 在 `390x844` 手机视口验证 mock 服务，但当前宿主缺少 Chromium 运行所需系统库（`libatk1.0-0t64`、`libxcomposite1`、`libgbm1` 等），且需要 sudo 安装系统依赖；最终由用户在部署后确认移动端体验可以归档。
