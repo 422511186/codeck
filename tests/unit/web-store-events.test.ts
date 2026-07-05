@@ -1625,6 +1625,156 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("confirms a bound local user message when the server omits local Skill and image attachments", () => {
+    useStore.getState().appendEntries("thread-1", [
+      {
+        id: "local-user-skill",
+        turnId: "turn-1",
+        clientUserMessageId: "local-user-skill",
+        createdAt: 100,
+        body: {
+          kind: "user-message",
+          text: "分析 bug",
+          imagePaths: ["/tmp/uploads/bug.png"],
+          skillReferences: [{ name: "systematic-debugging", path: "/skills/systematic-debugging/SKILL.md" }],
+          status: "sent"
+        }
+      }
+    ]);
+
+    useStore.getState().replaceOrAddEntry("thread-1", {
+      id: "server-user-skill",
+      turnId: "turn-1",
+      createdAt: 101,
+      body: { kind: "user-message", text: "分析 bug", status: "sent" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "server-user-skill",
+        turnId: "turn-1",
+        clientUserMessageId: "local-user-skill",
+        body: expect.objectContaining({
+          kind: "user-message",
+          text: "分析 bug",
+          imagePaths: ["/tmp/uploads/bug.png"],
+          skillReferences: [{ name: "systematic-debugging", path: "/skills/systematic-debugging/SKILL.md" }],
+          status: "sent"
+        })
+      })
+    ]);
+  });
+
+  it("merges non-adjacent local and server user entries for the same turn while preserving activity", () => {
+    useStore.getState().appendEntries("thread-1", [
+      {
+        id: "local-user-activity",
+        turnId: "turn-1",
+        clientUserMessageId: "local-user-activity",
+        createdAt: 100,
+        body: {
+          kind: "user-message",
+          text: "看截图",
+          imagePaths: ["/tmp/uploads/timeline.png"],
+          skillReferences: [{ name: "openspec-explore", path: "/skills/openspec-explore/SKILL.md" }],
+          status: "sent"
+        }
+      },
+      {
+        id: "reasoning-1",
+        turnId: "turn-1",
+        createdAt: 101,
+        body: { kind: "reasoning", text: "先定位 timeline", done: false }
+      },
+      {
+        id: "tool-1",
+        turnId: "turn-1",
+        createdAt: 102,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "rg timeline src",
+          status: "success",
+          result: "src/web/state/store.ts"
+        }
+      }
+    ]);
+
+    useStore.getState().mergeThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "server-user-activity",
+          turnId: "turn-1",
+          createdAt: 103,
+          body: { kind: "user-message", text: "看截图", status: "sent" }
+        }
+      ],
+      null
+    );
+
+    const entries = useStore.getState().threads["thread-1"]?.entries ?? [];
+    expect(entries.filter((entry) => entry.body.kind === "user-message")).toHaveLength(1);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        id: "server-user-activity",
+        body: expect.objectContaining({
+          kind: "user-message",
+          imagePaths: ["/tmp/uploads/timeline.png"],
+          skillReferences: [{ name: "openspec-explore", path: "/skills/openspec-explore/SKILL.md" }]
+        })
+      }),
+      expect.objectContaining({ id: "reasoning-1", turnId: "turn-1" }),
+      expect.objectContaining({ id: "tool-1", turnId: "turn-1" })
+    ]);
+  });
+
+  it("keeps identical image and Skill user messages from different turns distinct", () => {
+    useStore.getState().appendEntries("thread-1", [
+      {
+        id: "local-user-same-1",
+        turnId: "turn-1",
+        clientUserMessageId: "local-user-same-1",
+        createdAt: 100,
+        body: {
+          kind: "user-message",
+          text: "继续",
+          imagePaths: ["/tmp/uploads/same.png"],
+          skillReferences: [{ name: "systematic-debugging", path: "/skills/systematic-debugging/SKILL.md" }],
+          status: "sent"
+        }
+      },
+      {
+        id: "local-user-same-2",
+        turnId: "turn-2",
+        clientUserMessageId: "local-user-same-2",
+        createdAt: 101,
+        body: {
+          kind: "user-message",
+          text: "继续",
+          imagePaths: ["/tmp/uploads/same.png"],
+          skillReferences: [{ name: "systematic-debugging", path: "/skills/systematic-debugging/SKILL.md" }],
+          status: "sent"
+        }
+      }
+    ]);
+
+    useStore.getState().replaceOrAddEntry("thread-1", {
+      id: "server-user-same-2",
+      turnId: "turn-2",
+      createdAt: 102,
+      body: { kind: "user-message", text: "继续", status: "sent" }
+    });
+
+    const entries = useStore.getState().threads["thread-1"]?.entries ?? [];
+    expect(entries.filter((entry) => entry.body.kind === "user-message")).toHaveLength(2);
+    expect(entries).toEqual([
+      expect.objectContaining({ id: "local-user-same-1", turnId: "turn-1" }),
+      expect.objectContaining({ id: "server-user-same-2", turnId: "turn-2" })
+    ]);
+  });
+
   it("replaces the local user message in place when a websocket item confirms the same prompt", () => {
     useStore.getState().appendEntries("thread-1", [
       {

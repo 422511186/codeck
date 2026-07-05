@@ -172,7 +172,7 @@ timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作
 - **AND** rewind/fork MUST 能定位用户实际选择的那一条
 
 ### Requirement: Server confirmation does not cross turn boundaries
-server user item 确认 optimistic local user message 时，客户端 SHALL 优先按 `clientUserMessageId` 或 `turnId` 映射原位替换。纯文本 fallback MUST 仅用于未绑定 turn、仍处于 sending 且候选唯一的本地消息；MUST NOT 匹配已经绑定其他 turn 的 sent local message。
+server user item 确认 optimistic local user message 时，客户端 SHALL 优先按 `clientUserMessageId`、`turnId`、server item id 或等价稳定身份原位替换。已绑定 `turnId` 的 local user message MAY 被同 turn 的 server user item 确认，即使 server item 暂缺 `skillReferences`、图片附件或 `clientUserMessageId`；此时合并结果 MUST 保留本地已知的 Skill/图片附件展示。纯文本 fallback MUST 仅用于未绑定 turn、仍处于 sending 且候选唯一的本地消息；MUST NOT 匹配已经绑定其他 turn 的 sent local message。
 
 #### Scenario: Confirmation for repeated text arrives late
 - **WHEN** timeline 中存在两条相同文本的 local user message
@@ -180,6 +180,20 @@ server user item 确认 optimistic local user message 时，客户端 SHALL 优�
 - **AND** 服务端只确认其中一个 turn 的 user item
 - **THEN** 客户端 MUST 只替换同 `turnId` 或同 `clientUserMessageId` 的 local entry
 - **AND** MUST NOT 删除或覆盖另一条相同文本 user message
+
+#### Scenario: Confirmation preserves local Skill and image attachments
+- **WHEN** 本地 optimistic user message 包含图片和 Skill 引用
+- **AND** `turn/start` 已经把该 local message 绑定到 `turnId`
+- **AND** 同一 turn 的 server user item 到达时缺少 `skillReferences`、图片附件或 `clientUserMessageId`
+- **THEN** 客户端 MUST 用该 server user item 原位确认本地 user message
+- **AND** 合并后的 user message MUST 继续展示本地已知的 Skill 引用和图片附件
+- **AND** timeline MUST NOT 同时显示 local user message 和 server user message 两条用户消息
+
+#### Scenario: Non-adjacent confirmed duplicate is merged
+- **WHEN** 本地 optimistic user message 和同 turn server user item 之间夹有 reasoning、tool、command、diff 或 runtime activity entries
+- **THEN** 客户端 MUST 仍将两条 user entries 识别为同一用户发送
+- **AND** timeline MUST 只保留一条该 turn 的 user message
+- **AND** 被夹在中间的 activity entries MUST 保持可见并保留 turn metadata
 
 ### Requirement: Fork rollback fails closed when fork-local target is unavailable
 消息级 fork SHALL 在 fork 后基于新 thread 的服务端历史定位等价目标 turn。若无法可靠定位 fork-local 目标，系统 MUST NOT 使用原 thread 的 `numTurns` 猜测 rollback 范围。

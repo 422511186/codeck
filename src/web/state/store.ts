@@ -1226,6 +1226,7 @@ function mergeReplacementEntry(current: TimelineEntry, next: TimelineEntry): Tim
       generation: next.generation ?? current.generation,
       body: {
         ...next.body,
+        imagePaths: next.body.imagePaths ?? current.body.imagePaths,
         skillReferences: next.body.skillReferences ?? current.body.skillReferences,
         status: next.body.status ?? "sent"
       }
@@ -1442,14 +1443,11 @@ function findConfirmableLocalUserIndex(state: ThreadState, entry: TimelineEntry)
       }
     }
 
-    const byTurn = state.entries.findIndex(
-      (candidate) =>
-        isLocalPendingUserMessage(candidate) &&
-        candidate.turnId === entry.turnId &&
-        userMessageKey(candidate) === userMessageKey(entry)
-    );
-    if (byTurn >= 0) {
-      return byTurn;
+    const sameTurnCandidates = state.entries
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => isLocalPendingUserMessage(candidate) && candidate.turnId === entry.turnId);
+    if (sameTurnCandidates.length === 1) {
+      return sameTurnCandidates[0]!.index;
     }
   }
 
@@ -1481,7 +1479,7 @@ function replaceConfirmedLocalUserMessagesInPlace(entries: TimelineEntry[]): Tim
         return true;
       }
       if (candidate.turnId && entry.turnId && candidate.turnId === entry.turnId) {
-        return userMessageKey(candidate) === userMessageKey(entry);
+        return true;
       }
       const key = userMessageKey(entry);
       if (!key || !isUnboundSendingLocalUserMessage(entry)) {
@@ -1510,11 +1508,8 @@ function removeDuplicateConfirmedUserMessages(entries: TimelineEntry[]): Timelin
     if (entry.body.kind !== "user-message" || entry.id.startsWith("local-user-")) {
       return true;
     }
-    if (!entry.turnId) {
-      return true;
-    }
-    const key = `${entry.turnId}\u0002${userMessageKey(entry) ?? ""}`;
-    if (!key.trim()) {
+    const key = userMessageIdentityKey(entry);
+    if (!key) {
       return true;
     }
     if (seen.has(key)) {
@@ -1544,10 +1539,27 @@ function orderTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
       if (typeof leftTurn === "number" && typeof rightTurn === "number" && leftTurn !== rightTurn) {
         return leftTurn - rightTurn;
       }
+      if (left.entry.turnId && right.entry.turnId && left.entry.turnId === right.entry.turnId) {
+        const leftPhase = timelineEntryOrderPhase(left.entry);
+        const rightPhase = timelineEntryOrderPhase(right.entry);
+        if (leftPhase !== rightPhase) {
+          return leftPhase - rightPhase;
+        }
+        if (left.entry.createdAt !== right.entry.createdAt) {
+          return left.entry.createdAt - right.entry.createdAt;
+        }
+      }
 
       return left.index - right.index;
     })
     .map(({ entry }) => entry);
+}
+
+function timelineEntryOrderPhase(entry: TimelineEntry): number {
+  if (entry.body.kind === "user-message") {
+    return 0;
+  }
+  return 1;
 }
 
 function removeConfirmedLocalUserMessages(entries: TimelineEntry[]): TimelineEntry[] {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import {
@@ -6,8 +6,19 @@ import {
   __getTimelineDerivationDiagnostics,
   __resetTimelineDerivationDiagnostics
 } from "../../src/web/components/Timeline";
+import { useStore } from "../../src/web/state/store";
 
 describe("Timeline", () => {
+  beforeEach(() => {
+    useStore.setState({
+      wsState: "idle",
+      appServer: null,
+      threads: {},
+      activeThreadId: null,
+      skillsCacheVersion: 0
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -587,6 +598,43 @@ describe("Timeline", () => {
     expect(text.indexOf("再说明第二段")).toBeLessThan(text.indexOf("Files changed · 1 · +1 -0"));
     expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("最后说明第三段"));
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+  });
+
+  it("repair 后补活动按 store 语义顺序渲染在最终助手回复之前", () => {
+    useStore.getState().appendEntries("thread-1", [
+      {
+        id: "user-1",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: { kind: "user-message", text: "分析 bug", status: "sent" }
+      },
+      {
+        id: "agent-final",
+        turnId: "turn-1",
+        createdAt: 3,
+        body: { kind: "agent-message", text: "最终结论" }
+      },
+      {
+        id: "tool-repaired",
+        turnId: "turn-1",
+        createdAt: 2,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "rg timeline src",
+          status: "success",
+          result: "src/web/state/store.ts"
+        }
+      }
+    ]);
+
+    const entries = useStore.getState().threads["thread-1"]?.entries ?? [];
+    const { container } = render(<Timeline entries={entries} />);
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("分析 bug")).toBeLessThan(text.indexOf("Searched timeline"));
+    expect(text.indexOf("Searched timeline")).toBeLessThan(text.indexOf("最终结论"));
   });
 
   it("同一内联活动组内部也按原始事件顺序显示短明细", () => {

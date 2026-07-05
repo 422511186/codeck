@@ -762,6 +762,83 @@ describe("ThreadPage", () => {
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
+  it("should place repaired turn item activity before the final assistant message", async () => {
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Repaired",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        { id: "user-1", turnId: "turn-new", role: "user", text: "分析 bug" },
+        { id: "agent-1", turnId: "turn-new", role: "agent", text: "最终结论" }
+      ],
+      lastTurnId: "turn-new",
+      nextCursor: null,
+      updatedAt: Date.now()
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    mockListTurnItems.mockResolvedValue({
+      items: [
+        { id: "agent-1", turnId: "turn-new", role: "agent", text: "最终结论" },
+        {
+          id: "cmd-1",
+          turnId: "turn-new",
+          role: "tool",
+          text: "tests passed",
+          toolKind: "command",
+          actionKind: "command",
+          server: "command",
+          tool: "npm test",
+          status: "success"
+        }
+      ],
+      nextCursor: null
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
+        "thread-1",
+        [
+          expect.objectContaining({ id: "user-1" }),
+          expect.objectContaining({
+            id: "cmd-1",
+            body: expect.objectContaining({ kind: "tool", toolKind: "command", tool: "npm test" })
+          }),
+          expect.objectContaining({ id: "agent-1" })
+        ],
+        null
+      );
+    });
+  });
+
   it("should render timeline with multiple entries", async () => {
     mockThreadState.mockReturnValue({
       entries: Array.from({ length: 10 }, (_, i) => ({

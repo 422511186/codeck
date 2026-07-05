@@ -1661,19 +1661,76 @@ function mergeTurnItemDetailsIntoTimeline(
     mergeTurnDetailEntry(baseEntriesById.get(entry.id), entry)
   );
   const baseOnlyTurnEntries = baseEntries.filter((entry) => entry.turnId === turnId && !turnItemIds.has(entry.id));
+  const mergedTurnEntries = mergeBaseOnlyTurnEntries(orderedTurnEntries, baseOnlyTurnEntries);
   const firstTurnIndex = baseEntries.findIndex((entry) => entry.turnId === turnId);
   if (firstTurnIndex < 0) {
-    return [...baseEntries, ...orderedTurnEntries, ...baseOnlyTurnEntries];
+    return [...baseEntries, ...mergedTurnEntries];
   }
 
   const beforeTurn = baseEntries.slice(0, firstTurnIndex);
   const afterTurn = baseEntries.slice(firstTurnIndex).filter((entry) => entry.turnId !== turnId);
   return [
     ...beforeTurn,
-    ...orderedTurnEntries,
-    ...baseOnlyTurnEntries,
+    ...mergedTurnEntries,
     ...afterTurn
   ];
+}
+
+function mergeBaseOnlyTurnEntries(
+  orderedTurnEntries: TimelineEntry[],
+  baseOnlyTurnEntries: TimelineEntry[]
+): TimelineEntry[] {
+  if (!baseOnlyTurnEntries.length) {
+    return orderedTurnEntries;
+  }
+
+  const detailHasUser = orderedTurnEntries.some((entry) => entry.body.kind === "user-message");
+  const baseOnlyUsers = baseOnlyTurnEntries.filter((entry) => entry.body.kind === "user-message");
+  const baseOnlyOtherEntries = baseOnlyTurnEntries.filter((entry) => entry.body.kind !== "user-message");
+  if (!detailHasUser && baseOnlyUsers.length) {
+    return [
+      ...baseOnlyUsers,
+      ...moveTrailingActivityBeforeFinalAssistant(orderedTurnEntries),
+      ...baseOnlyOtherEntries
+    ];
+  }
+
+  return [...orderedTurnEntries, ...baseOnlyTurnEntries];
+}
+
+function moveTrailingActivityBeforeFinalAssistant(entries: TimelineEntry[]): TimelineEntry[] {
+  const finalAssistantIndex = findLastAgentMessageIndex(entries);
+  if (finalAssistantIndex < 0 || finalAssistantIndex === entries.length - 1) {
+    return entries;
+  }
+
+  const beforeFinalAssistant = entries.slice(0, finalAssistantIndex);
+  const finalAssistant = entries[finalAssistantIndex]!;
+  const afterFinalAssistant = entries.slice(finalAssistantIndex + 1);
+  const trailingActivity = afterFinalAssistant.filter(isInlineActivityEntry);
+  if (!trailingActivity.length) {
+    return entries;
+  }
+  const trailingOtherEntries = afterFinalAssistant.filter((entry) => !isInlineActivityEntry(entry));
+  return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherEntries];
+}
+
+function findLastAgentMessageIndex(entries: TimelineEntry[]): number {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.body.kind === "agent-message") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isInlineActivityEntry(entry: TimelineEntry): boolean {
+  return (
+    entry.body.kind === "reasoning" ||
+    entry.body.kind === "tool" ||
+    entry.body.kind === "command" ||
+    entry.body.kind === "diff"
+  );
 }
 
 function mergeTurnDetailEntry(baseEntry: TimelineEntry | undefined, detailEntry: TimelineEntry): TimelineEntry {

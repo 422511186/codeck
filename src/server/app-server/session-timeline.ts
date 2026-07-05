@@ -515,8 +515,10 @@ function mergeTurnSessionRecords(
   const result: MobileTimelineItem[] = [];
   const usedToolIds = new Set(baseItems.map((item) => item.id));
   let cursor = 0;
+  let matchedMessage = false;
 
-  const pushToolRecords = (endExclusive: number) => {
+  const collectToolRecords = (endExclusive: number): MobileTimelineItem[] => {
+    const items: MobileTimelineItem[] = [];
     for (let index = cursor; index < endExclusive; index += 1) {
       const record = records[index];
       if (!record || record.kind !== "tool") {
@@ -526,8 +528,13 @@ function mergeTurnSessionRecords(
         continue;
       }
       usedToolIds.add(record.item.id);
-      result.push(withBaseTurnMeta(record.item, baseItems));
+      items.push(withBaseTurnMeta(record.item, baseItems));
     }
+    return items;
+  };
+
+  const pushToolRecords = (endExclusive: number) => {
+    result.push(...collectToolRecords(endExclusive));
   };
 
   for (const baseItem of baseItems) {
@@ -539,6 +546,7 @@ function mergeTurnSessionRecords(
         pushToolRecords(messageIndex);
         result.push(baseItem);
         cursor = messageIndex + 1;
+        matchedMessage = true;
         continue;
       }
     }
@@ -546,8 +554,18 @@ function mergeTurnSessionRecords(
     result.push(baseItem);
   }
 
-  pushToolRecords(records.length);
+  if (matchedMessage) {
+    pushToolRecords(records.length);
+  } else {
+    const unanchoredToolRecords = collectToolRecords(records.length);
+    result.splice(fallbackToolInsertIndex(result), 0, ...unanchoredToolRecords);
+  }
   return result;
+}
+
+function fallbackToolInsertIndex(items: MobileTimelineItem[]): number {
+  const firstAgentIndex = items.findIndex((item) => item.role === "agent");
+  return firstAgentIndex >= 0 ? firstAgentIndex : items.length;
 }
 
 export function mergeSessionTimelineItems(baseItems: MobileTimelineItem[], jsonl: string): MobileTimelineItem[] {
