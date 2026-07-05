@@ -5,7 +5,7 @@
 ## 产品边界
 
 - **后端**：Node.js / TypeScript 安全代理，桥接外部调用方到后端机器上的 Codex app-server。
-- **前端**：移动端 Web UI（React 19 + Next.js 16 app router），支持项目管理、会话列表、会话聊天、agent 输出渲染、审批、Plan/Build 切换、模型选择、设置。
+- **前端**：移动端 Web UI（React 19 + Next.js 16 app router），支持项目管理、会话列表、会话聊天、agent 输出渲染、审批、Plan/Build 切换、模型选择、目标设置和设置页。
 - 不重新实现 Codex agent，执行、权限、会话和工具行为仍交给 Codex app-server。
 - 外部调用方不直接连接 app-server，而是通过本项目后端做安全代理。
 
@@ -31,23 +31,40 @@
 ## 前端能力
 
 - **路由**：
+  - `/`：项目列表（首屏）
   - `/login`：token 登录
   - `/projects`：项目列表（localStorage 管理，按 `cwd` 聚合会话）
   - `/projects/[projectId]`：项目内会话列表（进行中 / 已归档）
-  - `/threads/[threadId]`：会话页（timeline + 输入 + Plan/Build + 模型切换 + 底部抽屉）
+  - `/threads/[threadId]`：会话页（timeline + composer + Plan/Build + 模型切换 + 底部抽屉）
   - `/settings`：默认模型与模式、主题、账号状态、Token 用量、登出
 - **核心交互**：
   - 会话 timeline：用户消息 + agent 消息（markdown + mermaid）+ 折叠卡片（命令/diff/推理/MCP/系统消息/错误）
   - 历史无限滚动 + 自动滚策略 + 「跳到最新」浮动按钮
   - WS 增量更新 + 断线重连 + 全量回填
   - 审批卡片：command_approval / file_approval / permissions_approval / question / mcp_elicitation / dynamic_tool
-  - 输入区：单行 + 全屏 ⤢ + 相册单图 + 上传进度/重试 + send/interrupt/resend ↺ + 草稿持久化
+  - composer：自动增高文本区 + `+` 添加面板 + 权限 chip + 模型/思考档位 chip + send/interrupt + 草稿持久化
+  - `+` 添加面板：列表式 bottom sheet，提供图片、引用 Skill、设定/编辑目标；隐藏尚未支持的文件和插件入口
+  - 图片：相册单图、上传进度、失败重试；Skill 引用支持多选并作为结构化输入发送
+  - 目标：从添加面板设置、编辑或清除当前会话目标；Web UI 只暴露目标描述，不暴露 token budget
   - Plan/Build segmented + 模型选择器 + 底部抽屉（重命名/归档/压缩/Fork）
   - Plan 末尾「转 Build 执行」按钮 + 会话名自动生成（首句）
 - **localStorage 命名空间**：`codex-web:`
   - `codex-web:projects`：项目列表 `{ id, name, path, addedAt, lastUsedAt }[]`
   - `codex-web:settings`：默认模型、默认模式与主题 `{ defaultModel, defaultMode, theme }`
   - `codex-web:drafts`：草稿 `{ [threadId]: string }`
+
+## 前端目录与调用边界
+
+- `src/app/`：Next.js App Router 页面和 API route handlers。
+- `src/app/login`、`src/app/projects`、`src/app/projects/[projectId]`、`src/app/threads/[threadId]`、`src/app/settings`：移动端页面。
+- `src/app/api`：浏览器访问的 HTTP API。
+- `src/web/api`：浏览器侧 fetch 封装，统一处理 cookie、401 跳转和 `{ ok, error }` 协议。
+- `src/web/ws`、`src/web/events`：浏览器侧事件连接与分发。
+- `src/web/storage`：localStorage 封装。
+- `src/web/state`：Zustand 前端运行时状态。
+- `src/web/components`：复用 UI 组件。
+- `src/web/**` 是浏览器代码，不导入 `src/server/**`。
+- 前端外部副作用统一通过 `src/web/api`、`src/web/ws` 或 `src/web/events` 走。
 
 ## 后端能力
 
@@ -66,6 +83,20 @@
 - `src/shared`：后端共享类型。
 - `docs/generated/app-server-ts`：Codex app-server TypeScript 协议快照。
 - `docs/generated/app-server-json-schema`：Codex app-server JSON Schema 协议快照。
+
+## 后端 API 约定
+
+- 除 `/api/health`、`/api/auth/login`、`/api/auth/session` 外，所有 `/api/codex/*` 接口都要求有效 session cookie。
+- 成功响应通常包含 `{ "ok": true }`，失败响应通常包含 `{ "ok": false, "error": "错误说明" }`。
+- 浏览器事件通道包括 `/ws` 和 `/api/codex/events`，用于转发 Codex app-server 通知、待确认请求和连接状态。
+- 主要 API 分组：
+  - `/api/codex/status`、`/api/codex/models`、`/api/codex/settings`：状态、模型和设置。
+  - `/api/codex/threads*`、`/api/codex/turns*`：会话、turn、回滚、fork、压缩、review、目标、realtime。
+  - `/api/codex/uploads/images`、`/api/codex/images/preview`：图片上传和预览。
+  - `/api/codex/requests*`：审批、question、MCP elicitation 和动态工具请求处理。
+  - `/api/codex/fs*`、`/api/codex/process*`、`/api/codex/terminal*`：文件、进程和终端能力。
+  - `/api/codex/plugins*`、`/api/codex/plugin-skills*`、`/api/codex/skills*`、`/api/codex/mcp*`：插件、Skill 和 MCP。
+- `POST /api/codex/threads/:threadId/goal` 底层仍兼容 `tokenBudget` 字段；当前 Web UI 保存目标时只提交目标描述，并通过 Web API 封装发送 `tokenBudget: null` 清空历史预算。
 
 ## 本地运行
 

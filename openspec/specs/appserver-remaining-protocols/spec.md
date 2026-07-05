@@ -102,7 +102,7 @@
 - **AND** 事件 MUST 保留导入成功和失败摘要
 
 ### Requirement: Auth, audit, docs, and mock behavior
-系统 SHALL 对所有新增 HTTP API 执行现有 session 认证、敏感操作审计、mock 模式覆盖和中文后端 API 文档更新。
+系统 SHALL 对所有新增 HTTP API 执行现有 session 认证、敏感操作审计、mock 模式覆盖，并更新 README 中的中文后端 API 说明。
 
 #### Scenario: Unauthenticated request is rejected
 - **WHEN** 未认证浏览器调用任一新增 `/api/codex/*` API
@@ -119,5 +119,5 @@
 - **AND** 单元测试 MUST 覆盖这些 mock 响应
 
 #### Scenario: Backend API documentation is updated
-- **WHEN** 开发者阅读 `docs/backend-api.md`
+- **WHEN** 开发者阅读 `README.md`
 - **THEN** 文档 MUST 使用中文说明新增 API 的路径、用途、关键请求体和响应形状
