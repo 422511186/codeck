@@ -312,6 +312,51 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should place trailing snapshot activity before the final assistant message with stable timestamps", async () => {
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        { id: "user-1", turnId: "turn-1", role: "user", text: "分析 timeline" },
+        { id: "agent-final", turnId: "turn-1", role: "agent", text: "最终结论" },
+        {
+          id: "cmd-1",
+          turnId: "turn-1",
+          role: "tool",
+          text: "src/app/threads/[threadId]/page.tsx",
+          toolKind: "command",
+          actionKind: "read",
+          server: "command",
+          tool: "sed -n '1,220p' src/app/threads/[threadId]/page.tsx",
+          status: "success"
+        }
+      ],
+      lastTurnId: "turn-1",
+      nextCursor: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        [
+          expect.objectContaining({ id: "user-1" }),
+          expect.objectContaining({ id: "cmd-1" }),
+          expect.objectContaining({ id: "agent-final" })
+        ],
+        null
+      );
+    });
+    const entries = mockSetThreadEntries.mock.calls.at(-1)?.[1] as Array<{ id: string; createdAt: number }>;
+    expect(entries.map((entry) => entry.id)).toEqual(["user-1", "cmd-1", "agent-final"]);
+    expect(entries[1]!.createdAt).toBeLessThan(entries[2]!.createdAt);
+  });
+
   it("should keep sending available while cached idle timeline is visible and thread detail is still loading", async () => {
     mockReadThread.mockReturnValue(new Promise(() => undefined));
     mockThreadState.mockReturnValue({
@@ -746,7 +791,6 @@ describe("ThreadPage", () => {
       expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
         "thread-1",
         [
-          expect.objectContaining({ id: "agent-1" }),
           expect.objectContaining({
             id: "cmd-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "command", tool: "npm test" })
@@ -754,7 +798,8 @@ describe("ThreadPage", () => {
           expect.objectContaining({
             id: "read-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "read" })
-          })
+          }),
+          expect.objectContaining({ id: "agent-1" })
         ],
         null
       );
@@ -832,6 +877,93 @@ describe("ThreadPage", () => {
             id: "cmd-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", tool: "npm test" })
           }),
+          expect.objectContaining({ id: "agent-1" })
+        ],
+        null
+      );
+    });
+  });
+
+  it("should place repaired turn item activity before the final assistant message when item details include the user", async () => {
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Repaired",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [
+        { id: "user-1", turnId: "turn-new", role: "user", text: "分析目标模式" },
+        { id: "agent-1", turnId: "turn-new", role: "agent", text: "方案已经整理好了。" }
+      ],
+      lastTurnId: "turn-new",
+      nextCursor: null,
+      updatedAt: Date.now()
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    mockListTurnItems.mockResolvedValue({
+      items: [
+        { id: "user-1", turnId: "turn-new", role: "user", text: "分析目标模式" },
+        { id: "agent-1", turnId: "turn-new", role: "agent", text: "方案已经整理好了。" },
+        {
+          id: "cmd-1",
+          turnId: "turn-new",
+          role: "tool",
+          text: "src/app/threads/[threadId]/page.tsx",
+          toolKind: "command",
+          actionKind: "read",
+          server: "command",
+          tool: "sed -n '1,220p' src/app/threads/[threadId]/page.tsx",
+          status: "success"
+        },
+        {
+          id: "cmd-2",
+          turnId: "turn-new",
+          role: "tool",
+          text: "src/web/state/store.ts",
+          toolKind: "command",
+          actionKind: "search",
+          server: "command",
+          tool: "rg timeline src",
+          status: "success"
+        }
+      ],
+      nextCursor: null
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
+        "thread-1",
+        [
+          expect.objectContaining({ id: "user-1" }),
+          expect.objectContaining({ id: "cmd-1" }),
+          expect.objectContaining({ id: "cmd-2" }),
           expect.objectContaining({ id: "agent-1" })
         ],
         null
@@ -1293,6 +1425,59 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(scroller.scrollTop).toBe(400);
     });
+  });
+
+  it("should preserve paginated activity before the final assistant message with stable timestamps", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "recent",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "Recent message" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: "turn-10",
+      reachedBeginning: false
+    });
+    mockListTurnsBefore.mockResolvedValue({
+      items: [
+        { id: "older-user", turnId: "turn-old", role: "user", text: "旧问题" },
+        {
+          id: "older-read",
+          turnId: "turn-old",
+          role: "tool",
+          text: "src/web/state/store.ts",
+          toolKind: "command",
+          actionKind: "read",
+          server: "command",
+          tool: "sed -n '1,80p' src/web/state/store.ts",
+          status: "success"
+        },
+        { id: "older-agent", turnId: "turn-old", role: "agent", text: "旧回答" }
+      ],
+      nextCursor: null
+    });
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+
+    await waitFor(() => {
+      expect(mockPrependEntries).toHaveBeenCalled();
+    });
+
+    const entries = mockPrependEntries.mock.calls.at(-1)?.[1] as Array<{ id: string; createdAt: number }>;
+    expect(entries.map((entry) => entry.id)).toEqual(["older-user", "older-read", "older-agent"]);
+    expect(entries[1]!.createdAt).toBeLessThan(entries[2]!.createdAt);
   });
 
   it("should show 会话开始 when reached beginning", async () => {

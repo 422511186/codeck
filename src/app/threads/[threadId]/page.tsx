@@ -367,8 +367,11 @@ export default function ThreadPage(): JSX.Element {
             `thread:${threadId}:turns:${cursor}`,
             () => codex.listTurnsBefore(threadId, cursor)
           );
-          const extra = page.items.map((it, i) =>
-            timelineItemToEntry(it, Date.now() - 10_000 - i)
+          const pageCreatedAtBase = Date.now() - 10_000;
+          const extra = repairReconstructedTimelineEntries(
+            page.items.map((it, i) =>
+              timelineItemToEntry(it, pageCreatedAtBase + i)
+            )
           );
           prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
           restorePrependScrollAnchor(el, previousScrollHeight, previousScrollTop);
@@ -1574,16 +1577,18 @@ function sendPayloadKey(text: string, imagePaths: string[], skillReferences: Ski
 }
 
 function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
-  return td.timeline.map((item, idx) =>
-    timelineItemToEntry(
-      {
-        ...item,
-        ...(typeof item.generation !== "number" && typeof td.generation === "number" ? { generation: td.generation } : {}),
-        ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
-          ? { snapshotSequence: td.snapshotSequence }
-          : {})
-      },
-      td.updatedAt - (td.timeline.length - idx)
+  return repairReconstructedTimelineEntries(
+    td.timeline.map((item, idx) =>
+      timelineItemToEntry(
+        {
+          ...item,
+          ...(typeof item.generation !== "number" && typeof td.generation === "number" ? { generation: td.generation } : {}),
+          ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
+            ? { snapshotSequence: td.snapshotSequence }
+            : {})
+        },
+        td.updatedAt - (td.timeline.length - idx)
+      )
     )
   );
 }
@@ -1681,21 +1686,47 @@ function mergeBaseOnlyTurnEntries(
   baseOnlyTurnEntries: TimelineEntry[]
 ): TimelineEntry[] {
   if (!baseOnlyTurnEntries.length) {
-    return orderedTurnEntries;
+    return repairReconstructedTurnEntries(orderedTurnEntries);
   }
 
   const detailHasUser = orderedTurnEntries.some((entry) => entry.body.kind === "user-message");
   const baseOnlyUsers = baseOnlyTurnEntries.filter((entry) => entry.body.kind === "user-message");
   const baseOnlyOtherEntries = baseOnlyTurnEntries.filter((entry) => entry.body.kind !== "user-message");
   if (!detailHasUser && baseOnlyUsers.length) {
-    return [
+    return repairReconstructedTurnEntries([
       ...baseOnlyUsers,
-      ...moveTrailingActivityBeforeFinalAssistant(orderedTurnEntries),
+      ...orderedTurnEntries,
       ...baseOnlyOtherEntries
-    ];
+    ]);
   }
 
-  return [...orderedTurnEntries, ...baseOnlyTurnEntries];
+  return repairReconstructedTurnEntries([...orderedTurnEntries, ...baseOnlyTurnEntries]);
+}
+
+function repairReconstructedTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  const repaired: TimelineEntry[] = [];
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    if (!entry.turnId) {
+      repaired.push(entry);
+      index += 1;
+      continue;
+    }
+
+    const turnId = entry.turnId;
+    const turnEntries: TimelineEntry[] = [];
+    while (index < entries.length && entries[index]?.turnId === turnId) {
+      turnEntries.push(entries[index]!);
+      index += 1;
+    }
+    repaired.push(...repairReconstructedTurnEntries(turnEntries));
+  }
+  return repaired;
+}
+
+function repairReconstructedTurnEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  return withCreatedAtFollowingEntryOrder(moveTrailingActivityBeforeFinalAssistant(entries));
 }
 
 function moveTrailingActivityBeforeFinalAssistant(entries: TimelineEntry[]): TimelineEntry[] {
@@ -1713,6 +1744,27 @@ function moveTrailingActivityBeforeFinalAssistant(entries: TimelineEntry[]): Tim
   }
   const trailingOtherEntries = afterFinalAssistant.filter((entry) => !isInlineActivityEntry(entry));
   return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherEntries];
+}
+
+function withCreatedAtFollowingEntryOrder(entries: TimelineEntry[]): TimelineEntry[] {
+  if (entries.length < 2 || hasMonotonicCreatedAt(entries)) {
+    return entries;
+  }
+
+  const baseCreatedAt = Math.min(...entries.map((entry) => entry.createdAt));
+  return entries.map((entry, index) => ({
+    ...entry,
+    createdAt: baseCreatedAt + index * 0.001
+  }));
+}
+
+function hasMonotonicCreatedAt(entries: TimelineEntry[]): boolean {
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index]!.createdAt < entries[index - 1]!.createdAt) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function findLastAgentMessageIndex(entries: TimelineEntry[]): number {

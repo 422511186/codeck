@@ -371,6 +371,64 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
   }
 }
 
+class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
+  override async request(method: string): Promise<unknown> {
+    if (method !== "thread/read") {
+      return super.request(method);
+    }
+
+    return {
+      thread: {
+        id: "thread-1",
+        sessionId: "session-1",
+        forkedFromId: null,
+        parentThreadId: null,
+        preview: "overlay final answer test",
+        ephemeral: false,
+        modelProvider: "openai",
+        createdAt: 1,
+        updatedAt: 2,
+        status: { type: "idle" },
+        path: null,
+        cwd: "/tmp/workspace",
+        cliVersion: "0.141.0",
+        source: "appServer",
+        threadSource: null,
+        agentNickname: null,
+        agentRole: null,
+        gitInfo: null,
+        name: "Overlay",
+        turns: [
+          {
+            id: "turn-1",
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: [
+              {
+                type: "userMessage",
+                id: "user-1",
+                clientId: "client-user-1",
+                content: [{ type: "text", text: "触发工具", text_elements: [] }]
+              },
+              {
+                type: "agentMessage",
+                id: "agent-final",
+                text: "最终答复",
+                phase: "final_answer",
+                memoryCitation: null
+              }
+            ]
+          }
+        ]
+      }
+    };
+  }
+}
+
 class PartialRollbackPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
@@ -1047,6 +1105,36 @@ describe("createAppServerGateway", () => {
         expect.objectContaining({ id: "process-1", status: "success" }),
         expect.objectContaining({ id: "mcp-1", status: "success" })
       ])
+    });
+  });
+
+  it("刷新读取会把未匹配 overlay 活动插入所属 turn 的最终回复之前", async () => {
+    const peer = new SnapshotWithFinalAgentOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-overlay",
+        delta: "rg timeline src\n"
+      }
+    });
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+
+    expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "cmd-overlay", "agent-final"]);
+    expect(detail.timeline[1]).toMatchObject({
+      id: "cmd-overlay",
+      turnId: "turn-1",
+      role: "tool",
+      status: "success"
     });
   });
 

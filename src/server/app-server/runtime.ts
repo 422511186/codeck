@@ -327,6 +327,62 @@ function equivalentTimelineText(left: string, right: string): boolean {
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
+function insertOverlayTimelineItem(timeline: MobileTimelineItem[], item: MobileTimelineItem): MobileTimelineItem[] {
+  if (!item.turnId || !isInlineActivityTimelineItem(item)) {
+    return [...timeline, item];
+  }
+
+  const firstTurnIndex = timeline.findIndex((candidate) => candidate.turnId === item.turnId);
+  if (firstTurnIndex < 0) {
+    return [...timeline, item];
+  }
+
+  let lastTurnIndex = firstTurnIndex;
+  for (let index = firstTurnIndex + 1; index < timeline.length; index += 1) {
+    if (timeline[index]?.turnId === item.turnId) {
+      lastTurnIndex = index;
+    }
+  }
+
+  const beforeTurn = timeline.slice(0, firstTurnIndex);
+  const turnItems = repairOverlayTurnItems([
+    ...timeline.slice(firstTurnIndex, lastTurnIndex + 1),
+    item
+  ]);
+  const afterTurn = timeline.slice(lastTurnIndex + 1).filter((candidate) => candidate.turnId !== item.turnId);
+  return [...beforeTurn, ...turnItems, ...afterTurn];
+}
+
+function repairOverlayTurnItems(items: MobileTimelineItem[]): MobileTimelineItem[] {
+  const finalAssistantIndex = findLastAssistantTimelineItemIndex(items);
+  if (finalAssistantIndex < 0 || finalAssistantIndex === items.length - 1) {
+    return items;
+  }
+
+  const beforeFinalAssistant = items.slice(0, finalAssistantIndex);
+  const finalAssistant = items[finalAssistantIndex]!;
+  const afterFinalAssistant = items.slice(finalAssistantIndex + 1);
+  const trailingActivity = afterFinalAssistant.filter(isInlineActivityTimelineItem);
+  if (!trailingActivity.length) {
+    return items;
+  }
+  const trailingOtherItems = afterFinalAssistant.filter((candidate) => !isInlineActivityTimelineItem(candidate));
+  return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherItems];
+}
+
+function findLastAssistantTimelineItemIndex(items: MobileTimelineItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role === "agent") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isInlineActivityTimelineItem(item: MobileTimelineItem): boolean {
+  return item.role === "reasoning" || item.role === "tool" || item.role === "diff";
+}
+
 type MockFsNode = {
   type: "directory" | "file";
   createdAtMs: number;
@@ -3194,7 +3250,7 @@ export class AppServerGateway {
 
     const overlayById = new Map(overlay);
     const usedOverlayIds = new Set<string>();
-    const timeline = detail.timeline.map((item) => {
+    let timeline = detail.timeline.map((item) => {
       const directOverlayEntry = overlayById.get(item.id);
       const equivalentOverlayEntry = directOverlayEntry
         ? null
@@ -3214,7 +3270,7 @@ export class AppServerGateway {
 
     for (const [id, entry] of overlayById) {
       if (!usedOverlayIds.has(id) && shouldExposeOverlayTimelineItem(entry.item)) {
-        timeline.push(entry.item);
+        timeline = insertOverlayTimelineItem(timeline, entry.item);
       }
     }
 
