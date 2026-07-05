@@ -86,6 +86,19 @@ const mockArchiveThread = vi.fn();
 const mockUnarchiveThread = vi.fn();
 const mockCompactThread = vi.fn();
 const mockForkThread = vi.fn();
+const mockSetThreadGoal = vi.fn();
+const mockClearThreadGoal = vi.fn();
+
+const sampleGoal = {
+  threadId: "thread-1",
+  objective: "完成移动端目标模式接入",
+  status: "active",
+  tokenBudget: 12_000,
+  tokensUsed: 0,
+  timeUsedSeconds: 0,
+  createdAt: 1,
+  updatedAt: 1
+};
 
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
@@ -106,7 +119,9 @@ vi.mock("../../src/web/api/endpoints", () => ({
     archiveThread: (...args: unknown[]) => mockArchiveThread(...args),
     unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args),
     compactThread: (...args: unknown[]) => mockCompactThread(...args),
-    forkThread: (...args: unknown[]) => mockForkThread(...args)
+    forkThread: (...args: unknown[]) => mockForkThread(...args),
+    setThreadGoal: (...args: unknown[]) => mockSetThreadGoal(...args),
+    clearThreadGoal: (...args: unknown[]) => mockClearThreadGoal(...args)
   }
 }));
 
@@ -230,6 +245,10 @@ describe("ThreadPage", () => {
         { id: "latest-user-fork", turnId: "fork-turn-3", turnIndex: 2, role: "user", text: "latest prompt" }
       ]
     });
+    mockSetThreadGoal.mockReset();
+    mockSetThreadGoal.mockResolvedValue(sampleGoal);
+    mockClearThreadGoal.mockReset();
+    mockClearThreadGoal.mockResolvedValue(undefined);
     mockSettingsGet.mockReturnValue({ defaultMode: "build" });
     mockThreadState.mockReturnValue({
       entries: [],
@@ -1665,6 +1684,93 @@ describe("ThreadPage", () => {
       "thread-1",
       expect.objectContaining({ permissions: expect.anything() })
     );
+  });
+
+  it("should set a thread goal from the add panel", async () => {
+    const user = userEvent.setup();
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "添加内容" }));
+    await user.click(within(screen.getByRole("dialog", { name: "添加内容" })).getByRole("button", { name: /设定目标/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "目标" });
+    expect(within(dialog).queryByLabelText("Token budget")).not.toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText("目标描述"), "  完成新的目标体验  ");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockSetThreadGoal).toHaveBeenCalledWith("thread-1", {
+        objective: "完成新的目标体验"
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "目标" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("should edit and clear an existing thread goal from the add panel", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Goal Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      goal: sampleGoal
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "添加内容" }));
+    const panel = screen.getByRole("dialog", { name: "添加内容" });
+    expect(within(panel).getByRole("button", { name: /编辑目标/ })).toHaveTextContent("已设置");
+    await user.click(within(panel).getByRole("button", { name: /编辑目标/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "目标" });
+    expect(within(dialog).getByLabelText("目标描述")).toHaveValue("完成移动端目标模式接入");
+    expect(within(dialog).queryByLabelText("Token budget")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "清除目标" }));
+
+    await waitFor(() => {
+      expect(mockClearThreadGoal).toHaveBeenCalledWith("thread-1");
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "目标" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("should keep the goal editor open when saving fails", async () => {
+    const user = userEvent.setup();
+    mockSetThreadGoal.mockRejectedValueOnce(new Error("goal unavailable"));
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "添加内容" }));
+    await user.click(within(screen.getByRole("dialog", { name: "添加内容" })).getByRole("button", { name: /设定目标/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "目标" });
+    await user.type(within(dialog).getByLabelText("目标描述"), "失败后保留");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(await within(dialog).findByText("goal unavailable")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("目标描述")).toHaveValue("失败后保留");
   });
 
   it("should render Codex App permission modes and switch reviewer-aware payloads", async () => {

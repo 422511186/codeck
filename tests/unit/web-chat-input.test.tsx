@@ -9,6 +9,17 @@ vi.setConfig({ testTimeout: 15_000 });
 const mockUploadImage = vi.fn();
 const mockListSkills = vi.fn();
 
+const sampleGoal = {
+  threadId: "thread-1",
+  objective: "完成移动端目标模式接入",
+  status: "active",
+  tokenBudget: 12_000,
+  tokensUsed: 0,
+  timeUsedSeconds: 0,
+  createdAt: 1,
+  updatedAt: 1
+};
+
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     uploadImage: (...args: unknown[]) => mockUploadImage(...args),
@@ -307,6 +318,42 @@ describe("ChatInput", () => {
     await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
     expect(screen.getByLabelText("已选上下文")).toBeInTheDocument();
+  });
+
+  it("renders the add panel as a compact action list with only supported actions", async () => {
+    const user = userEvent.setup();
+    const onOpenGoalEditor = vi.fn();
+    renderInput({ onOpenGoalEditor } as Partial<React.ComponentProps<typeof ChatInput>>);
+
+    const panel = await openAddPanel(user);
+
+    expect(within(panel).getByText("添加内容")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "完成" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /图片/ })).toHaveTextContent("上传图片到本轮消息");
+    expect(within(panel).getByRole("button", { name: /引用 Skill/ })).toHaveTextContent("管理本次消息引用的 Skill");
+    expect(within(panel).getByRole("button", { name: /设定目标/ })).toHaveTextContent("设置当前会话目标");
+    expect(within(panel).queryByText("文件")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("插件")).not.toBeInTheDocument();
+  });
+
+  it("shows selected skill count and existing goal status in the add panel", async () => {
+    const user = userEvent.setup();
+    renderInput({
+      cwd: "/repo",
+      goal: sampleGoal,
+      onOpenGoalEditor: vi.fn()
+    } as Partial<React.ComponentProps<typeof ChatInput>>);
+
+    await openSkillPickerFromAddPanel(user);
+    await user.click(await screen.findByText("openai-docs"));
+    await user.click(screen.getByText("repo-helper"));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+
+    const panel = await openAddPanel(user);
+
+    expect(within(panel).getByRole("button", { name: /引用 Skill/ })).toHaveTextContent("已选 2");
+    expect(within(panel).getByRole("button", { name: /编辑目标/ })).toHaveTextContent("已设置");
+    expect(within(panel).queryByText("完成移动端目标模式接入")).not.toBeInTheDocument();
   });
 
   it("does not expose resend from the idle composer", () => {

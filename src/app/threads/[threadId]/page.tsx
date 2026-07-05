@@ -19,7 +19,8 @@ import {
   type ModelOption,
   type PendingServerRequest,
   type SkillReference,
-  type ThreadDetail
+  type ThreadDetail,
+  type ThreadGoal
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey, threadPermissionProfileKey } from "../../../web/storage/localStore";
 import { setDraft } from "../../../web/storage/drafts";
@@ -88,6 +89,7 @@ export default function ThreadPage(): JSX.Element {
   const [archiveToast, setArchiveToast] = useState<{ visible: boolean } | null>(null);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [draftOverride, setDraftOverride] = useState<{ text: string; version: number } | null>(null);
+  const [goalEditorOpen, setGoalEditorOpen] = useState(false);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
@@ -790,6 +792,7 @@ export default function ThreadPage(): JSX.Element {
   const mode = threadMode;
   const modelId = effectiveModel;
   const running = threadRunning;
+  const currentGoal = visibleDetail.goal ?? null;
 
   return (
     <main style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
@@ -849,8 +852,10 @@ export default function ThreadPage(): JSX.Element {
         permissionDescription={effectivePermissionMode.description}
         modelLabel={shortModel(modelId)}
         reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
+        goal={currentGoal}
         onOpenPermissionPicker={() => setShowPermissionPicker(true)}
         onOpenModelPicker={openModelPicker}
+        onOpenGoalEditor={() => setGoalEditorOpen(true)}
         onSend={onSend}
         onInterrupt={onInterrupt}
       />
@@ -860,6 +865,21 @@ export default function ThreadPage(): JSX.Element {
           current={effectivePermissionMode.id}
           onSelect={onSelectPermissionMode}
           onClose={() => setShowPermissionPicker(false)}
+        />
+      ) : null}
+
+      {goalEditorOpen ? (
+        <GoalEditor
+          goal={currentGoal}
+          onClose={() => setGoalEditorOpen(false)}
+          onSave={async (input) => {
+            const goal = await codex.setThreadGoal(threadId, input);
+            setDetail((prev) => (prev ? { ...prev, goal } : prev));
+          }}
+          onClear={async () => {
+            await codex.clearThreadGoal(threadId);
+            setDetail((prev) => (prev ? { ...prev, goal: null } : prev));
+          }}
         />
       ) : null}
 
@@ -1102,8 +1122,10 @@ function ThreadComposerDock({
   permissionDescription,
   modelLabel,
   reasoningEffortLabel,
+  goal,
   onOpenPermissionPicker,
   onOpenModelPicker,
+  onOpenGoalEditor,
   onSend,
   onInterrupt
 }: {
@@ -1116,8 +1138,10 @@ function ThreadComposerDock({
   permissionDescription?: string;
   modelLabel: string;
   reasoningEffortLabel?: string;
+  goal?: ThreadGoal | null;
   onOpenPermissionPicker: () => void;
   onOpenModelPicker: () => void;
+  onOpenGoalEditor: () => void;
   onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 }): JSX.Element {
@@ -1132,11 +1156,98 @@ function ThreadComposerDock({
       permissionDescription={permissionDescription}
       modelLabel={modelLabel}
       reasoningEffortLabel={reasoningEffortLabel}
+      goal={goal}
       onOpenPermissionPicker={onOpenPermissionPicker}
       onOpenModelPicker={onOpenModelPicker}
+      onOpenGoalEditor={onOpenGoalEditor}
       onSend={onSend}
       onInterrupt={onInterrupt}
     />
+  );
+}
+
+function GoalEditor({
+  goal,
+  onClose,
+  onSave,
+  onClear
+}: {
+  goal: ThreadGoal | null;
+  onClose: () => void;
+  onSave: (input: { objective: string }) => Promise<void>;
+  onClear: () => Promise<void>;
+}): JSX.Element {
+  const [objective, setObjective] = useState(goal?.objective ?? "");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSave = objective.trim().length > 0 && !pending;
+
+  async function submit(): Promise<void> {
+    if (!canSave) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onSave({
+        objective: objective.trim()
+      });
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function clear(): Promise<void> {
+    if (!goal || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onClear();
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Overlay onClose={pending ? () => undefined : onClose} align="bottom">
+      <section role="dialog" aria-label="目标" style={goalSheetStyle}>
+        <header style={goalSheetHeaderStyle}>
+          <div>
+            <div style={goalSheetTitleStyle}>目标</div>
+            <div style={goalSheetSubtitleStyle}>{goal ? "编辑当前会话目标" : "设定当前会话目标"}</div>
+          </div>
+          <button type="button" onClick={onClose} disabled={pending} style={btnGhost}>
+            取消
+          </button>
+        </header>
+        <label style={goalFieldStyle}>
+          <span style={goalLabelStyle}>目标描述</span>
+          <textarea
+            value={objective}
+            onChange={(event) => setObjective(event.target.value)}
+            rows={3}
+            style={goalTextareaStyle}
+            autoFocus
+          />
+        </label>
+        {error ? <div style={goalErrorStyle}>{error}</div> : null}
+        <div style={goalActionsStyle}>
+          {goal ? (
+            <button type="button" onClick={clear} disabled={pending} style={btnDangerGhost}>
+              清除目标
+            </button>
+          ) : null}
+          <div style={{ flex: 1 }} />
+          <button type="button" onClick={submit} disabled={!canSave} style={canSave ? btnPrimary : btnPrimaryDisabled}>
+            保存
+          </button>
+        </div>
+      </section>
+    </Overlay>
   );
 }
 
@@ -2023,6 +2134,76 @@ const sheetStyle: React.CSSProperties = {
   boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
 };
 
+const goalSheetStyle: React.CSSProperties = {
+  background: "var(--cw-card)",
+  borderTop: "1px solid var(--cw-border)",
+  borderTopLeftRadius: 18,
+  borderTopRightRadius: 18,
+  padding: "0 14px calc(14px + var(--safe-bottom))",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  maxHeight: "76dvh",
+  overflowY: "auto",
+  boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+const goalSheetHeaderStyle: React.CSSProperties = {
+  minHeight: 58,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  borderBottom: "1px solid var(--cw-border)"
+};
+
+const goalSheetTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 650,
+  color: "var(--cw-fg)"
+};
+
+const goalSheetSubtitleStyle: React.CSSProperties = {
+  marginTop: 2,
+  fontSize: 12,
+  color: "var(--cw-fg-muted)"
+};
+
+const goalFieldStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6
+};
+
+const goalLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: "var(--cw-fg-muted)"
+};
+
+const goalTextareaStyle: React.CSSProperties = {
+  minHeight: 92,
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-bg)",
+  color: "var(--cw-fg)",
+  resize: "vertical",
+  outline: "none",
+  fontSize: 15,
+  lineHeight: "21px"
+};
+
+const goalErrorStyle: React.CSSProperties = {
+  color: "var(--cw-danger)",
+  fontSize: 13
+};
+
+const goalActionsStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10
+};
+
 function permissionRowStyle(active: boolean): React.CSSProperties {
   return {
     padding: "12px",
@@ -2076,6 +2257,20 @@ const btnPrimary: React.CSSProperties = {
   border: "none",
   background: "var(--cw-accent)",
   color: "#fff"
+};
+
+const btnPrimaryDisabled: React.CSSProperties = {
+  ...btnPrimary,
+  background: "color-mix(in srgb, var(--cw-fg-subtle) 18%, var(--cw-bg-elevated))",
+  color: "var(--cw-fg-subtle)"
+};
+
+const btnDangerGhost: React.CSSProperties = {
+  padding: "8px 0",
+  border: "none",
+  background: "transparent",
+  color: "var(--cw-danger)",
+  fontSize: 14
 };
 
 const toastStyle: React.CSSProperties = {

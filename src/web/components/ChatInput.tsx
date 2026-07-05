@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { codex } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { getDraft, setDraft } from "../storage/drafts";
-import type { SkillOption, SkillReference } from "../api/types";
+import type { SkillOption, SkillReference, ThreadGoal } from "../api/types";
 import { useStore } from "../state/store";
 
 export type ChatInputProps = {
@@ -17,8 +17,10 @@ export type ChatInputProps = {
   permissionDescription?: string;
   modelLabel?: string;
   reasoningEffortLabel?: string;
+  goal?: ThreadGoal | null;
   onOpenPermissionPicker?: () => void;
   onOpenModelPicker?: () => void;
+  onOpenGoalEditor?: () => void;
   onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
@@ -157,6 +159,12 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     void loadSkills();
   }
 
+  function openGoalEditor(): void {
+    if (!props.onOpenGoalEditor) return;
+    setAddPanelOpen(false);
+    props.onOpenGoalEditor();
+  }
+
   async function send(value = text): Promise<void> {
     if (sendingRef.current || sending || props.running || props.disabled) return;
     const trimmed = value.trim();
@@ -194,7 +202,15 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
         {addPanelOpen ? (
           <>
             <div aria-hidden="true" style={addPanelScrimStyle} onClick={() => setAddPanelOpen(false)} />
-            <AddPanel onPickImage={pickImage} onOpenSkillPicker={openSkillPicker} />
+            <AddPanel
+              selectedSkillCount={selectedSkills.length}
+              hasGoal={Boolean(props.goal)}
+              showGoal={Boolean(props.onOpenGoalEditor)}
+              onClose={() => setAddPanelOpen(false)}
+              onPickImage={pickImage}
+              onOpenSkillPicker={openSkillPicker}
+              onOpenGoalEditor={openGoalEditor}
+            />
           </>
         ) : null}
 
@@ -333,29 +349,88 @@ function modelChipText(modelLabel: string, effortLabel?: string): string {
 }
 
 function AddPanel({
+  selectedSkillCount,
+  hasGoal,
+  showGoal,
+  onClose,
   onPickImage,
-  onOpenSkillPicker
+  onOpenSkillPicker,
+  onOpenGoalEditor
 }: {
+  selectedSkillCount: number;
+  hasGoal: boolean;
+  showGoal: boolean;
+  onClose: () => void;
   onPickImage: () => void;
   onOpenSkillPicker: () => void;
+  onOpenGoalEditor: () => void;
 }): JSX.Element {
   return (
     <section role="dialog" aria-label="添加内容" style={addPanelStyle}>
-      <button type="button" onClick={onPickImage} style={addPanelItemStyle}>
-        <span style={addPanelIconStyle}><ImageIcon /></span>
-        <span style={addPanelTextStyle}>图片</span>
-      </button>
-      <button type="button" onClick={onOpenSkillPicker} style={addPanelItemStyle}>
-        <span style={addPanelIconStyle}><SkillIcon /></span>
-        <span style={addPanelTextStyle}>引用 Skill</span>
-      </button>
-      {["文件", "目标", "插件"].map((label) => (
-        <button key={label} type="button" style={addPanelItemDisabledStyle} disabled>
-          <span style={addPanelIconStyle}>＋</span>
-          <span style={addPanelTextStyle}>{label}</span>
+      <header style={addPanelHeaderStyle}>
+        <div style={addPanelTitleStyle}>添加内容</div>
+        <button type="button" onClick={onClose} style={addPanelDoneStyle}>
+          完成
         </button>
-      ))}
+      </header>
+      <div style={addPanelListStyle}>
+        <AddPanelAction
+          label="图片"
+          description="上传图片到本轮消息"
+          icon={<ImageIcon />}
+          onClick={onPickImage}
+        />
+        <AddPanelAction
+          label="引用 Skill"
+          description="管理本次消息引用的 Skill"
+          icon={<SkillIcon />}
+          badge={selectedSkillCount > 0 ? `已选 ${selectedSkillCount}` : undefined}
+          onClick={onOpenSkillPicker}
+        />
+        {showGoal ? (
+          <AddPanelAction
+            label={hasGoal ? "编辑目标" : "设定目标"}
+            description={hasGoal ? "编辑当前会话目标" : "设置当前会话目标"}
+            icon={<TargetIcon />}
+            badge={hasGoal ? "已设置" : undefined}
+            onClick={onOpenGoalEditor}
+            isLast
+          />
+        ) : null}
+      </div>
     </section>
+  );
+}
+
+function AddPanelAction({
+  label,
+  description,
+  icon,
+  badge,
+  onClick,
+  isLast = false
+}: {
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  badge?: string;
+  onClick: () => void;
+  isLast?: boolean;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      style={isLast ? addPanelActionLastStyle : addPanelActionStyle}
+    >
+      <span style={addPanelIconStyle}>{icon}</span>
+      <span style={addPanelActionTextStyle}>
+        <span style={addPanelActionTitleStyle}>{label}</span>
+        <span style={addPanelActionDescStyle}>{description}</span>
+      </span>
+      {badge ? <span style={addPanelBadgeStyle}>{badge}</span> : null}
+    </button>
   );
 }
 
@@ -685,39 +760,68 @@ const addPanelStyle: React.CSSProperties = {
   zIndex: 22,
   maxHeight: "50dvh",
   overflowY: "auto",
-  padding: 8,
+  padding: 0,
   borderRadius: 14,
   border: "1px solid var(--cw-border)",
   background: "var(--cw-card)",
   boxShadow: "0 -12px 34px rgba(0,0,0,0.18)",
-  display: "grid",
-  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-  gap: 8
+  display: "flex",
+  flexDirection: "column"
 };
 
-const addPanelItemStyle: React.CSSProperties = {
-  minHeight: 58,
-  border: "1px solid var(--cw-border)",
-  borderRadius: 10,
-  background: "var(--cw-bg-elevated)",
+const addPanelHeaderStyle: React.CSSProperties = {
+  minHeight: 48,
+  padding: "8px 12px 8px 14px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  borderBottom: "1px solid var(--cw-border)"
+};
+
+const addPanelTitleStyle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 650,
+  color: "var(--cw-fg)"
+};
+
+const addPanelDoneStyle: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "var(--cw-accent)",
+  fontSize: 14,
+  padding: "6px 4px"
+};
+
+const addPanelListStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column"
+};
+
+const addPanelActionStyle: React.CSSProperties = {
+  minHeight: 64,
+  border: "none",
+  borderBottom: "1px solid var(--cw-border)",
+  background: "transparent",
   color: "var(--cw-fg)",
   display: "flex",
   alignItems: "center",
-  gap: 10,
-  padding: "10px 12px",
+  gap: 12,
+  padding: "10px 14px",
   textAlign: "left",
-  fontSize: 14
+  fontSize: 14,
+  width: "100%"
 };
 
-const addPanelItemDisabledStyle: React.CSSProperties = {
-  ...addPanelItemStyle,
-  opacity: 0.45
+const addPanelActionLastStyle: React.CSSProperties = {
+  ...addPanelActionStyle,
+  borderBottom: "none"
 };
 
 const addPanelIconStyle: React.CSSProperties = {
-  width: 26,
-  height: 26,
-  flex: "0 0 26px",
+  width: 32,
+  height: 32,
+  flex: "0 0 32px",
   borderRadius: 8,
   display: "inline-flex",
   alignItems: "center",
@@ -726,10 +830,41 @@ const addPanelIconStyle: React.CSSProperties = {
   background: "color-mix(in srgb, var(--cw-accent) 12%, transparent)"
 };
 
-const addPanelTextStyle: React.CSSProperties = {
+const addPanelActionTextStyle: React.CSSProperties = {
   minWidth: 0,
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  gap: 3
+};
+
+const addPanelActionTitleStyle: React.CSSProperties = {
+  color: "var(--cw-fg)",
+  fontSize: 15,
+  fontWeight: 620,
   overflow: "hidden",
   textOverflow: "ellipsis",
+  whiteSpace: "nowrap"
+};
+
+const addPanelActionDescStyle: React.CSSProperties = {
+  color: "var(--cw-fg-muted)",
+  fontSize: 12,
+  lineHeight: "16px",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap"
+};
+
+const addPanelBadgeStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  border: "1px solid color-mix(in srgb, var(--cw-accent) 28%, var(--cw-border))",
+  borderRadius: 999,
+  background: "color-mix(in srgb, var(--cw-accent) 10%, transparent)",
+  color: "var(--cw-accent)",
+  padding: "3px 7px",
+  fontSize: 12,
+  fontWeight: 620,
   whiteSpace: "nowrap"
 };
 
@@ -954,6 +1089,16 @@ function SkillIcon(): JSX.Element {
         strokeLinecap="round"
         opacity="0.7"
       />
+    </svg>
+  );
+}
+
+function TargetIcon(): JSX.Element {
+  return (
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }

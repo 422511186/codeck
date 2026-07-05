@@ -11,6 +11,7 @@ import type {
   SkillOption,
   SkillReference,
   ThreadDetail,
+  ThreadGoal,
   ThreadPage,
   ThreadSummary,
   TimelinePage,
@@ -254,6 +255,27 @@ export async function updateThreadSettings(
   });
 }
 
+export async function setThreadGoal(
+  threadId: string,
+  input: { objective: string }
+): Promise<ThreadGoal> {
+  const data = await api<{ goal: ThreadGoal }>(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/goal`,
+    {
+      method: "POST",
+      body: {
+        objective: input.objective,
+        tokenBudget: null
+      }
+    }
+  );
+  return data.goal;
+}
+
+export async function clearThreadGoal(threadId: string): Promise<void> {
+  await api(`/api/codex/threads/${encodeURIComponent(threadId)}/goal`, { method: "DELETE" });
+}
+
 export async function listPendingRequests(): Promise<PendingServerRequest[]> {
   const data = await api<{ requests: PendingServerRequest[] }>("/api/codex/requests");
   return data.requests ?? [];
@@ -374,6 +396,8 @@ export const codex = {
   forkThread,
   compactThread,
   updateThreadSettings,
+  setThreadGoal,
+  clearThreadGoal,
   listPendingRequests,
   resolveRequest,
   uploadImage,

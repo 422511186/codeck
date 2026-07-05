@@ -54,6 +54,18 @@ export type ThreadDetail = ThreadSummary & {
   reasoningEffort?: string | null;
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  goal?: ThreadGoal | null;
+};
+
+export type ThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: string;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type TimelinePage = {

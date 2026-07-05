@@ -86,4 +86,31 @@ describe("web thread endpoints", () => {
 
     expect(mockApi).toHaveBeenCalledWith("/api/codex/collaboration-modes");
   });
+
+  it("设置会话目标时由 Web API 封装清空 token budget", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      goal: {
+        threadId: "thread-1",
+        objective: "只保留目标描述",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    await codex.setThreadGoal("thread-1", { objective: "只保留目标描述" });
+
+    expect(mockApi).toHaveBeenCalledWith("/api/codex/threads/thread-1/goal", {
+      method: "POST",
+      body: {
+        objective: "只保留目标描述",
+        tokenBudget: null
+      }
+    });
+  });
 });
