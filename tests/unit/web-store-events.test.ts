@@ -141,6 +141,111 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("keeps an existing activity entry in place when its completion arrives after the final assistant message", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "user-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "user-message", text: "review", status: "sent" }
+        },
+        {
+          id: "read-files",
+          turnId: "turn-1",
+          createdAt: 2,
+          body: {
+            kind: "tool",
+            toolKind: "file",
+            server: "file",
+            tool: "read",
+            status: "running",
+            result: "reading"
+          }
+        },
+        {
+          id: "agent-final",
+          turnId: "turn-1",
+          createdAt: 3,
+          body: { kind: "agent-message", text: "final answer" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 100,
+        item: {
+          id: "read-files",
+          role: "tool",
+          text: "read src/web/state/store.ts",
+          toolKind: "file",
+          server: "file",
+          tool: "read",
+          status: "success"
+        }
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "read-files",
+      "agent-final"
+    ]);
+  });
+
+  it("places a late completed activity before the final assistant message in the same turn", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "user-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "user-message", text: "review", status: "sent" }
+        },
+        {
+          id: "agent-final",
+          turnId: "turn-1",
+          createdAt: 3,
+          body: { kind: "agent-message", text: "final answer" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 100,
+        item: {
+          id: "read-files",
+          role: "tool",
+          text: "read src/web/state/store.ts",
+          toolKind: "file",
+          server: "file",
+          tool: "read",
+          status: "success"
+        }
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "read-files",
+      "agent-final"
+    ]);
+  });
+
   it("preserves turn metadata on all live timeline entries", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -961,6 +1066,7 @@ describe("web store codex events", () => {
       }
     });
 
+    const liveReasoningCreatedAt = useStore.getState().threads["thread-1"]?.entries[0]?.createdAt;
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "reasoning-1",
@@ -982,7 +1088,7 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "reasoning-1",
-        createdAt: 1234,
+        createdAt: liveReasoningCreatedAt,
         body: { kind: "reasoning", text: "完整推理", done: true }
       })
     ]);
@@ -1047,6 +1153,7 @@ describe("web store codex events", () => {
         delta: "流式推理摘要"
       }
     });
+    const liveReasoningCreatedAt = useStore.getState().threads["thread-1"]?.entries[0]?.createdAt;
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -1061,7 +1168,7 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "reasoning-1",
-        createdAt: 1234,
+        createdAt: liveReasoningCreatedAt,
         body: { kind: "reasoning", text: "流式推理摘要", done: true }
       })
     ]);

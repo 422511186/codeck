@@ -222,6 +222,10 @@ export const useStore = create<State & Actions>((set, get) => ({
       const idx = findEntryIndexById(prev, entry.id);
       const equivalentOutputIndex = idx >= 0 ? -1 : findEquivalentOutputIndex(prev.entries, entry);
       const confirmedLocalIndex = idx >= 0 || equivalentOutputIndex >= 0 ? -1 : findConfirmableLocalUserIndex(prev, entry);
+      const entryToAdd =
+        idx >= 0 || equivalentOutputIndex >= 0 || confirmedLocalIndex >= 0
+          ? entry
+          : completedActivityEntryBeforeFinalAssistant(prev.entries, entry);
       const nextEntries =
         idx >= 0
           ? prev.entries.map((current, i) => (i === idx ? mergeReplacementEntry(current, entry) : current))
@@ -229,7 +233,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             ? prev.entries.map((current, i) => (i === equivalentOutputIndex ? mergeEquivalentOutputEntry(current, entry) : current))
           : confirmedLocalIndex >= 0
             ? prev.entries.map((current, i) => (i === confirmedLocalIndex ? mergeReplacementEntry(current, entry) : current))
-          : [...prev.entries, entry];
+            : [...prev.entries, entryToAdd];
       const normalizedEntries = normalizeTimelineEntries(nextEntries);
       return {
         threads: {
@@ -1244,7 +1248,7 @@ function mergeReplacementEntry(current: TimelineEntry, next: TimelineEntry): Tim
     !next.body.text.trim()
   ) {
     return {
-      ...next,
+      ...replacementEntryWithStablePosition(current, next),
       body: { ...next.body, text: current.body.text }
     };
   }
@@ -1256,12 +1260,67 @@ function mergeReplacementEntry(current: TimelineEntry, next: TimelineEntry): Tim
     !(next.body.result ?? "").trim()
   ) {
     return {
-      ...next,
+      ...replacementEntryWithStablePosition(current, next),
       body: { ...next.body, result: current.body.result }
     };
   }
 
-  return next;
+  return replacementEntryWithStablePosition(current, next);
+}
+
+function replacementEntryWithStablePosition(current: TimelineEntry, next: TimelineEntry): TimelineEntry {
+  return {
+    ...next,
+    createdAt: current.createdAt,
+    ...(!next.turnId && current.turnId ? { turnId: current.turnId } : {}),
+    ...(typeof next.turnIndex !== "number" && typeof current.turnIndex === "number" ? { turnIndex: current.turnIndex } : {}),
+    ...(!next.clientUserMessageId && current.clientUserMessageId
+      ? { clientUserMessageId: current.clientUserMessageId }
+      : {}),
+    ...(typeof next.generation !== "number" && typeof current.generation === "number" ? { generation: current.generation } : {}),
+    ...(typeof next.snapshotSequence !== "number" && typeof current.snapshotSequence === "number"
+      ? { snapshotSequence: current.snapshotSequence }
+      : {})
+  };
+}
+
+function completedActivityEntryBeforeFinalAssistant(entries: TimelineEntry[], entry: TimelineEntry): TimelineEntry {
+  if (!entry.turnId || !isCompletedInlineActivityEntry(entry)) {
+    return entry;
+  }
+
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const current = entries[index];
+    if (!current || current.turnId !== entry.turnId) {
+      continue;
+    }
+    if (current.body.kind !== "agent-message") {
+      continue;
+    }
+    if (entry.createdAt < current.createdAt) {
+      return entry;
+    }
+    return {
+      ...entry,
+      createdAt: current.createdAt - 0.001
+    };
+  }
+  return entry;
+}
+
+function isCompletedInlineActivityEntry(entry: TimelineEntry): boolean {
+  switch (entry.body.kind) {
+    case "reasoning":
+      return entry.body.done !== false;
+    case "tool":
+      return entry.body.status !== "running";
+    case "command":
+      return entry.body.status !== "running";
+    case "diff":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function findEquivalentOutputIndex(entries: TimelineEntry[], entry: TimelineEntry): number {
