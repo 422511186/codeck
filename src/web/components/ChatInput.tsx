@@ -183,26 +183,10 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
   }
 
-  const disabled = Boolean(props.disabled) || sending || props.running || image?.status === "uploading";
-  const canSend = !disabled && text.trim().length > 0 && (!image || image.status === "ready");
+  const disabled = Boolean(props.disabled) || sending || image?.status === "uploading";
+  const canSend = !disabled && !props.running && text.trim().length > 0 && (!image || image.status === "ready");
   const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
   const selectedSkillKeys = new Set(selectedSkills.map(skillKey));
-
-  if (props.running) {
-    return (
-      <div style={barStyle}>
-        <div style={runningRowStyle}>
-          <div style={runningStatusStyle} role="status" aria-live="polite">
-            <span style={pulseDotStyle} aria-hidden="true" />
-            <span>正在生成…</span>
-          </div>
-          <button type="button" onClick={() => props.onInterrupt()} style={interruptBtn} aria-label="中断">
-            <StopIcon />
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>
@@ -284,15 +268,21 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
                 </button>
               ) : null}
             </div>
-            <button
-              type="button"
-              onClick={() => send()}
-              disabled={!canSend}
-              style={sendButtonStyle}
-              aria-label="发送"
-            >
-              <SendIcon />
-            </button>
+            {props.running ? (
+              <button type="button" onClick={() => props.onInterrupt()} style={interruptBtn} aria-label="中断">
+                <StopIcon />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => send()}
+                disabled={!canSend}
+                style={sendButtonStyle}
+                aria-label="发送"
+              >
+                <SendIcon />
+              </button>
+            )}
           </div>
           <input
             ref={fileInput}
@@ -741,31 +731,6 @@ const addPanelTextStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap"
-};
-
-const runningStatusStyle: React.CSSProperties = {
-  minHeight: 40,
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  paddingLeft: 12,
-  color: "var(--cw-fg-muted)",
-  fontSize: 14
-};
-
-const runningRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 12
-};
-
-const pulseDotStyle: React.CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: 4,
-  background: "var(--cw-accent)",
-  boxShadow: "0 0 0 4px color-mix(in srgb, var(--cw-accent) 16%, transparent)"
 };
 
 const composerCardStyle: React.CSSProperties = {

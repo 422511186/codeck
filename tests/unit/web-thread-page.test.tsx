@@ -540,6 +540,136 @@ describe("ThreadPage", () => {
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
+  it("should continue snapshot repair fallback while a repaired snapshot is still active without output", async () => {
+    vi.useFakeTimers();
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Still Running",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [{ id: "user-active", turnId: "turn-active", role: "user", text: "waiting" }],
+      lastTurnId: "turn-active",
+      updatedAt: Date.now()
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-active",
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ id: "user-active" })],
+      null
+    );
+    mockRequestSnapshotRepair.mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(2600);
+    });
+    vi.useRealTimers();
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should continue snapshot repair fallback while a repaired snapshot is still active with partial output", async () => {
+    vi.useFakeTimers();
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Still Running",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [
+        { id: "user-active", turnId: "turn-active", role: "user", text: "waiting" },
+        { id: "agent-active", turnId: "turn-active", role: "agent", text: "partial" }
+      ],
+      lastTurnId: "turn-active",
+      updatedAt: Date.now()
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "agent-active",
+          turnId: "turn-active",
+          createdAt: Date.now(),
+          body: { kind: "agent-message", text: "partial" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-active",
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      "thread-1",
+      expect.arrayContaining([expect.objectContaining({ id: "agent-active" })]),
+      null
+    );
+    mockRequestSnapshotRepair.mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(2600);
+    });
+    vi.useRealTimers();
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+  });
+
   it("should merge turn item activity into snapshot repair when the main timeline omits command items", async () => {
     const initialDetail = {
       id: "thread-1",
@@ -2445,7 +2575,7 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should not mark a fast completed turn running again when startTurn resolves after completion", async () => {
+  it("should request snapshot repair when startTurn resolves after a fast completion without output", async () => {
     const user = userEvent.setup();
     mockStartTurn.mockImplementation(async () => {
       mockThreadState.mockReturnValue({
@@ -2479,6 +2609,7 @@ describe("ThreadPage", () => {
     });
     expect(mockSetActiveTurnId).not.toHaveBeenCalledWith("thread-1", "turn-fast");
     expect(mockSetRunning.mock.calls.filter((call) => call[0] === "thread-1" && call[1] === true)).toHaveLength(1);
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
   it("should request snapshot repair when a started turn has no visible live output after a short wait", async () => {

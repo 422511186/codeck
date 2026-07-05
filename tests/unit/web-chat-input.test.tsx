@@ -153,25 +153,58 @@ describe("ChatInput", () => {
     expect(screen.queryByText("重试")).not.toBeInTheDocument();
   });
 
-  it("shows a running status bar with only the interrupt action while running", async () => {
+  it("keeps the composer available while running and replaces send with interrupt", async () => {
     const user = userEvent.setup();
     const onInterrupt = vi.fn().mockResolvedValue(undefined);
     renderInput({ running: true, onInterrupt });
 
-    expect(screen.getByText("正在生成…")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+    expect(screen.getByLabelText("添加内容")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "权限 完全访问" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex Medium" })).toBeEnabled();
     expect(screen.getByLabelText("中断")).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("添加内容")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("展开编辑")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "权限 完全访问" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "模型 gpt-5-codex Medium" })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("重发上一条")).not.toBeInTheDocument();
 
     await user.click(screen.getByLabelText("中断"));
 
     expect(onInterrupt).toHaveBeenCalled();
+  });
+
+  it("keeps a draft typed while running and sends it after the thread becomes idle", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { rerender, props } = renderInput({ running: true, onSend });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "next prompt");
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
+
+    rerender(<ChatInput {...props} running={false} />);
+
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("next prompt");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(onSend).toHaveBeenCalledWith("next prompt", [], []);
+    await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
+  });
+
+  it("lets users prepare skill context while running without sending", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ running: true, onSend, cwd: "/repo" });
+
+    await openSkillPickerFromAddPanel(user);
+    expect(await screen.findByRole("dialog", { name: "选择 Skill" })).toBeInTheDocument();
+    await user.click(await screen.findByText("openai-docs"));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+
+    expect(screen.getByLabelText("移除 Skill openai-docs")).toBeInTheDocument();
+    expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("does not send with Enter from the inline composer", async () => {
@@ -229,8 +262,8 @@ describe("ChatInput", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     rerender(<ChatInput {...props} running />);
-    expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
-    fireEvent.keyDown(document, { key: "Enter", code: "Enter" });
+    const runningComposer = screen.getByPlaceholderText("输入消息");
+    expect(fireEvent.keyDown(runningComposer, { key: "Enter", code: "Enter" })).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
   });
 

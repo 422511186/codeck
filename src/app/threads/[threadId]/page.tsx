@@ -126,7 +126,7 @@ export default function ThreadPage(): JSX.Element {
   }, []);
 
   const scheduleStartedTurnRepair = useCallback(
-    (turnId: string) => {
+    (turnId: string, requireMissingOutput = true) => {
       const key = `${threadId}\u0001${turnId}`;
       const existingTimer = startedTurnRepairTimersRef.current.get(key);
       if (existingTimer !== undefined) {
@@ -138,7 +138,7 @@ export default function ThreadPage(): JSX.Element {
         if (!currentThread?.running || currentThread.activeTurnId !== turnId) {
           return;
         }
-        if (hasVisibleServerOutputForStartedTurn(currentThread.entries, turnId)) {
+        if (requireMissingOutput && hasVisibleServerOutputForStartedTurn(currentThread.entries, turnId)) {
           return;
         }
         requestSnapshotRepair(threadId);
@@ -302,6 +302,9 @@ export default function ThreadPage(): JSX.Element {
         applyThreadDetail(td, "replace", threadId, entries);
         setRunning(threadId, isThreadRunningStatus(td.status));
         clearSnapshotRepair(threadId);
+        if (isThreadRunningStatus(td.status) && td.lastTurnId) {
+          scheduleStartedTurnRepair(td.lastTurnId, false);
+        }
       } catch (err) {
         if (isRequestAbort(err)) return;
         // Keep the current cache visible; the next stream gap or manual refresh can retry.
@@ -310,7 +313,15 @@ export default function ThreadPage(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [threadId, repairRequestedAt, applyThreadDetail, setRunning, requestSnapshotRepair, clearSnapshotRepair]);
+  }, [
+    threadId,
+    repairRequestedAt,
+    applyThreadDetail,
+    setRunning,
+    requestSnapshotRepair,
+    clearSnapshotRepair,
+    scheduleStartedTurnRepair
+  ]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -434,11 +445,14 @@ export default function ThreadPage(): JSX.Element {
         if (started.thread) {
           applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
           setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
-        } else if (useStore.getState().threads[threadId]?.running) {
-          setActiveTurnId(threadId, started.turnId);
-        }
-        if (!started.thread) {
-          scheduleStartedTurnRepair(started.turnId);
+        } else {
+          const currentThread = useStore.getState().threads[threadId];
+          if (currentThread?.running) {
+            setActiveTurnId(threadId, started.turnId);
+            scheduleStartedTurnRepair(started.turnId);
+          } else if (!hasVisibleServerOutputForStartedTurn(currentThread?.entries ?? [], started.turnId)) {
+            requestSnapshotRepair(threadId);
+          }
         }
         const serverHasUserMessage = started.thread?.timeline.some(
           (item) => item.role === "user" && item.text.trim() === text.trim()
@@ -510,6 +524,7 @@ export default function ThreadPage(): JSX.Element {
       setActiveTurnId,
       bindLocalUserMessageTurn,
       bumpMutationEpoch,
+      requestSnapshotRepair,
       scheduleStartedTurnRepair
     ]
   );
