@@ -880,6 +880,15 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("把 serverRequest/resolved notification 映射为 resolved 事件", () => {
+    expect(
+      normalizeAppServerNotification({
+        method: "serverRequest/resolved",
+        params: { requestId: 22 }
+      })
+    ).toEqual({ type: "server-request-resolved", requestId: "22" });
+  });
+
   it("忽略当前未渲染的 notification", () => {
     expect(normalizeAppServerNotification({ method: "unknown", params: {} })).toBeNull();
   });

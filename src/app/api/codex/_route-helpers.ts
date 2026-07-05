@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../server/auth";
-import { audit } from "../../../server/security";
+import { assertRuntimePathAllowed, audit } from "../../../server/security";
 import { publicErrorMessage } from "../../../shared/errors";
 
 export { audit, getAppServerGateway };
+
+export class RouteValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteValidationError";
+  }
+}
 
 export function unauthorized(request: Request): Response | null {
   return isRequestAuthenticated(request) ? null : NextResponse.json({ ok: false }, { status: 401 });
@@ -15,6 +22,10 @@ export function badRequest(error: string): Response {
 }
 
 export function serverError(error: unknown, fallback: string): Response {
+  if (error instanceof RouteValidationError) {
+    return badRequest(error.message);
+  }
+
   return NextResponse.json(
     { ok: false, error: publicErrorMessage(error, fallback) },
     { status: 502 }
@@ -30,8 +41,18 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function readJsonRecord(request: Request): Promise<Record<string, unknown>> {
-  const value = await request.json();
-  return isRecord(value) ? value : {};
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new RouteValidationError("请求体必须是有效 JSON");
+  }
+
+  if (!isRecord(value)) {
+    throw new RouteValidationError("请求体必须是 JSON 对象");
+  }
+
+  return value;
 }
 
 export function nonEmptyString(value: unknown): string | null {
@@ -48,6 +69,42 @@ export function optionalStringArray(value: unknown): string[] | null {
   }
 
   return value.filter((item): item is string => typeof item === "string");
+}
+
+export function optionalStrictStringArray(value: unknown, fieldName: string): string[] | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new RouteValidationError(`${fieldName} 必须是字符串数组`);
+  }
+
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new RouteValidationError(`${fieldName} 必须是字符串数组`);
+    }
+
+    return item.trim();
+  });
+}
+
+export function requireNonEmptyString(value: unknown, fieldName: string): string {
+  const result = nonEmptyString(value);
+  if (!result) {
+    throw new RouteValidationError(`${fieldName} 不能为空`);
+  }
+
+  return result;
+}
+
+export function assertAllowedPath(value: unknown, fieldName = "path", extraRoots: string[] = []): string {
+  const path = requireNonEmptyString(value, fieldName);
+  try {
+    return assertRuntimePathAllowed(path, extraRoots);
+  } catch (error) {
+    throw new RouteValidationError(publicErrorMessage(error, "路径不在允许的工作区内"));
+  }
 }
 
 export function optionalStringRecord(value: unknown): Record<string, string> | null {

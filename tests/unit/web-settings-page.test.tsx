@@ -27,6 +27,7 @@ vi.mock("../../src/web/api/endpoints", () => ({
 const mockLoadSettings = vi.fn();
 const mockUpdateSettings = vi.fn();
 const mockApplyTheme = vi.fn();
+const mockResetTimelineEventStreamClient = vi.fn();
 
 vi.mock("../../src/web/storage/settings", () => ({
   settingsStore: {
@@ -45,6 +46,10 @@ vi.mock("../../src/web/api/client", () => ({
       this.status = status;
     }
   }
+}));
+
+vi.mock("../../src/web/events/client", () => ({
+  resetTimelineEventStreamClient: () => mockResetTimelineEventStreamClient()
 }));
 
 describe("SettingsPage", () => {
@@ -67,6 +72,7 @@ describe("SettingsPage", () => {
     mockLoadSettings.mockReturnValue({ defaultMode: "build", defaultModel: null, theme: "system" });
     mockUpdateSettings.mockClear();
     mockApplyTheme.mockClear();
+    mockResetTimelineEventStreamClient.mockClear();
   });
 
   it("persists default mode and model selections", async () => {
@@ -123,6 +129,7 @@ describe("SettingsPage", () => {
     await user.click(screen.getByRole("button", { name: "登出" }));
 
     await waitFor(() => expect(mockLogout).toHaveBeenCalled());
+    expect(mockResetTimelineEventStreamClient).toHaveBeenCalledTimes(1);
     expect(mockReplace).toHaveBeenCalledWith("/login");
   });
 });

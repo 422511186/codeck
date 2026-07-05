@@ -6,6 +6,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { auth } from "../../web/api/endpoints";
 import { ApiError } from "../../web/api/client";
 
+function safeLoginReturnPath(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\") || /[\u0000-\u001f]/.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
 export default function LoginPage(): JSX.Element {
   return (
     <Suspense fallback={<LoginShell />}>
@@ -20,6 +32,7 @@ function LoginForm(): JSX.Element {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const returnPath = safeLoginReturnPath(params.get("return")) ?? safeLoginReturnPath(params.get("next")) ?? "/projects";
 
   useEffect(() => {
     let cancelled = false;
@@ -28,14 +41,14 @@ function LoginForm(): JSX.Element {
       .then((res) => {
         if (cancelled) return;
         if (res.authenticated) {
-          router.replace(params.get("next") || "/projects");
+          router.replace(returnPath);
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [router, params]);
+  }, [router, returnPath]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -44,7 +57,7 @@ function LoginForm(): JSX.Element {
     setError(null);
     try {
       await auth.login(token.trim());
-      router.replace(params.get("next") || "/projects");
+      router.replace(returnPath);
     } catch (err) {
       const msg = err instanceof ApiError && err.status === 401 ? "Token 不正确" : (err as Error).message;
       setError(msg);

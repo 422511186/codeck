@@ -840,6 +840,10 @@ export const useStore = create<State & Actions>((set, get) => ({
       get().addApproval(tid, req);
       return;
     }
+    if (event.type === "server-request-resolved") {
+      get().resolvePendingRequest(String(event.requestId));
+      return;
+    }
   },
   reset: (threadId) =>
     set((state) => {

@@ -65,4 +65,20 @@ describe("JsonRpcPeer", () => {
       result: { decision: "approved" }
     });
   });
+
+  it("能在连接断开时拒绝所有 pending request 并清空表", async () => {
+    const sent: string[] = [];
+    const peer = new JsonRpcPeer((message) => sent.push(message));
+
+    const first = peer.request("model/list", {});
+    const second = peer.request("thread/list", {});
+
+    peer.failPendingRequests(new Error("app-server disconnected"));
+
+    await expect(first).rejects.toThrow("app-server disconnected");
+    await expect(second).rejects.toThrow("app-server disconnected");
+    const firstRequest = JSON.parse(sent[0]!) as { id: number };
+    peer.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: { late: true } }));
+    await expect(first).rejects.toThrow("app-server disconnected");
+  });
 });

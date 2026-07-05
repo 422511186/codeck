@@ -92,3 +92,15 @@ WebSocket 连接（路径 `/ws`）MUST 在 upgrade 阶段校验 cookie 认证。
 1. **Cookie 无轮换机制**：session cookie 有效期 30 天，无 token 轮换或刷新机制。缺少 CSRF token（依赖 `sameSite: lax`）。是否需要更强的 CSRF 防护？
 2. **API Key 明文经过后端**：API Key 在 HTTP 请求体中以明文传递给 app-server。是否需要端到端加密或仅在 TLS 层保护？
 3. **WebSocket 认证仅限 upgrade 阶段**：连接建立后不再重新校验。如果 cookie 过期，已建立的 WebSocket 连接不受影响。是否符合预期？
+
+### Requirement: Login return target is same-origin path
+登录页 SHALL 只接受站内绝对路径作为登录成功后的返回目标。系统 MUST 支持规格中的 `return` 参数，并可兼容历史 `next` 参数；任何外部 URL、scheme URL、protocol-relative URL 或非法路径都 MUST 回退到项目页。
+
+#### Scenario: External next is rejected
+- **WHEN** 用户访问 `/login?next=https://example.com`
+- **THEN** 登录成功后系统 MUST 跳转到项目页
+- **AND** MUST NOT 跳转到外部站点
+
+#### Scenario: Return path is honored
+- **WHEN** 用户访问 `/login?return=/threads/abc`
+- **THEN** 登录成功后系统 MUST 跳转到 `/threads/abc`

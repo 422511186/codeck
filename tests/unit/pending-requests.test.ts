@@ -269,7 +269,7 @@ describe("normalizePendingServerRequest", () => {
       success: true,
       contentItems: [{ type: "inputText", text: "搜索结果" }]
     });
-    expect(buildPendingServerRequestResponse(request, "__failure__")).toEqual({
+    expect(buildPendingServerRequestResponse(request, "fail")).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "用户在移动端标记动态工具调用失败" }]
     });

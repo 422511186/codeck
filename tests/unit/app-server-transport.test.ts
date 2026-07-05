@@ -1,6 +1,65 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+
+const { MockWebSocket, mockSockets } = vi.hoisted(() => {
+  type Listener = (...args: unknown[]) => void;
+
+  class MiniEmitter {
+    private readonly listeners = new Map<string, Listener[]>();
+
+    on(event: string, listener: Listener): this {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+      return this;
+    }
+
+    once(event: string, listener: Listener): this {
+      const wrapped: Listener = (...args) => {
+        this.listeners.set(
+          event,
+          (this.listeners.get(event) ?? []).filter((entry) => entry !== wrapped)
+        );
+        listener(...args);
+      };
+      return this.on(event, wrapped);
+    }
+
+    emit(event: string, ...args: unknown[]): boolean {
+      const listeners = this.listeners.get(event) ?? [];
+      for (const listener of [...listeners]) {
+        listener(...args);
+      }
+      return listeners.length > 0;
+    }
+  }
+
+  class MockWebSocket extends MiniEmitter {
+    sent: string[] = [];
+    closed = false;
+
+    constructor(readonly url: string) {
+      super();
+      mockSockets.push(this);
+    }
+
+    send(message: string): void {
+      this.sent.push(message);
+    }
+
+    close(): void {
+      this.closed = true;
+      this.emit("close");
+    }
+  }
+
+  const mockSockets: MockWebSocket[] = [];
+  return { MockWebSocket, mockSockets };
+});
+
+vi.mock("ws", () => ({
+  WebSocket: MockWebSocket
+}));
+
 import {
   createAppServerSpawnInvocation,
   createManagedAppServerPeer,
@@ -9,7 +68,8 @@ import {
   type AppServerLockMetadata,
   type AppServerLockStore,
   type AppServerTransportDependencies,
-  type ManagedAppServerPeer
+  type ManagedAppServerPeer,
+  WebSocketAppServerPeer
 } from "../../src/server/app-server/transport";
 
 describe("createAppServerSpawnInvocation", () => {
@@ -25,6 +85,26 @@ describe("createAppServerSpawnInvocation", () => {
       command: "codex",
       args: ["app-server"]
     });
+  });
+});
+
+describe("WebSocketAppServerPeer", () => {
+  it("socket close 会拒绝已发出的 JSON-RPC pending request", async () => {
+    mockSockets.length = 0;
+    const peer = new WebSocketAppServerPeer("ws://127.0.0.1:31317");
+    const connecting = peer.connect();
+    const socket = mockSockets[0]!;
+    socket.emit("open");
+    await connecting;
+
+    const pending = peer.request("thread/list", {});
+    await Promise.resolve();
+    expect(socket.sent).toHaveLength(1);
+
+    socket.emit("close");
+
+    await expect(pending).rejects.toThrow("app-server disconnected");
+    expect(peer.getStatus()).toMatchObject({ state: "idle" });
   });
 });
 

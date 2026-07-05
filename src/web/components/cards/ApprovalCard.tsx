@@ -65,7 +65,7 @@ export function ApprovalCard({ approval, disabled, onResolved }: Props): JSX.Ele
         </pre>
       ) : null}
       {error ? <span style={{ color: "var(--cw-danger)", fontSize: 12 }}>{error}</span> : null}
-      {approval.kind === "question" ? (
+      {approval.kind === "question" || approval.kind === "dynamic_tool" ? (
         <QuestionActions approval={approval} submitting={submitting} disabled={disabled} onSelect={resolve} />
       ) : (
         <ApprovalActions approval={approval} submitting={submitting} disabled={disabled} onSelect={resolve} />
@@ -201,7 +201,7 @@ function describeApproval(a: PendingServerRequest): { title: string; details?: s
     case "file_approval":
       return {
         title: "写入文件需要授权",
-        details: typeof req.path === "string" ? req.path : JSON.stringify(req)
+        details: fileApprovalDetails(req)
       };
     case "permissions_approval":
       return {
@@ -220,6 +220,31 @@ function describeApproval(a: PendingServerRequest): { title: string; details?: s
     default:
       return { title: "请求授权", details: a.description || JSON.stringify(req, null, 2) };
   }
+}
+
+function fileApprovalDetails(req: Record<string, unknown>): string {
+  const path = typeof req.path === "string" ? req.path : null;
+  const diff = firstStringField(req, ["diff", "patch", "changes", "fileChanges"]);
+  if (path && diff) {
+    return `${path}\n\n${diff}`;
+  }
+  if (path) {
+    return path;
+  }
+  if (diff) {
+    return diff;
+  }
+  return JSON.stringify(req);
+}
+
+function firstStringField(req: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = req[key];
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function questionText(a: PendingServerRequest, req: Record<string, unknown>): string {

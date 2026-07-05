@@ -6,6 +6,10 @@ vi.mock("../../src/server/auth", () => ({
   isRequestAuthenticated: () => true
 }));
 
+vi.mock("../../src/server/security", () => ({
+  assertRuntimePathAllowed: (path: string) => path
+}));
+
 vi.mock("../../src/server/app-server/runtime", () => ({
   getAppServerGateway: () => ({
     listThreads: (...args: unknown[]) => mockListThreads(...args),

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { codex, auth } from "../../web/api/endpoints";
+import { resetTimelineEventStreamClient } from "../../web/events/client";
 import { applyTheme, settingsStore, themeLabel, type ThemeMode } from "../../web/storage/settings";
 import type { ChatMode, ModelOption } from "../../web/api/types";
 
@@ -94,8 +95,10 @@ export default function SettingsPage(): JSX.Element {
   async function logout(): Promise<void> {
     try {
       await auth.logout();
-      router.replace("/login");
     } catch {
+      // 登出失败时也关闭本地已认证事件流，避免旧连接继续接收事件。
+    } finally {
+      resetTimelineEventStreamClient();
       router.replace("/login");
     }
   }

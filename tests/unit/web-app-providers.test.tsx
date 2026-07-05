@@ -87,7 +87,7 @@ describe("AppProviders", () => {
     const handler = mockSetSessionInvalidHandler.mock.calls[0][0];
     handler();
 
-    expect(mockReplace).toHaveBeenCalledWith("/login?next=%2Fthreads%2Fabc");
+    expect(mockReplace).toHaveBeenCalledWith("/login?return=%2Fthreads%2Fabc");
   });
 
   it("should apply stored theme on mount", () => {
@@ -139,7 +139,7 @@ describe("AppProviders", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/login?next=%2Fprojects");
+      expect(mockReplace).toHaveBeenCalledWith("/login?return=%2Fprojects");
     });
   });
 

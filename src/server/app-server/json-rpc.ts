@@ -26,6 +26,14 @@ export class JsonRpcPeer {
     return promise;
   }
 
+  failPendingRequests(error: Error): void {
+    const pending = [...this.pending.values()];
+    this.pending.clear();
+    for (const request of pending) {
+      request.reject(error);
+    }
+  }
+
   notify(method: string, params?: unknown): void {
     const message =
       params === undefined ? { jsonrpc: "2.0", method } : { jsonrpc: "2.0", method, params };

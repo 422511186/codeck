@@ -44,6 +44,49 @@ describe("LoginPage", () => {
     mockSession.mockResolvedValue({ authenticated: false });
   });
 
+  it("should honor return path after successful login", async () => {
+    const user = userEvent.setup();
+    mockLogin.mockResolvedValue(undefined);
+    mockGet.mockImplementation((key: string) => (key === "return" ? "/threads/abc" : null));
+
+    render(<LoginPage />);
+
+    await user.type(screen.getByPlaceholderText("粘贴你的 access token"), "valid-token");
+    await user.click(screen.getByRole("button", { name: /登录/ }));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/threads/abc");
+    });
+  });
+
+  it("should reject external next path after successful login", async () => {
+    const user = userEvent.setup();
+    mockLogin.mockResolvedValue(undefined);
+    mockGet.mockImplementation((key: string) => (key === "next" ? "https://example.com" : null));
+
+    render(<LoginPage />);
+
+    await user.type(screen.getByPlaceholderText("粘贴你的 access token"), "valid-token");
+    await user.click(screen.getByRole("button", { name: /登录/ }));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/projects");
+    });
+    expect(mockReplace).not.toHaveBeenCalledWith("https://example.com");
+  });
+
+  it("should reject protocol-relative return path when already authenticated", async () => {
+    mockSession.mockResolvedValue({ authenticated: true });
+    mockGet.mockImplementation((key: string) => (key === "return" ? "//example.com/path" : null));
+
+    render(<LoginPage />);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/projects");
+    });
+    expect(mockReplace).not.toHaveBeenCalledWith("//example.com/path");
+  });
+
   it("should redirect to projects if already authenticated", async () => {
     mockSession.mockResolvedValue({ authenticated: true });
 

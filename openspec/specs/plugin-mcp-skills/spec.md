@@ -193,3 +193,15 @@ MCP 服务器启动状态变更 SHALL 通过 `mcpServer/startupStatus/updated` �
 - **THEN** 重试请求 MUST 继续携带原消息的 Skill 引用
 - **AND** timeline 中的新用户消息 MUST 继续展示这些 Skill chips
 
+### Requirement: Skills config write validates boolean semantics
+`/api/codex/skills/config` SHALL 要求 `enabled` 为真实 boolean。缺失、字符串或其他类型 MUST 被拒绝，不能通过 `Boolean(value)` 改变语义。
+
+#### Scenario: String false is rejected
+- **WHEN** 已认证用户 POST `/api/codex/skills/config` 且 `enabled` 为字符串 `"false"`
+- **THEN** route MUST 返回 HTTP 400
+- **AND** MUST NOT 调用 app-server
+
+#### Scenario: Boolean false is preserved
+- **WHEN** 已认证用户 POST `/api/codex/skills/config` 且 `enabled` 为 boolean `false`
+- **THEN** route MUST 调用 app-server 并保留 `enabled: false`
+

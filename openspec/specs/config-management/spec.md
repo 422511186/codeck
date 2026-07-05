@@ -70,3 +70,11 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 2. **Settings 聚合请求失败处理**：14 个并行请求中如果部分失败，`Promise.all` 会导致整个 settings 读取失败。是否需要降级（如部分字段为 null）？
 3. **Config 写入无乐观锁**：`writeConfigValue` 传递 `expectedVersion: null`，不做版本冲突检测。并发写入可能导致后写覆盖先写。是否需要版本控制？
 
+### Requirement: Config value read route is implemented
+系统 SHALL 支持已认证用户通过 `GET /api/codex/config/value` 读取当前配置对象。该 route MUST 调用 app-server `config/read` 对应 gateway 方法。
+
+#### Scenario: Read config value route
+- **WHEN** 已认证用户 GET `/api/codex/config/value`
+- **THEN** 系统 MUST 返回当前配置对象
+- **AND** 未认证用户 MUST 返回 401
+

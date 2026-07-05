@@ -950,6 +950,10 @@ function threadWithRecentTurns(thread: Thread, turns: Thread["turns"]): Thread {
   return { ...thread, turns };
 }
 
+function chronologicalTurnsFromDescPage(turns: Thread["turns"]): Thread["turns"] {
+  return [...turns].reverse();
+}
+
 function conversationSummaryView(response: GetConversationSummaryResponse): MobileThreadSummary {
   const summary = response.summary;
   return {
@@ -1468,7 +1472,7 @@ export class CodexAppServerClient {
         sortDirection: "desc",
         itemsView: "full"
       } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
-      return { turns: [...response.data].reverse(), nextCursor: response.nextCursor };
+      return { turns: chronologicalTurnsFromDescPage(response.data), nextCursor: response.nextCursor };
     } catch (error) {
       const fallbackTurns = threadWithTurns(metadataThread).turns;
       if (fallbackTurns.length) {
@@ -1496,7 +1500,7 @@ export class CodexAppServerClient {
       this.readThreadGoal(threadId)
     ]);
     const thread = response.initialTurnsPage
-      ? { ...response.thread, turns: response.initialTurnsPage.data }
+      ? { ...response.thread, turns: chronologicalTurnsFromDescPage(response.initialTurnsPage.data) }
       : response.thread;
 
     return {
@@ -2018,6 +2022,10 @@ export class CodexAppServerClient {
     return configRequirementsView(response.requirements);
   }
 
+  async readConfig(): Promise<ConfigReadResponse> {
+    return (await this.peer.request("config/read", {})) as ConfigReadResponse;
+  }
+
   async writeConfigValue(keyPath: string, value: MobileConfigEditInput["value"]): Promise<MobileConfigWriteResultView> {
     const params: ConfigValueWriteParams = {
       keyPath,
@@ -2518,12 +2526,13 @@ export class CodexAppServerClient {
       threadId: input.threadId,
       cursor: input.cursor,
       limit: input.limit,
+      sortDirection: "desc",
       itemsView: "full"
     };
     const response = (await this.peer.request("thread/turns/list", params)) as ThreadTurnsListResponse;
 
     return {
-      items: response.data.flatMap((turn) => timelineItemsForTurn(turn)),
+      items: chronologicalTurnsFromDescPage(response.data).flatMap((turn) => timelineItemsForTurn(turn)),
       nextCursor: response.nextCursor
     };
   }

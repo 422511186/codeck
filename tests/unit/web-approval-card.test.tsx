@@ -43,6 +43,43 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
   });
 
+  it("should render file approval diff when present", () => {
+    const approval: PendingServerRequest = {
+      requestId: "req-2",
+      kind: "file_approval",
+      request: { path: "src/app.ts", diff: "-old\n+new" }
+    };
+
+    render(<ApprovalCard approval={approval} />);
+
+    expect(screen.getByText(/src\/app\.ts/)).toBeInTheDocument();
+    expect(screen.getByText(/-old/)).toBeInTheDocument();
+    expect(screen.getByText(/\+new/)).toBeInTheDocument();
+  });
+
+  it("should submit dynamic tool protocol values", async () => {
+    const user = userEvent.setup();
+    const approval: PendingServerRequest = {
+      requestId: "req-dynamic",
+      kind: "dynamic_tool",
+      title: "动态工具调用",
+      description: "browser/search",
+      options: [
+        { value: "submit", label: "回传结果" },
+        { value: "fail", label: "标记失败" }
+      ],
+      request: { tool: "search" }
+    };
+
+    render(<ApprovalCard approval={approval} />);
+
+    await user.click(screen.getByText("标记失败"));
+
+    await waitFor(() => {
+      expect(mockResolveRequest).toHaveBeenCalledWith("req-dynamic", { value: "fail" });
+    });
+  });
+
   it("should approve request successfully", async () => {
     const user = userEvent.setup();
     const onResolved = vi.fn();

@@ -240,6 +240,13 @@ export type BrowserCodexEventEnvelope = {
   event: BrowserCodexEvent & Partial<BrowserTimelineEventIdentity>;
 };
 
+export type BrowserServerRequestResolvedEnvelope = {
+  type: "server-request-resolved";
+  requestId: string;
+};
+
+export type BrowserAppServerNotificationEnvelope = BrowserCodexEventEnvelope | BrowserServerRequestResolvedEnvelope;
+
 type DeltaParams = {
   threadId: string;
   turnId: string;
@@ -653,7 +660,16 @@ function normalizeRealtimeAudio(value: unknown): BrowserRealtimeAudioChunk | nul
 
 export function normalizeAppServerNotification(
   message: AppServerNotificationMessage
-): BrowserCodexEventEnvelope | null {
+): BrowserAppServerNotificationEnvelope | null {
+  if (message.method === "serverRequest/resolved") {
+    const params = message.params as { requestId?: unknown } | null | undefined;
+    if (!params || (typeof params.requestId !== "number" && typeof params.requestId !== "string")) {
+      return null;
+    }
+
+    return { type: "server-request-resolved", requestId: String(params.requestId) };
+  }
+
   if (message.method === "turn/started") {
     const params = message.params as { threadId?: unknown; turn?: { id?: unknown } } | null | undefined;
     if (!params || typeof params.threadId !== "string" || typeof params.turn?.id !== "string") {

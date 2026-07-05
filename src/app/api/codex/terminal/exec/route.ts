@@ -1,31 +1,40 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
+import {
+  assertAllowedPath,
+  audit,
+  badRequest,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { command?: string[]; cwd?: string; timeoutMs?: number };
-    if (!body.command?.length) {
-      return NextResponse.json({ ok: false, error: "command 不能为空" }, { status: 400 });
+    const body = await readJsonRecord(request);
+    if (
+      !Array.isArray(body.command) ||
+      body.command.length === 0 ||
+      body.command.some((part) => typeof part !== "string" || !part.trim())
+    ) {
+      return badRequest("command 必须是非空字符串数组");
     }
 
-    const cwd = body.cwd ? assertRuntimePathAllowed(body.cwd) : undefined;
+    const cwd = assertAllowedPath(body.cwd, "cwd");
+    const timeoutMs = typeof body.timeoutMs === "number" ? body.timeoutMs : undefined;
     await audit("terminal.exec", { command: body.command, cwd });
     const result = await getAppServerGateway().execCommand({
       command: body.command,
       cwd,
-      timeoutMs: body.timeoutMs
+      timeoutMs
     });
-    return NextResponse.json({ ok: true, result });
+    return ok({ result });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法执行命令" },
-      { status: 502 }
-    );
+    return serverError(error, "无法执行命令");
   }
 }

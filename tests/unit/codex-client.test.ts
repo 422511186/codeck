@@ -1840,6 +1840,94 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("thread/resume 会把 desc 初始 turns 页转换为会话正序", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      if (method === "thread/resume") {
+        return {
+          thread: {
+            id: "thread-1",
+            sessionId: "session-1",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "帮我修复登录",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 300,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "登录修复",
+            turns: []
+          },
+          model: "gpt-5-codex",
+          modelProvider: "openai",
+          serviceTier: null,
+          cwd: "C:\\Users\\huang\\workspace\\demo",
+          runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
+          instructionSources: [],
+          approvalPolicy: "untrusted",
+          approvalsReviewer: "user",
+          sandbox: { mode: "workspace-write" },
+          activePermissionProfile: null,
+          reasoningEffort: "medium",
+          initialTurnsPage: {
+            data: [
+              {
+                id: "turn-new",
+                itemsView: { type: "complete" },
+                status: { type: "completed" },
+                error: null,
+                startedAt: 201,
+                completedAt: 299,
+                durationMs: 98000,
+                items: [{ type: "agentMessage", id: "item-new", text: "新回复", phase: "final", memoryCitation: null }]
+              },
+              {
+                id: "turn-old",
+                itemsView: { type: "complete" },
+                status: { type: "completed" },
+                error: null,
+                startedAt: 101,
+                completedAt: 199,
+                durationMs: 98000,
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "item-old",
+                    clientId: "client-old",
+                    content: [{ type: "text", text: "旧请求", text_elements: [] }]
+                  }
+                ]
+              }
+            ],
+            nextCursor: "older",
+            backwardsCursor: null
+          }
+        };
+      }
+
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.resumeThread("thread-1")).resolves.toMatchObject({
+      lastTurnId: "turn-new",
+      timeline: [
+        { id: "item-old", turnId: "turn-old", turnIndex: 0, role: "user", text: "旧请求" },
+        { id: "item-new", turnId: "turn-new", turnIndex: 1, role: "agent", text: "新回复" }
+      ]
+    });
+  });
+
   it("能设置和清除当前会话目标", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -3122,6 +3210,7 @@ describe("CodexAppServerClient", () => {
         threadId: "thread-1",
         cursor: "cursor-1",
         limit: 10,
+        sortDirection: "desc",
         itemsView: "full"
       }
     });
@@ -3139,6 +3228,69 @@ describe("CodexAppServerClient", () => {
         turnId: "turn-page-1",
         cursor: "cursor-2",
         limit: 20
+      }
+    });
+  });
+
+  it("分页读取 turns 时显式请求 desc 并返回页内正序 timeline", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/turns/list") {
+        return {
+          data: [
+            {
+              id: "turn-new",
+              itemsView: { type: "complete" },
+              status: { type: "completed" },
+              error: null,
+              startedAt: 201,
+              completedAt: 299,
+              durationMs: 98000,
+              items: [{ type: "agentMessage", id: "item-new", text: "新回复", phase: "final", memoryCitation: null }]
+            },
+            {
+              id: "turn-old",
+              itemsView: { type: "complete" },
+              status: { type: "completed" },
+              error: null,
+              startedAt: 101,
+              completedAt: 199,
+              durationMs: 98000,
+              items: [
+                {
+                  type: "userMessage",
+                  id: "item-old",
+                  clientId: "client-old",
+                  content: [{ type: "text", text: "旧请求", text_elements: [] }]
+                }
+              ]
+            }
+          ],
+          nextCursor: "older",
+          backwardsCursor: null
+        };
+      }
+
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
+      items: [
+        { id: "item-old", turnId: "turn-old", role: "user", text: "旧请求", clientUserMessageId: "client-old" },
+        { id: "item-new", turnId: "turn-new", role: "agent", text: "新回复" }
+      ],
+      nextCursor: "older"
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        cursor: "cursor-1",
+        limit: 10,
+        sortDirection: "desc",
+        itemsView: "full"
       }
     });
   });

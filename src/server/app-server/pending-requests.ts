@@ -37,7 +37,7 @@ export type BrowserServerRequestEnvelope = {
 
 export type BrowserServerRequestResolvedEnvelope = {
   type: "server-request-resolved";
-  requestId: number;
+  requestId: string;
 };
 
 export type BrowserServerRequestEvent = BrowserServerRequestEnvelope | BrowserServerRequestResolvedEnvelope;
@@ -232,7 +232,7 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   }
 
   if (request.kind === "dynamic_tool") {
-    if (value === "__failure__") {
+    if (value === "fail") {
       return {
         success: false,
         contentItems: [{ type: "inputText", text: "用户在移动端标记动态工具调用失败" }]

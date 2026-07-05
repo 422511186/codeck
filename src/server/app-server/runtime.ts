@@ -132,6 +132,7 @@ import type { CommandExecResizeParams } from "../../../docs/generated/app-server
 import type { CommandExecTerminateParams } from "../../../docs/generated/app-server-ts/v2/CommandExecTerminateParams";
 import type { CommandExecWriteParams } from "../../../docs/generated/app-server-ts/v2/CommandExecWriteParams";
 import type { ConfigBatchWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigBatchWriteParams";
+import type { ConfigReadResponse } from "../../../docs/generated/app-server-ts/v2/ConfigReadResponse";
 import type { ConfigValueWriteParams } from "../../../docs/generated/app-server-ts/v2/ConfigValueWriteParams";
 import type { FsCopyParams } from "../../../docs/generated/app-server-ts/v2/FsCopyParams";
 import type { FsCreateDirectoryParams } from "../../../docs/generated/app-server-ts/v2/FsCreateDirectoryParams";
@@ -2605,6 +2606,11 @@ export class AppServerGateway {
       if (!event) {
         return;
       }
+      if (event.type === "server-request-resolved") {
+        this.pendingServerRequests.delete(Number(event.requestId));
+        this.emitBrowserEvent(event);
+        return;
+      }
       if (this.isDeletedTurnEvent(event)) {
         return;
       }
@@ -2668,7 +2674,7 @@ export class AppServerGateway {
 
     await this.peer.respondToServerRequest(requestId, response);
     this.pendingServerRequests.delete(requestId);
-    this.emitBrowserEvent({ type: "server-request-resolved", requestId });
+    this.emitBrowserEvent({ type: "server-request-resolved", requestId: String(requestId) });
   }
 
   private emitBrowserEvent(event: BrowserTimelineEvent): void {
@@ -3445,6 +3451,11 @@ export class AppServerGateway {
   async getConfigRequirements(): Promise<MobileConfigRequirementsView | null> {
     await this.ensureReady();
     return this.client.getConfigRequirements();
+  }
+
+  async readConfig(): Promise<ConfigReadResponse> {
+    await this.ensureReady();
+    return this.client.readConfig();
   }
 
   async writeConfigValue(

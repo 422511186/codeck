@@ -1,7 +1,13 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { audit } from "../../../../../server/security";
+import {
+  assertAllowedPath,
+  audit,
+  badRequest,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 type WindowsSandboxSetupMode = "elevated" | "unelevated";
 
@@ -10,24 +16,26 @@ function isSetupMode(value: unknown): value is WindowsSandboxSetupMode {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json().catch(() => ({}))) as { mode?: unknown; cwd?: unknown };
+    const body = await readJsonRecord(request);
     if (!isSetupMode(body.mode)) {
-      return NextResponse.json({ ok: false, error: "mode 只能是 elevated 或 unelevated" }, { status: 400 });
+      return badRequest("mode 只能是 elevated 或 unelevated");
     }
 
-    const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : null;
+    if (body.cwd !== undefined && typeof body.cwd !== "string") {
+      return badRequest("cwd 必须是字符串");
+    }
+
+    const cwd = typeof body.cwd === "string" && body.cwd.trim() ? assertAllowedPath(body.cwd, "cwd") : null;
     await audit("windowsSandbox.setupStart", { mode: body.mode, cwd });
     const result = await getAppServerGateway().startWindowsSandboxSetup({ mode: body.mode, cwd });
-    return NextResponse.json({ ok: true, result });
+    return ok({ result });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法启动 Windows Sandbox 设置" },
-      { status: 502 }
-    );
+    return serverError(error, "无法启动 Windows Sandbox 设置");
   }
 }

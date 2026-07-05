@@ -1,16 +1,18 @@
 import {
   audit,
+  assertAllowedPath,
   badRequest,
   getAppServerGateway,
   nonEmptyString,
   ok,
   optionalString,
-  optionalStringArray,
+  optionalStrictStringArray,
   optionalStringRecord,
   readJsonRecord,
   serverError,
   unauthorized
 } from "../../_route-helpers";
+import { getRuntimeConfig } from "../../../../../server/runtime";
 
 export async function POST(request: Request): Promise<Response> {
   const auth = unauthorized(request);
@@ -30,7 +32,9 @@ export async function POST(request: Request): Promise<Response> {
       reason: optionalString(body.reason),
       threadId: optionalString(body.threadId),
       includeLogs: typeof body.includeLogs === "boolean" ? body.includeLogs : undefined,
-      extraLogFiles: optionalStringArray(body.extraLogFiles),
+      extraLogFiles: optionalStrictStringArray(body.extraLogFiles, "extraLogFiles")?.map((path) =>
+        assertAllowedPath(path, "extraLogFiles", [getRuntimeConfig().uploadDir])
+      ),
       tags: optionalStringRecord(body.tags)
     };
 

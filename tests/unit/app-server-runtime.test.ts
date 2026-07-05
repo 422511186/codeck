@@ -192,6 +192,7 @@ class RejectingServerRequestPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "ready" };
   responses: Array<{ id: number; result: unknown }> = [];
   private serverRequestHandler: ((message: AppServerServerRequestMessage) => void) | null = null;
+  private notificationHandler: ((message: AppServerNotificationMessage) => void) | null = null;
 
   async connect(): Promise<void> {
     this.status = { state: "ready" };
@@ -205,8 +206,11 @@ class RejectingServerRequestPeer implements ManagedAppServerPeer {
     return this.status;
   }
 
-  onNotification(_handler: (message: AppServerNotificationMessage) => void): () => void {
-    return () => undefined;
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandler = handler;
+    return () => {
+      this.notificationHandler = null;
+    };
   }
 
   onServerRequest(handler: (message: AppServerServerRequestMessage) => void): () => void {
@@ -218,6 +222,10 @@ class RejectingServerRequestPeer implements ManagedAppServerPeer {
 
   emitServerRequest(message: AppServerServerRequestMessage): void {
     this.serverRequestHandler?.(message);
+  }
+
+  emitNotification(message: AppServerNotificationMessage): void {
+    this.notificationHandler?.(message);
   }
 
   async respondToServerRequest(id: number, result: unknown): Promise<void> {
@@ -1571,7 +1579,7 @@ describe("createAppServerGateway", () => {
     await gateway.resolveServerRequest(1, "accept");
 
     expect(gateway.listPendingServerRequests()).toEqual([]);
-    expect(events).toContainEqual({ type: "server-request-resolved", requestId: 1 });
+    expect(events).toContainEqual({ type: "server-request-resolved", requestId: "1" });
   });
 
   it("resolveServerRequest 为 question 构造 response，respond 失败时保留 pending 且不广播 resolved", async () => {
@@ -1611,6 +1619,32 @@ describe("createAppServerGateway", () => {
     ]);
     expect(gateway.listPendingServerRequests()).toHaveLength(1);
     expect(events).not.toContainEqual({ type: "server-request-resolved", requestId: 22 });
+  });
+
+  it("app-server 外部 resolved notification 会删除 pending 并广播 string requestId", () => {
+    const peer = new RejectingServerRequestPeer();
+    const gateway = new AppServerGateway(peer);
+    const events: unknown[] = [];
+
+    gateway.onBrowserEvent((event) => events.push(event));
+    peer.emitServerRequest({
+      id: 23,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        availableDecisions: ["accept", "decline"]
+      }
+    });
+
+    expect(gateway.listPendingServerRequests()).toHaveLength(1);
+
+    peer.emitNotification({ method: "serverRequest/resolved", params: { requestId: 23 } });
+
+    expect(gateway.listPendingServerRequests()).toEqual([]);
+    expect(events).toContainEqual({ type: "server-request-resolved", requestId: "23" });
   });
 
   it("mock 模式支持 fork、rollback、interrupt 和 steer", async () => {
@@ -2030,6 +2064,7 @@ describe("createAppServerGateway", () => {
       params: {
         threadId: "thread-1",
         limit: 100,
+        sortDirection: "desc",
         itemsView: "full"
       }
     });

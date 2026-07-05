@@ -424,6 +424,7 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
       });
 
       socket.once("close", () => {
+        this.rpc?.failPendingRequests(new Error("app-server disconnected"));
         if (this.status.state === "ready") {
           this.status = this.withDiagnostics({ state: "idle" });
         }
@@ -434,6 +435,7 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
 
       socket.once("error", (error) => {
         clearTimeout(timeout);
+        this.rpc?.failPendingRequests(error instanceof Error ? error : new Error("app-server WebSocket error"));
         reject(error);
       });
     });
@@ -467,6 +469,7 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
   }
 
   close(): void {
+    this.rpc?.failPendingRequests(new Error("app-server disconnected"));
     this.socket?.close();
     this.socket = null;
     this.rpc = null;

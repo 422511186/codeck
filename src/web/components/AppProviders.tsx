@@ -20,7 +20,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setSessionInvalidHandler(() => {
       const next = encodeURIComponent(pathname || "/projects");
-      router.replace(`/login?next=${next}`);
+      router.replace(`/login?return=${next}`);
     });
     return () => setSessionInvalidHandler(null);
   }, [pathname, router]);
@@ -70,7 +70,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
       .then((res) => {
         if (cancelled || res.authenticated) return;
         const next = encodeURIComponent(pathname || "/projects");
-        router.replace(`/login?next=${next}`);
+        router.replace(`/login?return=${next}`);
       })
       .catch(() => {});
 

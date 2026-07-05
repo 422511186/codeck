@@ -1,8 +1,10 @@
 import {
+  assertAllowedPath,
   audit,
+  badRequest,
   getAppServerGateway,
   ok,
-  optionalStringArray,
+  optionalStrictStringArray,
   readJsonRecord,
   serverError,
   unauthorized
@@ -16,8 +18,12 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const body = await readJsonRecord(request);
-    const includeHome = typeof body.includeHome === "boolean" ? body.includeHome : undefined;
-    const cwds = optionalStringArray(body.cwds);
+    if (body.includeHome !== undefined && typeof body.includeHome !== "boolean") {
+      return badRequest("includeHome 必须是 boolean");
+    }
+
+    const includeHome = body.includeHome;
+    const cwds = optionalStrictStringArray(body.cwds, "cwds")?.map((cwd) => assertAllowedPath(cwd, "cwd"));
 
     await audit("externalAgentConfig.detect", { includeHome: includeHome ?? null, cwdCount: cwds?.length ?? 0 });
     const result = await getAppServerGateway().detectExternalAgentConfig({ includeHome, cwds });

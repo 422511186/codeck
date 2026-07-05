@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../server/auth";
+import { assertRuntimePathAllowed } from "../../../../server/security";
+import { publicErrorMessage } from "../../../../shared/errors";
 
 const CWD_FILTER_SCAN_PAGE_LIMIT = 100;
 
@@ -21,7 +23,18 @@ export async function GET(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const cursor = url.searchParams.get("cursor");
     const searchTerm = (url.searchParams.get("search") || url.searchParams.get("q") || "").trim();
-    const cwd = url.searchParams.get("cwd")?.trim();
+    const rawCwd = url.searchParams.get("cwd")?.trim();
+    let cwd: string | undefined;
+    if (rawCwd) {
+      try {
+        cwd = assertRuntimePathAllowed(rawCwd);
+      } catch (error) {
+        return NextResponse.json(
+          { ok: false, error: publicErrorMessage(error, "cwd 不在允许的工作区内") },
+          { status: 400 }
+        );
+      }
+    }
     const archived = url.searchParams.get("archived") === "true";
     const gateway = getAppServerGateway();
     const readPage = (nextCursor: string | null) => {
