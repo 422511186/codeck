@@ -497,15 +497,16 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 - **AND** MUST 保持移动端页面主 timeline 不被完整 diff DOM 卡死
 
 ### Requirement: Timeline 活动按 turn 聚合为可展开摘要
-移动端 timeline SHALL 将同一 turn 内连续的 Thinking、工具调用、shell/bash、read/list/search、文件变更和验证类输出聚合为轻量 activity block。activity block SHALL 默认展示摘要行，并允许用户展开查看原始活动详情。
+移动端 timeline SHALL 将同一 turn 内连续的 Thinking、工具调用、shell/bash、read/list/search、文件变更和验证类输出聚合为轻量 activity block。activity block SHALL 默认只展示摘要行，并允许用户先展开 activity block 查看动作列表，再展开单条动作查看原始活动详情。
 
 #### Scenario: 默认显示活动摘要
 - **WHEN** 一个 turn 内产生多个 reasoning、tool、command 或 diff entry
 - **THEN** timeline MUST 默认显示一个或多个 activity block 摘要
 - **AND** 摘要 MUST 不把每个底层 entry 都以同等重量的独立卡片铺满首屏
+- **AND** 摘要 MUST 不默认显示底层动作列表
 
 #### Scenario: 展开后保留原始详情
-- **WHEN** 用户展开 activity block
+- **WHEN** 用户展开 activity block 并继续展开其中某条动作
 - **THEN** 系统 MUST 显示被聚合的原始活动详情
 - **AND** 详情 MUST 包含原始命令、工具名、参数、输出、路径、diff 或错误信息中可用的内容
 
@@ -544,11 +545,11 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 - **AND** 系统 MUST NOT 只显示未经整理的大段 JSON 作为默认摘要
 
 ### Requirement: 移动端活动以内联日志穿插展示
-移动端 timeline SHALL 将 agent 运行中的工具、读取、搜索、命令、Skill/工具加载、文件变更和公开 reasoning 等活动渲染为 Codex App 风格的内联活动日志。内联活动日志 SHALL 作为消息流的一部分穿插在 assistant 消息之间，MUST NOT 显示统一的 `Activity` 标题、厚卡片边框、强调色左边框或独立卡片容器。snapshot、pagination、overlay 或 JSONL repair 补齐活动但缺少可靠文本锚点时，系统 MUST 使用同 turn 的安全语义插入点，至少将活动放在 user message 之后、最终 assistant 回复之前，且该顺序 MUST 在 store normalize、刷新、历史分页和 overlay 合并后保持稳定。系统 MUST NOT 因找不到锚点就统一追加到 turn 末尾。
+移动端 timeline SHALL 将 agent 运行中的工具、读取、搜索、命令、Skill/工具加载、文件变更和公开 reasoning 等活动渲染为 Codex App 风格的内联活动日志。内联活动日志 SHALL 作为消息流的一部分穿插在 assistant 消息之间，默认只显示具体活动标题摘要；展开 activity block 后显示动作列表，展开单条动作后显示完整详情。内联活动日志 MUST NOT 显示统一的 `Activity` 标题、厚卡片边框、强调色左边框或独立卡片容器。snapshot、pagination、overlay 或 JSONL repair 补齐活动但缺少可靠文本锚点时，系统 MUST 使用同 turn 的安全语义插入点，至少将活动放在 user message 之后、最终 assistant 回复之前，且该顺序 MUST 在 store normalize、刷新、历史分页和 overlay 合并后保持稳定。系统 MUST NOT 因找不到锚点就统一追加到 turn 末尾。
 
 #### Scenario: 活动不显示 Activity 卡片
 - **WHEN** 一个 turn 产生 tool、command、diff、reasoning 或 runtime loading 活动
-- **THEN** timeline MUST 渲染具体活动标题和明细行
+- **THEN** timeline MUST 渲染具体活动标题摘要
 - **AND** timeline MUST NOT 显示 `Activity` 作为用户可见标题
 - **AND** 活动 MUST NOT 使用厚卡片、蓝色左侧强调条或独立卡片容器
 
@@ -593,7 +594,7 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 #### Scenario: Loaded tools 标题
 - **WHEN** 活动组只包含 runtime Skill、tool instruction 或工具加载类活动
 - **THEN** 标题 MUST 显示 `Loaded N tools` 或等价的具体加载摘要
-- **AND** 明细 MUST 默认显示每个已知 Skill 或工具名称
+- **AND** 展开 activity block 后 MUST 显示每个已知 Skill 或工具名称
 
 #### Scenario: 文件读取和命令组合标题
 - **WHEN** 活动组包含 read/search/list/command 等执行动作
@@ -605,20 +606,22 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 - **THEN** 标题 MUST 显示被修改文件数量和总增删行数
 - **AND** 标题 MUST 不要求用户展开才能知道有文件被改动
 
-### Requirement: 短活动明细默认可见
-内联活动日志 SHALL 默认显示短明细行。短明细包括 Skill/工具读取名称、文件读取路径、搜索目标、短命令名、简短工具动作和文件变更路径摘要。长输出、unified diff、完整命令 stdout/stderr、长 JSON 参数或结果 SHALL 放入展开详情。
+### Requirement: 内联活动支持两级展开详情
+内联活动日志 SHALL 使用两级展开结构：activity block 默认只显示摘要行；用户展开 activity block 后 MUST 显示该组内的动作列表；用户展开单条动作后 MUST 显示该动作的完整可用详情。
 
-#### Scenario: Skill 明细默认显示
-- **WHEN** 活动组包含 runtime loaded tools 或 Skill 读取明细
-- **THEN** timeline MUST 默认显示 `读取 <name> 技能` 或等价短明细
-- **AND** 用户 MUST 不需要展开才能看到加载了哪些已知 Skill 或工具
+#### Scenario: 默认只显示摘要行
+- **WHEN** 一个 activity block 包含多条 read、search、list、command、tool、reasoning 或 diff 活动
+- **THEN** timeline MUST 默认只显示该 block 的摘要行
+- **AND** timeline MUST NOT 默认显示每条底层动作的短明细列表
 
-#### Scenario: 文件读取明细默认显示
-- **WHEN** 活动组包含 read、list 或 search 动作
-- **THEN** timeline MUST 默认显示短路径、搜索词或动作名称
-- **AND** 绝对路径、长参数和完整输出 MUST 不挤占默认明细
+#### Scenario: 展开 activity block 显示动作列表
+- **WHEN** 用户展开 activity block
+- **THEN** timeline MUST 显示该 block 内每条动作的短标题列表
+- **AND** 每条动作 MUST 保留独立的展开入口
+- **AND** 动作列表 MUST 使用短路径、搜索目标、短命令名或工具名称，避免默认显示长参数和完整输出
 
-#### Scenario: 长详情折叠
-- **WHEN** 活动包含完整命令输出、diff、长 JSON 或大段 reasoning 文本
-- **THEN** 默认明细 MUST 只显示短摘要
-- **AND** 用户展开后 MUST 能查看完整可用详情
+#### Scenario: 展开单条动作显示详情
+- **WHEN** 用户展开 activity block 中的一条动作
+- **THEN** timeline MUST 显示该动作的完整可用详情
+- **AND** 详情 MUST 包含原始命令、工具名、参数、输出、路径、diff 或错误信息中可用的内容
+- **AND** 其他未展开动作 MUST 继续只显示短标题

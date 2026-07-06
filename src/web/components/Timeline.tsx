@@ -306,15 +306,28 @@ function TimelineRow({
 
 function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const [openActionKeys, setOpenActionKeys] = useState<Set<string>>(() => new Set());
   const sections = inlineActivitySections(entries);
 
-  function toggle(key: string): void {
+  function toggleSection(key: string): void {
     setOpenKeys((current) => {
       const next = new Set(current);
       if (next.has(key)) {
         next.delete(key);
       } else {
         next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function toggleAction(actionKey: string): void {
+    setOpenActionKeys((current) => {
+      const next = new Set(current);
+      if (next.has(actionKey)) {
+        next.delete(actionKey);
+      } else {
+        next.add(actionKey);
       }
       return next;
     });
@@ -332,7 +345,7 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
               {...(canExpand ? { "aria-expanded": open } : {})}
               onClick={() => {
                 if (canExpand) {
-                  toggle(section.key);
+                  toggleSection(section.key);
                 }
               }}
               style={inlineActivityButtonStyle}
@@ -348,20 +361,27 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
                 </span>
               ) : null}
             </button>
-            {section.details.length ? (
-              <div style={inlineActivityRowsStyle}>
-                {section.details.map((detail, index) => (
-                  <div key={`${section.key}-detail-${index}`} style={inlineActivityRowStyle}>
-                    {detail}
-                  </div>
-                ))}
-              </div>
-            ) : null}
             {open ? (
               <div style={activityDetailsStyle}>
-                {section.entries.map((entry) => (
-                  <ActivityDetail key={entry.id} entry={entry} />
-                ))}
+                {inlineActivityActionRows(section).map((row) => {
+                  const entryOpen = openActionKeys.has(row.key);
+                  return (
+                    <div key={row.key} style={activityDetailItemStyle}>
+                      <button
+                        type="button"
+                        aria-expanded={entryOpen}
+                        onClick={() => toggleAction(row.key)}
+                        style={inlineActivityEntryButtonStyle}
+                      >
+                        <span style={inlineActivityEntryTitleStyle}>{row.label}</span>
+                        <span aria-hidden="true" style={inlineActivityChevronStyle}>
+                          {entryOpen ? "⌄" : "›"}
+                        </span>
+                      </button>
+                      {entryOpen ? <ActivityDetail entry={row.entry} /> : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -377,6 +397,12 @@ type InlineActivitySection = {
   details: string[];
   entries: TimelineEntry[];
   failed: boolean;
+};
+
+type InlineActivityActionRow = {
+  key: string;
+  label: string;
+  entry: TimelineEntry;
 };
 
 type InlineActivitySectionKind = "thinking" | "skills" | "commands" | "tools" | "files" | "fallback";
@@ -525,6 +551,29 @@ function inlineActivitySection(
     entries,
     failed: entries.some((entry) => activityEntryFailed(entry))
   };
+}
+
+function inlineActivityActionRows(section: InlineActivitySection): InlineActivityActionRow[] {
+  return section.entries.flatMap((entry, entryIndex) => {
+    if (isSkillsLoadedActivity(entry)) {
+      const names = skillNamesFromActivity(entry);
+      if (names.length) {
+        return names.map((name, nameIndex) => ({
+          key: `${entry.id}-skill-${nameIndex}`,
+          label: `读取 ${name} 技能`,
+          entry
+        }));
+      }
+    }
+
+    return [
+      {
+        key: entry.id,
+        label: section.details[entryIndex] ?? genericToolDetail(entry),
+        entry
+      }
+    ];
+  });
 }
 
 function commandActivityTitle(counts: { read: number; list: number; search: number; command: number }): string {
@@ -954,14 +1003,21 @@ const inlineActivityChevronStyle: React.CSSProperties = {
   color: "var(--cw-fg-muted)"
 };
 
-const inlineActivityRowsStyle: React.CSSProperties = {
+const inlineActivityEntryButtonStyle: React.CSSProperties = {
+  width: "100%",
   display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  padding: "0 0 2px 20px"
+  alignItems: "center",
+  gap: 6,
+  padding: "1px 0",
+  background: "transparent",
+  border: "none",
+  color: "var(--cw-fg-muted)",
+  textAlign: "left",
+  minWidth: 0
 };
 
-const inlineActivityRowStyle: React.CSSProperties = {
+const inlineActivityEntryTitleStyle: React.CSSProperties = {
+  flex: 1,
   minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",

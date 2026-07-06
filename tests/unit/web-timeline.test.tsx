@@ -405,22 +405,35 @@ describe("Timeline", () => {
     expect(screen.queryByText("先看结构")).not.toBeInTheDocument();
     expect(screen.queryByText("再运行测试")).not.toBeInTheDocument();
     expect(screen.getByText("已运行 1 条命令")).toBeInTheDocument();
-    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+    expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
     expect(screen.getByText("Files changed · 1 · +2 -1")).toBeInTheDocument();
     expect(container.innerHTML).not.toContain("border-left: 3px solid");
 
     await user.click(screen.getByText("Thinking").closest("button")!);
 
+    expect(screen.queryByText(/\*\*先看结构\*\*/)).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Thinking" }).at(-1)!);
+
     expect(screen.getByText(/\*\*先看结构\*\*/)).toBeInTheDocument();
     expect(screen.getByText(/再运行测试/)).toBeInTheDocument();
 
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+
+    expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
+    expect(screen.queryByText("passed")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
+    expect(screen.getByText("passed")).toBeInTheDocument();
+
     await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
 
+    expect(screen.getByRole("button", { name: "src/app.ts · +2 -1" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "src/app.ts · +2 -1" }));
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
   });
 
-  it("read/search/list/command 混合活动显示具体组合摘要和默认短明细", () => {
+  it("read/search/list/command 混合活动默认只显示摘要，展开后显示动作列表", async () => {
+    const user = userEvent.setup();
     render(
       <Timeline
         entries={[
@@ -482,13 +495,26 @@ describe("Timeline", () => {
     );
 
     expect(screen.getByText("已读取 1 个文件已浏览 1 个目录已搜索 1 次已运行 1 条命令")).toBeInTheDocument();
-    expect(screen.getByText("Read src/app.ts")).toBeInTheDocument();
-    expect(screen.getByText("List src")).toBeInTheDocument();
-    expect(screen.getByText("Searched timeline")).toBeInTheDocument();
-    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+    expect(screen.queryByText("Read src/app.ts")).not.toBeInTheDocument();
+    expect(screen.queryByText("List src")).not.toBeInTheDocument();
+    expect(screen.queryByText("Searched timeline")).not.toBeInTheDocument();
+    expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("已读取 1 个文件已浏览 1 个目录已搜索 1 次已运行 1 条命令").closest("button")!);
+
+    expect(screen.getByRole("button", { name: "Read src/app.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "List src" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Searched timeline" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
+    expect(screen.queryByText("content")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Read src/app.ts" }));
+
+    expect(screen.getByText("content")).toBeInTheDocument();
   });
 
-  it("Loaded tools 活动显示 Codex App 风格标题和默认 Skill 明细", () => {
+  it("Loaded tools 活动默认只显示标题，展开后显示 Skill 动作列表", async () => {
+    const user = userEvent.setup();
     render(
       <Timeline
         entries={[
@@ -510,10 +536,15 @@ describe("Timeline", () => {
     );
 
     expect(screen.getByText("Loaded 2 tools")).toBeInTheDocument();
-    expect(screen.getByText("读取 openspec-explore 技能")).toBeInTheDocument();
-    expect(screen.getByText("读取 systematic-debugging 技能")).toBeInTheDocument();
+    expect(screen.queryByText("读取 openspec-explore 技能")).not.toBeInTheDocument();
+    expect(screen.queryByText("读取 systematic-debugging 技能")).not.toBeInTheDocument();
     expect(screen.queryByText(/Skills loaded/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Used tools/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Loaded 2 tools").closest("button")!);
+
+    expect(screen.getByRole("button", { name: "读取 openspec-explore 技能" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "读取 systematic-debugging 技能" })).toBeInTheDocument();
   });
 
   it("单个 Loaded tool 活动使用 Codex App 风格单数标题", () => {
@@ -593,8 +624,8 @@ describe("Timeline", () => {
     );
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("先说明第一段")).toBeLessThan(text.indexOf("已运行 npm test"));
-    expect(text.indexOf("已运行 npm test")).toBeLessThan(text.indexOf("再说明第二段"));
+    expect(text.indexOf("先说明第一段")).toBeLessThan(text.indexOf("已运行 1 条命令"));
+    expect(text.indexOf("已运行 1 条命令")).toBeLessThan(text.indexOf("再说明第二段"));
     expect(text.indexOf("再说明第二段")).toBeLessThan(text.indexOf("Files changed · 1 · +1 -0"));
     expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("最后说明第三段"));
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
@@ -633,11 +664,12 @@ describe("Timeline", () => {
     const { container } = render(<Timeline entries={entries} />);
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("分析 bug")).toBeLessThan(text.indexOf("Searched timeline"));
-    expect(text.indexOf("Searched timeline")).toBeLessThan(text.indexOf("最终结论"));
+    expect(text.indexOf("分析 bug")).toBeLessThan(text.indexOf("已搜索 1 次"));
+    expect(text.indexOf("已搜索 1 次")).toBeLessThan(text.indexOf("最终结论"));
   });
 
-  it("同一内联活动组内部也按原始事件顺序显示短明细", () => {
+  it("连续活动摘要按原始事件顺序显示，动作列表需展开后显示", async () => {
+    const user = userEvent.setup();
     const { container } = render(
       <Timeline
         entries={[
@@ -671,10 +703,15 @@ describe("Timeline", () => {
     );
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("已运行 npm test"));
+    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("已运行 1 条命令"));
+    expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+
+    expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
   });
 
-  it("长输出和 diff 默认折叠，展开后显示完整详情", async () => {
+  it("长输出和 diff 默认折叠，展开组后显示动作，展开动作后显示完整详情", async () => {
     const user = userEvent.setup();
     render(
       <Timeline
@@ -708,15 +745,23 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("已运行 npm test")).toBeInTheDocument();
+    expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
     expect(screen.getByText("Files changed · 1 · +1 -1")).toBeInTheDocument();
     expect(screen.queryByText("line 1")).not.toBeInTheDocument();
     expect(screen.queryByText("--- a/src/app.ts")).not.toBeInTheDocument();
 
     await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
+    expect(screen.queryByText("line 1")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
     expect(screen.getByText(/line 1/)).toBeInTheDocument();
 
     await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+    expect(screen.getByRole("button", { name: "src/app.ts · +1 -1" })).toBeInTheDocument();
+    expect(screen.queryByText("--- a/src/app.ts")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "src/app.ts · +1 -1" }));
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 
