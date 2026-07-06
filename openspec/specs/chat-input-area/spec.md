@@ -4,7 +4,7 @@
 TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
 ## Requirements
 ### Requirement: 底部输入区固定单行 + 半屏编辑器
-会话页底部在 thread 静止时 SHALL 固定显示空闲态 composer。composer SHALL 使用移动端两层卡片结构：上层为自动增高文本输入区，下层为固定工具栏。composer MUST 不再提供半屏编辑入口；文本输入区达到最大高度后 MUST 内部滚动，并保持底部工具栏可见。
+会话页底部在 thread 静止时 SHALL 固定显示空闲态 composer。composer SHALL 使用移动端两层卡片结构：上层为自动增高文本输入区，下层为固定工具栏。composer MUST 不再提供半屏编辑入口；文本输入区达到最大高度后 MUST 内部滚动，并保持底部工具栏可见。composer 高度变化时，timeline MUST 为实际 composer 高度保留底部空间，不得遮挡最新消息。
 
 #### Scenario: 默认输入
 - **WHEN** thread 静止且用户在会话页打字
@@ -22,6 +22,12 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **WHEN** 用户已选择图片或 Skill 且尚未发送
 - **THEN** 已选图片缩略图和 Skill chip MUST 显示在 composer 内部
 - **AND** 它们 MUST 位于文本输入区下方、底部工具栏上方
+
+#### Scenario: Composer height does not cover latest timeline message
+- **WHEN** 用户输入多行文本或添加上下文导致 composer 高度变高
+- **THEN** timeline 滚动区域底部 MUST 按实际 composer 高度保留空间
+- **AND** 最新消息 MUST NOT 被 composer 遮挡
+- **AND** 如果用户原本停留在 timeline 底部附近，系统 MUST 在高度变化后保持最新消息可见
 
 ### Requirement: 普通输入框回车不发送
 会话页底部普通输入框 SHALL NOT 使用 `Enter` 触发标准发送流程；`Enter` MUST 保持文本输入行为，不得作为发送快捷键。
@@ -46,7 +52,7 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **AND** 成功发送后 MUST 清空输入框和对应草稿
 
 ### Requirement: Skill reference picker
-会话页底部 composer SHALL 通过 `+` 添加面板提供 Skill 引用入口。用户可在不记忆 Skill 名称的情况下从已启用 Skill 列表中选择一个或多个 Skill；已选择 Skill MUST 以 chip 形式显示在 composer 内部，并可单独移除。Skill 引用 MUST 作为本次 turn 的结构化输入发送，不得通过拼接自然语言提示词模拟。
+会话页底部 composer SHALL 通过 `+` 添加面板提供 Skill 引用入口。用户可在不记忆 Skill 名称的情况下从已启用 Skill 列表中选择一个或多个 Skill；已选择 Skill MUST 以 chip 形式显示在 composer 内部，并可单独移除。Skill 引用 MUST 作为本次 turn 的结构化输入发送，不得通过拼接自然语言提示词模拟。发送后 timeline MUST 展示本次用户消息引用的 Skill，即使服务端用户消息快照未返回 Skill 引用字段。
 
 #### Scenario: Open skill picker
 - **WHEN** thread 静止且底部 composer 渲染
@@ -71,6 +77,12 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 标准发送流程 MUST 携带这些 Skill 引用
 - **AND** 成功发送后 MUST 清空本次已选 Skill
 - **AND** MUST 清空输入框和对应草稿
+
+#### Scenario: Timeline keeps selected skills after send
+- **WHEN** 用户发送带 Skill 引用的消息
+- **AND** `turn/start` 返回的服务端 timeline 用户消息没有 Skill 引用字段
+- **THEN** timeline 上对应的用户消息 MUST 继续显示已引用 Skill 的 chip
+- **AND** 后续重试、回退或 fork 操作 MUST 使用保留后的 Skill 引用
 
 #### Scenario: Skill list load failure
 - **WHEN** Skill 选择器拉取列表失败
@@ -134,35 +146,44 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **WHEN** 用户成功发送一条消息
 - **THEN** 该会话对应的草稿 MUST 被清空
 
-### Requirement: 图片相册选单张
-composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册选择（不调用相机），单条 turn 仅允许一张图片。
+### Requirement: 图片相册选多张
+composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册选择（不调用相机），单条 turn MUST 支持选择并发送多张图片。
 
-#### Scenario: 选图
+#### Scenario: 多选图片
 - **WHEN** 用户打开 `+` 添加面板并点击「图片」
-- **THEN** 系统 MUST 打开相册选择
+- **THEN** 系统 MUST 打开支持多选的相册选择
 - **AND** MUST 不打开相机
 
-#### Scenario: 已选图
-- **WHEN** 已经选过一张图且未发送
+#### Scenario: 追加选择图片
+- **WHEN** 用户已经选过一张或多张图片且未发送
 - **AND** 用户再次通过 `+` 添加面板选择图片
-- **THEN** 新选择的图片 MUST 替换原图，而非追加
+- **THEN** 新选择的图片 MUST 追加到本次待发送图片列表
+- **AND** MUST NOT 替换已选图片
+
+#### Scenario: 发送多张图片
+- **WHEN** 用户输入非空文本并选择多张已上传完成的图片
+- **AND** 用户点击发送
+- **THEN** 标准发送流程 MUST 携带所有已选图片路径
+- **AND** 成功发送后 MUST 清空本次已选图片
 
 ### Requirement: 未发送图片缩略图与失败处理
-选好图但未发送时 SHALL 在 composer 内部显示缩略图，可点击 `✕` 移除；上传中显示进度环；上传失败时缩略图变红、点击重试。
+选好图但未发送时 SHALL 在 composer 内部显示每张已选图片的缩略图，可逐张点击 `✕` 移除；上传中显示进度环；上传失败时对应缩略图变红、点击重试。
 
 #### Scenario: 选完图
-- **WHEN** 用户从相册选定一张图
-- **THEN** composer 内部 MUST 显示缩略图
-- **AND** 缩略图 MUST 提供 `✕` 移除按钮
+- **WHEN** 用户从相册选定一张或多张图
+- **THEN** composer 内部 MUST 显示每张已选图片的缩略图
+- **AND** 每张缩略图 MUST 提供 `✕` 移除按钮
 
 #### Scenario: 上传中
-- **WHEN** 用户已点发送、图片正在上传
-- **THEN** 缩略图上 MUST 叠加进度环
+- **WHEN** 用户已选择图片且图片正在上传
+- **THEN** 对应缩略图上 MUST 叠加进度环
+- **AND** 存在任意上传中的图片时发送按钮 MUST 不可点
 
 #### Scenario: 上传失败
-- **WHEN** `POST /api/codex/uploads/images` 失败
-- **THEN** 缩略图 MUST 变红
-- **AND** 点击 MUST 重试上传
+- **WHEN** 任意一张图片上传失败
+- **THEN** 对应缩略图 MUST 变红
+- **AND** 点击对应缩略图的重试入口 MUST 只重试该图片
+- **AND** 存在任意上传失败的图片时发送按钮 MUST 不可点
 
 ### Requirement: turns/start 失败的可重试呈现
 当用户已点发送、`POST /api/codex/turns/start` 返回失败时 SHALL 把 timeline 上的用户消息标红并提供重试按钮。

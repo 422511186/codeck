@@ -21,11 +21,13 @@ export type ChatInputProps = {
   onOpenPermissionPicker?: () => void;
   onOpenModelPicker?: () => void;
   onOpenGoalEditor?: () => void;
+  onHeightChange?: (height: number) => void;
   onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
 
 type ImageState = {
+  id: string;
   file: File;
   previewUrl: string;
   serverPath?: string;
@@ -34,7 +36,7 @@ type ImageState = {
 
 export function ChatInput(props: ChatInputProps): JSX.Element {
   const [text, setText] = useState<string>(() => (typeof window === "undefined" ? "" : getDraft(props.threadId)));
-  const [image, setImage] = useState<ImageState | null>(null);
+  const [images, setImages] = useState<ImageState[]>([]);
   const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillOptions, setSkillOptions] = useState<SkillOption[]>([]);
@@ -43,15 +45,17 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const [selectedSkills, setSelectedSkills] = useState<SkillReference[]>([]);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
+  const nextImageIdRef = useRef(0);
   const loadedSkillKeyRef = useRef<string | null>(null);
   const skillLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillsCacheVersion = useStore((s) => s.skillsCacheVersion);
 
   useEffect(() => {
     setText(getDraft(props.threadId));
-    setImage(null);
+    setImages([]);
     setAddPanelOpen(false);
     setSelectedSkills([]);
     setSkillPickerOpen(false);
@@ -97,25 +101,62 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     textarea.style.height = `${Math.min(textarea.scrollHeight || 38, 220)}px`;
   }, [text]);
 
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || !props.onHeightChange) return;
+
+    let lastHeight = -1;
+    const report = (height: number): void => {
+      const rounded = Math.ceil(height);
+      if (rounded <= 0 || rounded === lastHeight) return;
+      lastHeight = rounded;
+      props.onHeightChange?.(rounded);
+    };
+
+    report(bar.getBoundingClientRect().height || bar.offsetHeight);
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      report(entries[0]?.contentRect.height ?? bar.getBoundingClientRect().height);
+    });
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [props.onHeightChange]);
+
   function pickImage(): void {
     setAddPanelOpen(false);
     fileInput.current?.click();
   }
 
-  async function uploadImage(file: File): Promise<void> {
+  function addImage(file: File): void {
+    const id = `image-${Date.now()}-${nextImageIdRef.current++}`;
     const previewUrl = URL.createObjectURL(file);
-    setImage({ file, previewUrl, status: "uploading" });
+    setImages((items) => [...items, { id, file, previewUrl, status: "uploading" }]);
+    void uploadImage(id, file);
+  }
+
+  async function uploadImage(id: string, file: File): Promise<void> {
+    setImages((items) =>
+      items.map((image) => (image.id === id ? { ...image, status: "uploading", serverPath: undefined } : image))
+    );
     try {
       const result = await codex.uploadImage(file);
-      setImage({ file, previewUrl, status: "ready", serverPath: result.path });
+      setImages((items) =>
+        items.map((image) => (image.id === id ? { ...image, status: "ready", serverPath: result.path } : image))
+      );
     } catch {
-      setImage({ file, previewUrl, status: "failed" });
+      setImages((items) => items.map((image) => (image.id === id ? { ...image, status: "failed" } : image)));
     }
   }
 
-  async function retryImage(): Promise<void> {
-    if (!image) return;
-    await uploadImage(image.file);
+  function removeImage(id: string): void {
+    setImages((items) => items.filter((image) => image.id !== id));
+  }
+
+  async function retryImage(image: ImageState): Promise<void> {
+    await uploadImage(image.id, image.file);
   }
 
   async function loadSkills(force = false): Promise<void> {
@@ -169,14 +210,14 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     if (sendingRef.current || sending || props.running || props.disabled) return;
     const trimmed = value.trim();
     if (!trimmed) return;
-    if (image && image.status !== "ready") return;
+    if (images.some((image) => image.status !== "ready" || !image.serverPath)) return;
     sendingRef.current = true;
     setSending(true);
     try {
-      const paths = image?.serverPath ? [image.serverPath] : [];
+      const paths = images.map((image) => image.serverPath).filter((path): path is string => Boolean(path));
       await props.onSend(trimmed, paths, selectedSkills);
       setText("");
-      setImage(null);
+      setImages([]);
       setSelectedSkills([]);
       setDraft(props.threadId, "");
       setAddPanelOpen(false);
@@ -191,14 +232,15 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     }
   }
 
-  const disabled = Boolean(props.disabled) || sending || image?.status === "uploading";
-  const canSend = !disabled && !props.running && text.trim().length > 0 && (!image || image.status === "ready");
+  const hasPendingImages = images.some((image) => image.status !== "ready");
+  const disabled = Boolean(props.disabled) || sending || images.some((image) => image.status === "uploading");
+  const canSend = !disabled && !props.running && text.trim().length > 0 && !hasPendingImages;
   const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
   const selectedSkillKeys = new Set(selectedSkills.map(skillKey));
 
   return (
     <>
-      <div style={barStyle}>
+      <div ref={barRef} style={barStyle}>
         {addPanelOpen ? (
           <>
             <div aria-hidden="true" style={addPanelScrimStyle} onClick={() => setAddPanelOpen(false)} />
@@ -225,9 +267,16 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
             disabled={disabled}
           />
 
-          {image || selectedSkills.length ? (
+          {images.length || selectedSkills.length ? (
             <div aria-label="已选上下文" style={selectedContextStyle}>
-              {image ? <ImageThumb image={image} onRemove={() => setImage(null)} onRetry={retryImage} /> : null}
+              {images.map((image) => (
+                <ImageThumb
+                  key={image.id}
+                  image={image}
+                  onRemove={() => removeImage(image.id)}
+                  onRetry={() => void retryImage(image)}
+                />
+              ))}
               {selectedSkills.length ? (
                 <div style={skillChipRowStyle}>
                   {selectedSkills.map((skill) => (
@@ -304,10 +353,11 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
             ref={fileInput}
             type="file"
             accept="image/*"
+            multiple
             style={{ display: "none" }}
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) uploadImage(f);
+              const files = Array.from(e.target.files ?? []);
+              files.forEach(addImage);
               e.target.value = "";
             }}
           />

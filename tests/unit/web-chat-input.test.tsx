@@ -145,6 +145,44 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
+  it("appends multiple selected images and sends all uploaded paths", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    mockUploadImage.mockImplementation(async (file: File) => ({ path: `uploads/${file.name}` }));
+    const { container } = renderInput({ onSend });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "look at these");
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toHaveAttribute("multiple");
+
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File(["image-one"], "one.png", { type: "image/png" }),
+          new File(["image-two"], "two.png", { type: "image/png" })
+        ]
+      }
+    });
+
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+
+    fireEvent.change(input, {
+      target: { files: [new File(["image-three"], "three.png", { type: "image/png" })] }
+    });
+
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(3));
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(onSend).toHaveBeenCalledWith("look at these", [
+      "uploads/one.png",
+      "uploads/two.png",
+      "uploads/three.png"
+    ], []);
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(0));
+  });
+
   it("shows upload failure and retries from the thumbnail", async () => {
     const user = userEvent.setup();
     mockUploadImage
@@ -293,7 +331,7 @@ describe("ChatInput", () => {
     expect(composer).toHaveStyle({ maxHeight: "min(220px, 35dvh)", overflowY: "auto" });
   });
 
-  it("moves image selection into the add panel and replaces the selected image", async () => {
+  it("moves image selection into the add panel and appends selected images", async () => {
     const user = userEvent.setup();
     const { container } = renderInput();
 
@@ -316,7 +354,7 @@ describe("ChatInput", () => {
       target: { files: [new File(["image-two"], "two.png", { type: "image/png" })] }
     });
     await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
+    await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(2));
     expect(screen.getByLabelText("已选上下文")).toBeInTheDocument();
   });
 

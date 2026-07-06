@@ -30,6 +30,7 @@ const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
 const STARTED_TURN_EMPTY_OUTPUT_REPAIR_DELAY_MS = 2_500;
+const DEFAULT_COMPOSER_HEIGHT = 144;
 
 export default function ThreadPage(): JSX.Element {
   const params = useParams<{ threadId: string }>();
@@ -90,6 +91,7 @@ export default function ThreadPage(): JSX.Element {
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [draftOverride, setDraftOverride] = useState<{ text: string; version: number } | null>(null);
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(DEFAULT_COMPOSER_HEIGHT);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
@@ -121,6 +123,14 @@ export default function ThreadPage(): JSX.Element {
     detailApprovalsReviewer
   });
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
+
+  const handleComposerHeightChange = useCallback((height: number) => {
+    setComposerHeight((current) => (current === height ? current : height));
+    const scroller = scrollerRef.current;
+    if (scroller && atBottomRef.current) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, []);
 
   const bumpMutationEpoch = useCallback(() => {
     mutationEpochRef.current += 1;
@@ -448,8 +458,18 @@ export default function ThreadPage(): JSX.Element {
         const started = await codex.startTurn(startInput);
         bindLocalUserMessageTurn(threadId, clientUserMessageId, started.turnId);
         if (started.thread) {
-          applyThreadDetail(started.thread, isThreadRunningStatus(started.thread.status) ? "merge" : "replace");
-          setActiveTurnId(threadId, isThreadRunningStatus(started.thread.status) ? started.turnId : null);
+          const threadWithLocalContext = mergeSentUserContextIntoThreadDetail(started.thread, {
+            clientUserMessageId,
+            turnId: started.turnId,
+            text,
+            imagePaths,
+            skillReferences
+          });
+          applyThreadDetail(
+            threadWithLocalContext,
+            isThreadRunningStatus(threadWithLocalContext.status) ? "merge" : "replace"
+          );
+          setActiveTurnId(threadId, isThreadRunningStatus(threadWithLocalContext.status) ? started.turnId : null);
         } else {
           const currentThread = useStore.getState().threads[threadId];
           if (currentThread?.running) {
@@ -808,6 +828,7 @@ export default function ThreadPage(): JSX.Element {
 
       <ThreadTimelineViewport
         threadId={threadId}
+        composerHeight={composerHeight}
         scrollerRef={scrollerRef}
         onScroll={onScroll}
         onSend={onSend}
@@ -836,7 +857,7 @@ export default function ThreadPage(): JSX.Element {
               scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
             }
           }}
-          style={jumpBtn}
+          style={{ ...jumpBtn, bottom: composerBottomOffset(composerHeight) }}
         >
           ↓ 跳到最新
         </button>
@@ -853,6 +874,7 @@ export default function ThreadPage(): JSX.Element {
         modelLabel={shortModel(modelId)}
         reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
         goal={currentGoal}
+        onHeightChange={handleComposerHeightChange}
         onOpenPermissionPicker={() => setShowPermissionPicker(true)}
         onOpenModelPicker={openModelPicker}
         onOpenGoalEditor={() => setGoalEditorOpen(true)}
@@ -1038,6 +1060,7 @@ function ThreadPlanBar({ threadId }: { threadId: string }): JSX.Element | null {
 
 function ThreadTimelineViewport({
   threadId,
+  composerHeight,
   scrollerRef,
   onScroll,
   onSend,
@@ -1047,6 +1070,7 @@ function ThreadTimelineViewport({
   onExecutePlan
 }: {
   threadId: string;
+  composerHeight: number;
   scrollerRef: RefObject<HTMLDivElement | null>;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void | Promise<void>;
   onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
@@ -1063,7 +1087,12 @@ function ThreadTimelineViewport({
   const reachedBeginning = useStore((s) => s.threads[threadId]?.reachedBeginning ?? false);
 
   return (
-    <div ref={scrollerRef} className="cw-thread-scroller" onScroll={onScroll} style={scrollStyle}>
+    <div
+      ref={scrollerRef}
+      className="cw-thread-scroller"
+      onScroll={onScroll}
+      style={{ ...scrollStyle, paddingBottom: composerBottomOffset(composerHeight) }}
+    >
       {reachedBeginning ? (
         <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
       ) : null}
@@ -1123,6 +1152,7 @@ function ThreadComposerDock({
   modelLabel,
   reasoningEffortLabel,
   goal,
+  onHeightChange,
   onOpenPermissionPicker,
   onOpenModelPicker,
   onOpenGoalEditor,
@@ -1139,6 +1169,7 @@ function ThreadComposerDock({
   modelLabel: string;
   reasoningEffortLabel?: string;
   goal?: ThreadGoal | null;
+  onHeightChange: (height: number) => void;
   onOpenPermissionPicker: () => void;
   onOpenModelPicker: () => void;
   onOpenGoalEditor: () => void;
@@ -1157,6 +1188,7 @@ function ThreadComposerDock({
       modelLabel={modelLabel}
       reasoningEffortLabel={reasoningEffortLabel}
       goal={goal}
+      onHeightChange={onHeightChange}
       onOpenPermissionPicker={onOpenPermissionPicker}
       onOpenModelPicker={onOpenModelPicker}
       onOpenGoalEditor={onOpenGoalEditor}
@@ -1687,6 +1719,55 @@ function sendPayloadKey(text: string, imagePaths: string[], skillReferences: Ski
   return `${text.trim()}\u0001${images}\u0001${skills}`;
 }
 
+function mergeSentUserContextIntoThreadDetail(
+  thread: ThreadDetail,
+  context: {
+    clientUserMessageId: string;
+    turnId: string;
+    text: string;
+    imagePaths: string[];
+    skillReferences: SkillReference[];
+  }
+): ThreadDetail {
+  if (!context.imagePaths.length && !context.skillReferences.length) {
+    return thread;
+  }
+
+  const userIndexes = thread.timeline
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.role === "user");
+  const text = context.text.trim();
+  const byClientId = userIndexes.find(
+    ({ item }) => item.clientUserMessageId && item.clientUserMessageId === context.clientUserMessageId
+  );
+  const byTurnId = byClientId
+    ? null
+    : userIndexes.find(({ item }) => item.turnId && item.turnId === context.turnId && item.text.trim() === text);
+  const textMatches =
+    byClientId || byTurnId ? [] : userIndexes.filter(({ item }) => item.text.trim() === text);
+  const match = byClientId ?? byTurnId ?? (textMatches.length === 1 ? textMatches[0] : null);
+  if (!match) {
+    return thread;
+  }
+
+  return {
+    ...thread,
+    timeline: thread.timeline.map((item, index) => {
+      if (index !== match.index) {
+        return item;
+      }
+      return {
+        ...item,
+        clientUserMessageId: item.clientUserMessageId ?? context.clientUserMessageId,
+        ...(item.imagePaths?.length || !context.imagePaths.length ? {} : { imagePaths: context.imagePaths }),
+        ...(item.skillReferences?.length || !context.skillReferences.length
+          ? {}
+          : { skillReferences: context.skillReferences })
+      };
+    })
+  };
+}
+
 function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
   return repairReconstructedTimelineEntries(
     td.timeline.map((item, idx) =>
@@ -1973,6 +2054,10 @@ function uniqueTimelineId(prefix: string): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${prefix}-${random}`;
+}
+
+function composerBottomOffset(height: number): string {
+  return `calc(${Math.max(DEFAULT_COMPOSER_HEIGHT, Math.ceil(height))}px + var(--safe-bottom))`;
 }
 
 async function rollbackThreadWithResume(

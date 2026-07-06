@@ -137,6 +137,7 @@ describe("ThreadPage", () => {
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
@@ -2611,6 +2612,72 @@ describe("ThreadPage", () => {
     expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", false);
   });
 
+  it("should preserve selected skill references when idle startTurn snapshot omits them", async () => {
+    const user = userEvent.setup();
+    const skillReferences = [
+      {
+        name: "openspec-explore",
+        path: "/repo/.codex/skills/openspec-explore/SKILL.md"
+      }
+    ];
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "failed-local",
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "retry with skill", skillReferences, status: "failed" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockStartTurn.mockResolvedValue({
+      turnId: "turn-skill",
+      thread: {
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Test Thread",
+        modelProvider: "claude-opus-4",
+        status: "idle",
+        timeline: [
+          { id: "server-user-skill", turnId: "turn-skill", role: "user", text: "retry with skill" },
+          { id: "agent-skill", turnId: "turn-skill", role: "agent", text: "done" }
+        ],
+        lastTurnId: "turn-skill",
+        updatedAt: Date.now()
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "server-user-skill",
+            body: expect.objectContaining({
+              kind: "user-message",
+              text: "retry with skill",
+              skillReferences
+            })
+          })
+        ]),
+        null
+      );
+    });
+  });
+
   it("should merge running startTurn snapshots without clearing streamed entries", async () => {
     const user = userEvent.setup();
     mockStartTurn.mockResolvedValue({
@@ -2644,6 +2711,49 @@ describe("ThreadPage", () => {
       );
     });
     expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", true);
+  });
+
+  it("should reserve dynamic bottom space from composer height changes", async () => {
+    let resizeCallback: ResizeObserverCallback | null = null;
+    class MockResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 500;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
+
+    expect(resizeCallback).not.toBeNull();
+    await act(async () => {
+      resizeCallback?.(
+        [{ contentRect: { height: 260 } } as ResizeObserverEntry],
+        {} as ResizeObserver
+      );
+    });
+
+    await waitFor(() => {
+      expect(scroller).toHaveStyle({ paddingBottom: "calc(260px + var(--safe-bottom))" });
+    });
+    expect(scrollTop).toBe(1000);
   });
 
   it("should let a freshly-created empty thread send the first user message", async () => {
