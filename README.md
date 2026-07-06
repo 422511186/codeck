@@ -28,6 +28,35 @@
 - 状态存储：个人模式不使用数据库；配置走环境变量，运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
 - 登录方式：优先使用后端配置的 `CODEX_WEB_ACCESS_TOKEN`；如果没有配置，后端启动时自动生成一个随机长 token 并打印到控制台。
 
+### 运行架构：单进程全栈
+
+本项目不是前后端分离部署，而是 **Next.js 全栈单体**：前端 UI 和后端 API 属于同一个 Next 应用，跑在同一个自定义 Node server、同一个端口上。真正独立的进程是 Codex app-server。
+
+```text
+手机浏览器
+  │  HTTP + WebSocket
+  ▼
+┌─────────────────────────────────────────┐
+│ 单个 Node.js 进程 (dist/server/http.js)                 │
+│                                                        │
+│  createServer (node:http)  ← 唯一监听端口                │
+│    ├── Next.js requestHandler → 前端页面 + /api/* 路由   │
+│    └── attachBrowserWebSocket → /ws 实时事件通道         │
+│                                                        │
+│  app-server 适配层 (JSON-RPC over WebSocket)            │
+└──────────────────────┬─────────────────────────────────┘
+                       │ ws://
+                       ▼
+              Codex app-server (独立进程)
+```
+
+要点：
+
+- **前后端合体的原因**：使用 Next.js custom server 模式。入口 `src/server/http.ts` 自己 `createServer` 起一个 Node HTTP server，把 Next 的 `requestHandler` 塞进去。因此前端页面和 `/api/codex/*` 接口（App Router route handlers，见 `src/app/api/**/route.ts`）由同一个 Next 应用、同一个端口、同一套构建产物 `.next/` 承载。
+- **为什么用自定义 server 而不是 `next start`**：项目需要一个原生 `/ws` 长连接把 Codex 实时事件推给浏览器。自定义 server 让 HTTP（交给 Next）和 WebSocket upgrade（`attachBrowserWebSocket`）挂在同一个 server 上。
+- **真正分离的边界**在这个 Web 服务与 Codex app-server 之间，不在前后端之间。适配层通过 JSON-RPC over WebSocket 连到 app-server（spawn / external / spawn-or-connect 模式）。
+- **构建与启动**：`npm run build` 分两步，`next build` 产出 `.next/`（页面 + API 路由），esbuild 把 `src/server/http.ts` 打成单文件 `dist/server/http.js`（依赖 external，运行时从 `node_modules` 解析）。`npm run start` 即 `import` 该文件启动上述进程；这也是部署时仍需 `npm ci --omit=dev` 安装生产依赖的原因。
+
 ## 前端能力
 
 - **路由**：

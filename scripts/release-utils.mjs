@@ -17,10 +17,7 @@ export const releaseEntries = [
   "next.config.mjs",
   ".env.example",
   ".env.docker.example",
-  "Dockerfile",
-  ".dockerignore",
   "compose.yaml",
-  "README.md",
   "docs/release.md",
   "docs/docker-deployment.md"
 ];

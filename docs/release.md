@@ -1,17 +1,20 @@
-# Release 发布与部署
+# 宿主机部署（release tarball）
 
-本文档说明 Codex Web 第一版 release 的打包、验证和宿主机自托管部署方式。
+本文档说明如何用 Codex Web 的 release tarball 在宿主机上完成自托管部署。
+
+只讲部署。如何构建、验证和打包 release 见仓库的开发文档，不在本文范围内。
+容器化部署见 `docs/docker-deployment.md`。
 
 ## 适用范围
 
-第一版 release 面向个人自托管场景：
+release tarball 面向个人自托管场景：
 
-- 在宿主机上运行 Codex Web。
+- 在宿主机上直接运行 Codex Web 生产产物。
 - 宿主机已安装 Node.js 22 或更高版本。
 - 宿主机已安装并配置 Codex CLI，或已单独启动 Codex app-server。
 - 手机浏览器通过局域网或受控反向代理访问 Codex Web。
 
-宿主机 tarball 仍是第一版 release 的主路径。项目现在也提供 Docker 和 Docker Compose 部署方式，适合希望用容器固定 Node.js 运行环境的自托管场景；具体步骤见 `docs/docker-deployment.md`。
+tarball 内已包含 `.next/`、`dist/server/` 等构建产物，解压后无需再执行任何构建步骤，只需安装生产依赖并配置环境变量即可启动。
 
 ## 安全边界
 
@@ -24,78 +27,15 @@ Codex Web 当前是个人自用模式，不包含多用户隔离、数据库权�
 
 不要把未加保护的服务直接暴露到公网。
 
-## 发布前验证
+## 校验 tarball
 
-在项目根目录运行：
-
-```bash
-npm run verify
-npm run build
-npm run release:pack
-```
-
-运行态 smoke test 必须使用非 `23000` 端口，不能影响当前正在 `23000` 端口服务手机会话的实例：
+部署前建议先校验压缩包完整性：
 
 ```bash
-CODEX_WEB_BIND_PORT=23001 npm run release:smoke
+sha256sum -c codex-web-v0.1.0.tar.gz.sha256
 ```
 
-如果 `23001` 被占用，可以改用其他非 `23000` 端口。不要停止、重启、复用或抢占当前 `23000` 服务。
-
-也可以运行完整 release 验证：
-
-```bash
-npm run release:verify
-```
-
-`release:verify` 会执行自动化测试、生产构建、打包和 mock 模式 smoke test。smoke test 默认从 `23001` 起寻找空闲端口，并显式跳过 `23000`。
-
-Docker smoke test 也必须避开 `23000`：
-
-```bash
-npm run docker:smoke
-```
-
-`docker:smoke` 默认从 `23001` 起寻找可用宿主机端口，并以 `CODEX_WEB_APP_SERVER_MODE=mock` 启动临时容器验证 `/api/health`。不要停止、重启、绑定、复用或抢占当前 `23000` 服务。
-
-## 打包产物
-
-打包成功后会生成：
-
-```text
-dist/releases/codex-web-v<version>.tar.gz
-dist/releases/codex-web-v<version>.tar.gz.sha256
-```
-
-tarball 使用 allowlist 打包，包含：
-
-- `.next/`
-- `dist/server/`
-- `public/`
-- `scripts/`
-- `package.json`
-- `package-lock.json`
-- `next.config.mjs`
-- `.env.example`
-- `.env.docker.example`
-- `Dockerfile`
-- `.dockerignore`
-- `compose.yaml`
-- `README.md`
-- `docs/release.md`
-- `docs/docker-deployment.md`
-
-tarball 不应包含真实本地文件或运行数据：
-
-- `.env`
-- `.env.docker`
-- `node_modules/`
-- `logs/`
-- `uploads/`
-- `coverage/`
-- `test-results/`
-- `nohup.out`
-- 本地开发缓存
+输出 `OK` 表示 tarball 未损坏。
 
 ## 宿主机部署
 
@@ -108,6 +48,8 @@ sudo ln -sfn /opt/codex-web/releases/codex-web-v0.1.0 /opt/codex-web/current
 cd /opt/codex-web/current
 npm ci --omit=dev
 ```
+
+`npm ci --omit=dev` 只安装运行时依赖，不会安装构建工具。
 
 创建环境文件，例如 `/etc/codex-web.env`：
 
@@ -206,8 +148,6 @@ CODEX_WEB_APP_SERVER_MODE=external
 CODEX_WEB_APP_SERVER_URL=ws://127.0.0.1:31317
 ```
 
-Docker/Compose 部署默认推荐 external 模式，让容器内 Web 服务连接宿主机或独立进程中的 app-server。具体配置见 `docs/docker-deployment.md`。
-
 ### spawn-or-connect
 
 本机开发可用自动复用模式：
@@ -224,16 +164,6 @@ CODEX_WEB_APP_SERVER_STATE_DIR=/tmp/codex-web-app-server
 该模式在固定 host/port 上先连接已有 app-server；不可连接时才获取跨进程锁并启动。拿不到锁的 Web 后端会等待持锁进程启动完成后复用同一 endpoint。若固定端口被非 app-server 占用或握手失败，启动会失败并提示端口问题，不会改用随机端口。
 
 Web 后端正常退出时会关闭自己启动的子进程并清理 owner 元数据。异常退出后留下的可用 app-server 会被后续 Web 后端复用；不可用且 owner pid 已不存在时，陈旧锁会被清理后重新启动。
-
-### mock
-
-用于 release smoke test 或后端联调：
-
-```env
-CODEX_WEB_APP_SERVER_MODE=mock
-```
-
-mock 模式不依赖真实 Codex 登录态。
 
 ## 升级与回滚
 
@@ -282,11 +212,3 @@ CODEX_WEB_CODEX_BIN=/path/to/codex
 - 防火墙允许 `CODEX_WEB_BIND_PORT`
 - 手机和宿主机在同一网络
 - 访问地址使用宿主机局域网 IP
-
-### release smoke test 端口冲突
-
-不要使用 `23000`。改用其他端口：
-
-```bash
-CODEX_WEB_BIND_PORT=23002 npm run release:smoke
-```
