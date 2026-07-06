@@ -4,12 +4,16 @@ import { userEvent } from "@testing-library/user-event";
 import LoginPage from "../../src/app/login/page";
 
 // Mock Next.js navigation
-const mockReplace = vi.fn();
 const mockGet = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => ({ get: mockGet })
+}));
+
+const mockReplaceDocumentLocation = vi.fn();
+
+vi.mock("../../src/web/navigation/location", () => ({
+  replaceDocumentLocation: (...args: unknown[]) => mockReplaceDocumentLocation(...args)
 }));
 
 // Mock auth endpoints
@@ -36,8 +40,8 @@ vi.mock("../../src/web/api/client", () => ({
 
 describe("LoginPage", () => {
   beforeEach(() => {
-    mockReplace.mockClear();
     mockGet.mockClear();
+    mockReplaceDocumentLocation.mockClear();
     mockLogin.mockClear();
     mockSession.mockClear();
     mockGet.mockReturnValue(null);
@@ -55,7 +59,7 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /登录/ }));
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/threads/abc");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/threads/abc");
     });
   });
 
@@ -70,9 +74,9 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /登录/ }));
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/projects");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/projects");
     });
-    expect(mockReplace).not.toHaveBeenCalledWith("https://example.com");
+    expect(mockReplaceDocumentLocation).not.toHaveBeenCalledWith("https://example.com");
   });
 
   it("should reject protocol-relative return path when already authenticated", async () => {
@@ -82,9 +86,9 @@ describe("LoginPage", () => {
     render(<LoginPage />);
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/projects");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/projects");
     });
-    expect(mockReplace).not.toHaveBeenCalledWith("//example.com/path");
+    expect(mockReplaceDocumentLocation).not.toHaveBeenCalledWith("//example.com/path");
   });
 
   it("should redirect to projects if already authenticated", async () => {
@@ -93,7 +97,7 @@ describe("LoginPage", () => {
     render(<LoginPage />);
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/projects");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/projects");
     });
   });
 
@@ -104,7 +108,7 @@ describe("LoginPage", () => {
     render(<LoginPage />);
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/threads/abc");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/threads/abc");
     });
   });
 
@@ -157,7 +161,7 @@ describe("LoginPage", () => {
 
     await waitFor(() => {
       expect(mockLogin).toHaveBeenCalledWith("valid-token");
-      expect(mockReplace).toHaveBeenCalledWith("/projects");
+      expect(mockReplaceDocumentLocation).toHaveBeenCalledWith("/projects");
     });
   });
 
