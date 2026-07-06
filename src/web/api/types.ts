@@ -54,6 +54,7 @@ export type ThreadDetail = ThreadSummary & {
   reasoningEffort?: string | null;
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  contextUsage?: ThreadContextUsage | null;
   goal?: ThreadGoal | null;
 };
 
@@ -65,6 +66,15 @@ export type ThreadGoal = {
   tokensUsed: number;
   timeUsedSeconds: number;
   createdAt: number;
+  updatedAt: number;
+};
+
+export type ThreadContextUsage = {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  modelContextWindow: number | null;
   updatedAt: number;
 };
 

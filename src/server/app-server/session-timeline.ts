@@ -1,4 +1,4 @@
-import type { MobileTimelineItem } from "../../shared/codex";
+import type { MobileThreadContextUsage, MobileTimelineItem } from "../../shared/codex";
 
 type SessionTimelineRecord =
   | {
@@ -21,6 +21,10 @@ const INTERNAL_CONTROL_TOOL_NAMES = new Set(["update_plan", "write_stdin", "read
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function stringifyJson(value: unknown): string {
@@ -387,6 +391,63 @@ function applyFunctionOutput(record: SessionToolRecord, output: string): void {
     text: truncateToolText(output || record.item.text),
     status: nextStatus
   };
+}
+
+function contextUsageFromTokenCountRecord(
+  payload: Record<string, unknown>,
+  timestamp: unknown
+): MobileThreadContextUsage | null {
+  if (payload.type !== "token_count" || !isRecord(payload.info)) {
+    return null;
+  }
+  const info = payload.info;
+  const tokenUsage = isRecord(info.last_token_usage) ? info.last_token_usage : info.total_token_usage;
+  if (!isRecord(tokenUsage)) {
+    return null;
+  }
+  const totalTokens = finiteNumber(tokenUsage.total_tokens);
+  const inputTokens = finiteNumber(tokenUsage.input_tokens);
+  const outputTokens = finiteNumber(tokenUsage.output_tokens);
+  const reasoningOutputTokens = finiteNumber(tokenUsage.reasoning_output_tokens);
+  if (totalTokens === null || inputTokens === null || outputTokens === null || reasoningOutputTokens === null) {
+    return null;
+  }
+
+  const modelContextWindow = finiteNumber(info.model_context_window);
+  const parsedTimestamp = typeof timestamp === "string" ? Date.parse(timestamp) : NaN;
+  return {
+    totalTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    modelContextWindow,
+    updatedAt: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now()
+  };
+}
+
+export function latestSessionContextUsage(jsonl: string): MobileThreadContextUsage | null {
+  let latest: MobileThreadContextUsage | null = null;
+  for (const line of jsonl.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.payload)) {
+      continue;
+    }
+
+    const usage = contextUsageFromTokenCountRecord(parsed.payload, parsed.timestamp);
+    if (usage) {
+      latest = usage;
+    }
+  }
+  return latest;
 }
 
 function sessionTimelineRecords(jsonl: string): SessionTimelineRecord[] {

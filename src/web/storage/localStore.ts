@@ -41,6 +41,7 @@ export const StorageKeys = {
   Projects: "projects",
   Settings: "settings",
   Drafts: "drafts",
+  ContextUsage: "context-usage",
   ChatDraftPrefix: "draft:", // 完整 key = `draft:${threadId}`
   ThreadModePrefix: "thread-mode:", // 完整 key = `thread-mode:${threadId}`
   ThreadPermissionProfilePrefix: "thread-permission-profile:" // 完整 key = `thread-permission-profile:${threadId}`

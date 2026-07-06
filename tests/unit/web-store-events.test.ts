@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { getContextUsage } from "../../src/web/storage/contextUsage";
 import { useStore } from "../../src/web/state/store";
 
 describe("web store codex events", () => {
@@ -10,6 +11,7 @@ describe("web store codex events", () => {
       activeThreadId: null,
       skillsCacheVersion: 0
     });
+    window.localStorage.clear();
   });
 
   it("updates running state from app-server turn lifecycle events", () => {
@@ -1950,6 +1952,56 @@ describe("web store codex events", () => {
         body: { kind: "system", text: "压缩上下文已完成" }
       })
     ]);
+  });
+
+  it("stores context usage updates and caches them by thread id", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "token_usage_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: 200000
+      }
+    });
+
+    const expected = expect.objectContaining({
+      totalTokens: 128000,
+      inputTokens: 96000,
+      outputTokens: 24000,
+      reasoningOutputTokens: 8000,
+      modelContextWindow: 200000,
+      updatedAt: expect.any(Number)
+    });
+    expect(useStore.getState().threads["thread-1"]?.contextUsage).toEqual(expected);
+    expect(getContextUsage("thread-1")).toEqual(expected);
+  });
+
+  it("stores token usage updates without a usable context window as non-renderable usage", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "token_usage_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: null
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.contextUsage).toEqual(
+      expect.objectContaining({
+        totalTokens: 128000,
+        modelContextWindow: null
+      })
+    );
   });
 
   it("renders turn diff updates with computed line stats", () => {

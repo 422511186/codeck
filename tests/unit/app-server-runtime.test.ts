@@ -967,6 +967,28 @@ function sessionJsonl(): string {
       },
       "2026-07-04T19:00:06.500Z"
     ),
+    JSON.stringify({
+      timestamp: "2026-07-04T19:00:06.800Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 48000,
+            output_tokens: 12000,
+            reasoning_output_tokens: 4000,
+            total_tokens: 64000
+          },
+          last_token_usage: {
+            input_tokens: 42000,
+            output_tokens: 8000,
+            reasoning_output_tokens: 2000,
+            total_tokens: 52000
+          },
+          model_context_window: 200000
+        }
+      }
+    }),
     line(
       {
         type: "message",
@@ -1402,6 +1424,14 @@ describe("createAppServerGateway", () => {
         })
       ])
     );
+    expect(detail.contextUsage).toEqual({
+      totalTokens: 52000,
+      inputTokens: 42000,
+      outputTokens: 8000,
+      reasoningOutputTokens: 2000,
+      modelContextWindow: 200000,
+      updatedAt: Date.parse("2026-07-04T19:00:06.800Z")
+    });
   });
 
   it("读取单个 turn items 时也从 rollout JSONL 补齐缺失工具活动", async () => {

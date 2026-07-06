@@ -22,6 +22,7 @@ const mockReplaceOrAddEntry = vi.fn();
 const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
 const mockSetPermissionProfile = vi.fn();
+const mockSetContextUsage = vi.fn();
 const mockSetRunning = vi.fn();
 const mockSetActiveTurnId = vi.fn();
 const mockBindLocalUserMessageTurn = vi.fn();
@@ -53,6 +54,7 @@ function mockStoreState(): unknown {
       setMode: mockSetMode,
       setModel: mockSetModel,
       setPermissionProfile: mockSetPermissionProfile,
+      setContextUsage: mockSetContextUsage,
       setRunning: mockSetRunning,
       setActiveTurnId: mockSetActiveTurnId,
       bindLocalUserMessageTurn: mockBindLocalUserMessageTurn,
@@ -153,6 +155,7 @@ describe("ThreadPage", () => {
     mockSetMode.mockClear();
     mockSetModel.mockClear();
     mockSetPermissionProfile.mockClear();
+    mockSetContextUsage.mockClear();
     mockSetRunning.mockClear();
     mockSetActiveTurnId.mockClear();
     mockBindLocalUserMessageTurn.mockClear();
@@ -231,6 +234,7 @@ describe("ThreadPage", () => {
     mockResolveRequest.mockResolvedValue({});
     mockArchiveThread.mockResolvedValue({});
     mockUnarchiveThread.mockResolvedValue({});
+    mockCompactThread.mockClear();
     mockCompactThread.mockResolvedValue({});
     mockForkThread.mockResolvedValue({
       id: "forked-thread",
@@ -2017,6 +2021,240 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { model: "openai/gpt-5" });
     });
+  });
+
+  it("should show context window percentage below the thread header", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      contextUsage: {
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: 200000,
+        updatedAt: 1
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText("上下文窗口 64%")).toBeInTheDocument();
+    expect(screen.getByText("64%")).toBeInTheDocument();
+  });
+
+  it("should show a visible context placeholder when context usage is unavailable", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText("上下文窗口等待用量")).toBeInTheDocument();
+    expect(screen.getByText("--%")).toBeInTheDocument();
+    expect(screen.queryByText("64%")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "上下文用量" })).not.toBeInTheDocument();
+  });
+
+  it("should restore cached context usage when thread state has none", async () => {
+    window.localStorage.setItem(
+      "codex-web:context-usage",
+      JSON.stringify({
+        "thread-1": {
+          totalTokens: 128000,
+          inputTokens: 96000,
+          outputTokens: 24000,
+          reasoningOutputTokens: 8000,
+          modelContextWindow: 200000,
+          updatedAt: 1
+        }
+      })
+    );
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(mockSetContextUsage).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        totalTokens: 128000,
+        modelContextWindow: 200000
+      })
+    );
+  });
+
+  it("should restore context usage returned by thread detail", async () => {
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      contextUsage: {
+        totalTokens: 129200,
+        inputTokens: 120000,
+        outputTokens: 7200,
+        reasoningOutputTokens: 2000,
+        modelContextWindow: 258400,
+        updatedAt: 1
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(mockSetContextUsage).toHaveBeenCalledWith(
+        "thread-1",
+        expect.objectContaining({
+          totalTokens: 129200,
+          modelContextWindow: 258400
+        })
+      );
+    });
+  });
+
+  it("should not overwrite live context usage with cached context usage", async () => {
+    window.localStorage.setItem(
+      "codex-web:context-usage",
+      JSON.stringify({
+        "thread-1": {
+          totalTokens: 128000,
+          inputTokens: 96000,
+          outputTokens: 24000,
+          reasoningOutputTokens: 8000,
+          modelContextWindow: 200000,
+          updatedAt: 1
+        }
+      })
+    );
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      contextUsage: {
+        totalTokens: 140000,
+        inputTokens: 100000,
+        outputTokens: 30000,
+        reasoningOutputTokens: 10000,
+        modelContextWindow: 200000,
+        updatedAt: 2
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(mockSetContextUsage).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("上下文窗口 70%")).toBeInTheDocument();
+  });
+
+  it("should open context usage details from the header progress", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      contextUsage: {
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: 200000,
+        updatedAt: 1
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("上下文窗口 64%"));
+
+    const dialog = screen.getByRole("dialog", { name: "上下文用量" });
+    expect(within(dialog).getByText("128K / 200K")).toBeInTheDocument();
+    expect(within(dialog).getByText("64%")).toBeInTheDocument();
+    expect(within(dialog).getByText("输入 96K")).toBeInTheDocument();
+    expect(within(dialog).getByText("输出 24K")).toBeInTheDocument();
+    expect(within(dialog).getByText("推理 8K")).toBeInTheDocument();
+  });
+
+  it("should confirm compact from context usage details before calling API", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      contextUsage: {
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: 200000,
+        updatedAt: 1
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("上下文窗口 64%"));
+    await user.click(screen.getByRole("button", { name: "压缩上下文" }));
+
+    expect(screen.getByText("将会摘要先前对话以释放上下文窗口。继续？")).toBeInTheDocument();
+    expect(mockCompactThread).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "继续" }));
+
+    expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
   });
 
   it("should not request model list twice while picker load is pending", async () => {

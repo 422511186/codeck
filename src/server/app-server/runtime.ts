@@ -112,7 +112,7 @@ import {
   type BrowserServerRequestEvent,
   type PendingServerRequestView
 } from "./pending-requests";
-import { mergeSessionTimelineItems } from "./session-timeline";
+import { latestSessionContextUsage, mergeSessionTimelineItems } from "./session-timeline";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
@@ -3222,8 +3222,10 @@ export class AppServerGateway {
     if (!jsonl) {
       return detail;
     }
+    const contextUsage = latestSessionContextUsage(jsonl);
     return {
       ...detail,
+      ...(contextUsage ? { contextUsage } : {}),
       timeline: mergeSessionTimelineItems(detail.timeline, jsonl)
     };
   }

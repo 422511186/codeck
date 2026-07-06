@@ -917,12 +917,17 @@ export function normalizeAppServerNotification(
 
   if (message.method === "thread/tokenUsage/updated") {
     const params = message.params as
-      | { threadId?: unknown; turnId?: unknown; tokenUsage?: { total?: Record<string, unknown>; modelContextWindow?: unknown } }
+      | {
+          threadId?: unknown;
+          turnId?: unknown;
+          tokenUsage?: { total?: Record<string, unknown>; last?: Record<string, unknown>; modelContextWindow?: unknown };
+        }
       | null
       | undefined;
     if (!params?.threadId || !params.turnId || !params.tokenUsage?.total) {
       return null;
     }
+    const usage = params.tokenUsage.last ?? params.tokenUsage.total;
 
     return {
       type: "codex-event",
@@ -930,10 +935,10 @@ export function normalizeAppServerNotification(
         kind: "token_usage_updated",
         threadId: String(params.threadId),
         turnId: String(params.turnId),
-        totalTokens: numberOrZero(params.tokenUsage.total.totalTokens),
-        inputTokens: numberOrZero(params.tokenUsage.total.inputTokens),
-        outputTokens: numberOrZero(params.tokenUsage.total.outputTokens),
-        reasoningOutputTokens: numberOrZero(params.tokenUsage.total.reasoningOutputTokens),
+        totalTokens: numberOrZero(usage.totalTokens),
+        inputTokens: numberOrZero(usage.inputTokens),
+        outputTokens: numberOrZero(usage.outputTokens),
+        reasoningOutputTokens: numberOrZero(usage.reasoningOutputTokens),
         modelContextWindow:
           typeof params.tokenUsage.modelContextWindow === "number" ? params.tokenUsage.modelContextWindow : null
       }

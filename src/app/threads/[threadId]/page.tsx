@@ -24,6 +24,7 @@ import {
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey, threadPermissionProfileKey } from "../../../web/storage/localStore";
 import { setDraft } from "../../../web/storage/drafts";
+import { getContextUsage, type ContextUsageSnapshot } from "../../../web/storage/contextUsage";
 import { settingsStore } from "../../../web/storage/settings";
 
 const EMPTY_ENTRIES: TimelineEntry[] = [];
@@ -46,6 +47,7 @@ export default function ThreadPage(): JSX.Element {
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
   const setPermissionProfile = useStore((s) => s.setPermissionProfile);
+  const setContextUsage = useStore((s) => s.setContextUsage);
   const setRunning = useStore((s) => s.setRunning);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
   const bindLocalUserMessageTurn = useStore((s) => s.bindLocalUserMessageTurn);
@@ -64,6 +66,7 @@ export default function ThreadPage(): JSX.Element {
   const threadModelEffort = useStore((s) => s.threads[threadId]?.modelEffort ?? null);
   const threadPermissionProfileId = useStore((s) => s.threads[threadId]?.permissionProfileId);
   const threadApprovalsReviewer = useStore((s) => s.threads[threadId]?.approvalsReviewer);
+  const threadContextUsage = useStore((s) => s.threads[threadId]?.contextUsage ?? null);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
@@ -91,6 +94,7 @@ export default function ThreadPage(): JSX.Element {
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [draftOverride, setDraftOverride] = useState<{ text: string; version: number } | null>(null);
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
+  const [contextUsageOpen, setContextUsageOpen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(DEFAULT_COMPOSER_HEIGHT);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -122,6 +126,14 @@ export default function ThreadPage(): JSX.Element {
     detailProfileId: detailPermissionProfileId,
     detailApprovalsReviewer
   });
+
+  useEffect(() => {
+    if (!threadId || threadContextUsage) return;
+    const cached = getContextUsage(threadId);
+    if (cached) {
+      setContextUsage(threadId, cached);
+    }
+  }, [threadId, threadContextUsage, setContextUsage]);
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
   const handleComposerHeightChange = useCallback((height: number) => {
@@ -234,6 +246,9 @@ export default function ThreadPage(): JSX.Element {
       if (td.model) {
         setModel(targetThreadId, td.model, td.reasoningEffort ?? null);
       }
+      if (td.contextUsage) {
+        setContextUsage(targetThreadId, td.contextUsage);
+      }
       if ("activePermissionProfile" in td) {
         const profileId = td.activePermissionProfile?.id ?? null;
         const approvalsReviewer = "approvalsReviewer" in td ? td.approvalsReviewer ?? null : undefined;
@@ -247,7 +262,16 @@ export default function ThreadPage(): JSX.Element {
       }
       setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
-    [threadId, setThreadEntries, mergeThreadEntries, setTimelineGeneration, setModel, setPermissionProfile, setActiveTurnId]
+    [
+      threadId,
+      setThreadEntries,
+      mergeThreadEntries,
+      setTimelineGeneration,
+      setModel,
+      setContextUsage,
+      setPermissionProfile,
+      setActiveTurnId
+    ]
   );
 
   useEffect(() => {
@@ -819,8 +843,10 @@ export default function ThreadPage(): JSX.Element {
       <ThreadHeader
         title={visibleDetail.title || "新会话"}
         mode={mode}
+        contextUsage={threadContextUsage}
         onBack={() => router.back()}
         onToggleMode={onToggleMode}
+        onOpenContextUsage={() => setContextUsageOpen(true)}
         onOpenActions={() => setShowSheet(true)}
       />
 
@@ -901,6 +927,17 @@ export default function ThreadPage(): JSX.Element {
           onClear={async () => {
             await codex.clearThreadGoal(threadId);
             setDetail((prev) => (prev ? { ...prev, goal: null } : prev));
+          }}
+        />
+      ) : null}
+
+      {contextUsageOpen ? (
+        <ContextUsageSheet
+          usage={threadContextUsage}
+          onClose={() => setContextUsageOpen(false)}
+          onCompact={() => {
+            setContextUsageOpen(false);
+            setCompactOpen(true);
           }}
         />
       ) : null}
@@ -1014,42 +1051,87 @@ export default function ThreadPage(): JSX.Element {
 function ThreadHeader({
   title,
   mode,
+  contextUsage,
   onBack,
   onToggleMode,
+  onOpenContextUsage,
   onOpenActions
 }: {
   title: string;
   mode: ChatMode;
+  contextUsage: ContextUsageSnapshot | null;
   onBack: () => void;
   onToggleMode: (mode: ChatMode) => void;
+  onOpenContextUsage: () => void;
   onOpenActions: () => void;
 }): JSX.Element {
   return (
-    <header style={headerStyle}>
-      <button type="button" onClick={onBack} style={iconBtn} aria-label="返回">
-        ‹
-      </button>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 600,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden"
-          }}
-        >
-          {title}
-        </div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <ModeSegmented value={mode} onChange={onToggleMode} />
-        <button type="button" onClick={onOpenActions} style={iconBtn} aria-label="更多">
-          ⋮
+    <div style={headerShellStyle}>
+      <header style={headerStyle}>
+        <button type="button" onClick={onBack} style={iconBtn} aria-label="返回">
+          ‹
         </button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden"
+            }}
+          >
+            {title}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <ModeSegmented value={mode} onChange={onToggleMode} />
+          <button type="button" onClick={onOpenActions} style={iconBtn} aria-label="更多">
+            ⋮
+          </button>
+        </div>
+      </header>
+      <ContextUsageProgress usage={contextUsage} onOpen={onOpenContextUsage} />
+    </div>
+  );
+}
+
+function ContextUsageProgress({
+  usage,
+  onOpen
+}: {
+  usage: ContextUsageSnapshot | null;
+  onOpen: () => void;
+}): JSX.Element {
+  const progress = contextUsageProgress(usage);
+  if (!progress) {
+    return (
+      <div aria-label="上下文窗口等待用量" style={contextProgressUnavailableStyle}>
+        <span aria-hidden="true" style={contextProgressTrackStyle} />
+        <span style={contextProgressUnavailableLabelStyle}>--%</span>
       </div>
-    </header>
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-label={`上下文窗口 ${progress.percent}%`}
+      onClick={onOpen}
+      style={contextProgressButtonStyle}
+    >
+      <span style={contextProgressTrackStyle}>
+        <span
+          aria-hidden="true"
+          style={{
+            ...contextProgressFillStyle,
+            width: `${progress.fillPercent}%`,
+            background: progress.color
+          }}
+        />
+      </span>
+      <span style={{ ...contextProgressLabelStyle, color: progress.color }}>{progress.percent}%</span>
+    </button>
   );
 }
 
@@ -1278,6 +1360,49 @@ function GoalEditor({
             保存
           </button>
         </div>
+      </section>
+    </Overlay>
+  );
+}
+
+function ContextUsageSheet({
+  usage,
+  onClose,
+  onCompact
+}: {
+  usage: ContextUsageSnapshot | null;
+  onClose: () => void;
+  onCompact: () => void;
+}): JSX.Element | null {
+  const progress = contextUsageProgress(usage);
+  if (!usage || !progress || !usage.modelContextWindow) {
+    return null;
+  }
+
+  return (
+    <Overlay onClose={onClose} align="bottom">
+      <section role="dialog" aria-label="上下文用量" style={contextUsageSheetStyle}>
+        <header style={contextUsageSheetHeaderStyle}>
+          <div>
+            <div style={contextUsageTitleStyle}>上下文用量</div>
+            <div style={contextUsageSubtitleStyle}>最近一次已知窗口占用</div>
+          </div>
+          <button type="button" onClick={onClose} style={btnGhost}>
+            关闭
+          </button>
+        </header>
+        <div style={contextUsageSummaryStyle}>
+          <span>{formatTokenCount(usage.totalTokens)} / {formatTokenCount(usage.modelContextWindow)}</span>
+          <span style={{ color: progress.color }}>{progress.percent}%</span>
+        </div>
+        <div style={contextUsageMetricsStyle}>
+          <span>输入 {formatTokenCount(usage.inputTokens)}</span>
+          <span>输出 {formatTokenCount(usage.outputTokens)}</span>
+          <span>推理 {formatTokenCount(usage.reasoningOutputTokens)}</span>
+        </div>
+        <button type="button" onClick={onCompact} style={btnPrimary}>
+          压缩上下文
+        </button>
       </section>
     </Overlay>
   );
@@ -2161,16 +2286,111 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "未知错误";
 }
 
-const headerStyle: React.CSSProperties = {
+function contextUsageProgress(
+  usage: ContextUsageSnapshot | null
+): { percent: number; fillPercent: number; color: string } | null {
+  const windowSize = usage?.modelContextWindow ?? null;
+  if (!usage || !windowSize || windowSize <= 0) {
+    return null;
+  }
+  const rawPercent = (usage.totalTokens / windowSize) * 100;
+  const percent = Math.max(0, Math.round(rawPercent));
+  return {
+    percent,
+    fillPercent: Math.max(0, Math.min(100, rawPercent)),
+    color: contextUsageColor(percent)
+  };
+}
+
+function contextUsageColor(percent: number): string {
+  if (percent >= 95) return "var(--cw-danger)";
+  if (percent >= 80) return "#ea580c";
+  if (percent >= 60) return "#d97706";
+  return "var(--cw-success)";
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${formatCompactNumber(value / 1_000_000)}M`;
+  }
+  if (value >= 1_000) {
+    return `${formatCompactNumber(value / 1_000)}K`;
+  }
+  return String(Math.max(0, Math.round(value)));
+}
+
+function formatCompactNumber(value: number): string {
+  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+const headerShellStyle: React.CSSProperties = {
   position: "sticky",
   top: 0,
   zIndex: 30,
+  background: "var(--cw-bg)"
+};
+
+const headerStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
   padding: "8px 10px",
+  background: "var(--cw-bg)"
+};
+
+const contextProgressButtonStyle: React.CSSProperties = {
+  width: "100%",
+  height: 16,
+  padding: "0 10px",
+  border: "none",
+  borderTop: "1px solid var(--cw-border)",
   background: "var(--cw-bg)",
-  borderBottom: "1px solid var(--cw-border)"
+  display: "grid",
+  gridTemplateColumns: "1fr 44px",
+  alignItems: "center",
+  gap: 8,
+  cursor: "pointer",
+  font: "inherit"
+};
+
+const contextProgressUnavailableStyle: React.CSSProperties = {
+  width: "100%",
+  height: 16,
+  padding: "0 10px",
+  borderTop: "1px solid var(--cw-border)",
+  background: "var(--cw-bg)",
+  display: "grid",
+  gridTemplateColumns: "1fr 44px",
+  alignItems: "center",
+  gap: 8
+};
+
+const contextProgressTrackStyle: React.CSSProperties = {
+  position: "relative",
+  display: "block",
+  height: 2,
+  background: "color-mix(in srgb, var(--cw-border) 70%, transparent)",
+  overflow: "hidden"
+};
+
+const contextProgressFillStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: "0 auto 0 0",
+  height: "100%"
+};
+
+const contextProgressLabelStyle: React.CSSProperties = {
+  fontSize: 11,
+  lineHeight: "16px",
+  fontWeight: 650,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums"
+};
+
+const contextProgressUnavailableLabelStyle: React.CSSProperties = {
+  ...contextProgressLabelStyle,
+  color: "var(--cw-fg-muted)"
 };
 
 const iconBtn: React.CSSProperties = {
@@ -2231,6 +2451,61 @@ const goalSheetStyle: React.CSSProperties = {
   maxHeight: "76dvh",
   overflowY: "auto",
   boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+const contextUsageSheetStyle: React.CSSProperties = {
+  background: "var(--cw-card)",
+  borderTop: "1px solid var(--cw-border)",
+  borderTopLeftRadius: 18,
+  borderTopRightRadius: 18,
+  padding: "0 14px calc(14px + var(--safe-bottom))",
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
+  maxHeight: "60dvh",
+  overflowY: "auto",
+  boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+const contextUsageSheetHeaderStyle: React.CSSProperties = {
+  minHeight: 58,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  borderBottom: "1px solid var(--cw-border)"
+};
+
+const contextUsageTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 650,
+  color: "var(--cw-fg)"
+};
+
+const contextUsageSubtitleStyle: React.CSSProperties = {
+  marginTop: 2,
+  fontSize: 12,
+  color: "var(--cw-fg-muted)"
+};
+
+const contextUsageSummaryStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 12,
+  fontSize: 22,
+  fontWeight: 700,
+  fontVariantNumeric: "tabular-nums",
+  color: "var(--cw-fg)"
+};
+
+const contextUsageMetricsStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 8,
+  color: "var(--cw-fg-muted)",
+  fontSize: 13,
+  fontVariantNumeric: "tabular-nums"
 };
 
 const goalSheetHeaderStyle: React.CSSProperties = {

@@ -649,6 +649,15 @@ export type MobileThreadGoalView = {
   updatedAt: number;
 };
 
+export type MobileThreadContextUsage = {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  modelContextWindow: number | null;
+  updatedAt: number;
+};
+
 export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
   nextCursor: string | null;
@@ -660,6 +669,7 @@ export type MobileThreadDetail = MobileThreadSummary & {
   activePermissionProfile?: MobileActivePermissionProfile | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
   tokenUsageTotal?: number;
+  contextUsage?: MobileThreadContextUsage | null;
   goal?: MobileThreadGoalView | null;
 };
 

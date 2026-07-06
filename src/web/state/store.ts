@@ -2,6 +2,10 @@
 
 import { create } from "zustand";
 import type { AppServerStatus, ApprovalsReviewer, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
+import {
+  setContextUsage as saveContextUsageSnapshot,
+  type ContextUsageSnapshot
+} from "../storage/contextUsage";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
@@ -51,6 +55,7 @@ export type ThreadState = {
   approvalsReviewer?: ApprovalsReviewer | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
+  contextUsage: ContextUsageSnapshot | null;
 };
 
 type State = {
@@ -91,6 +96,7 @@ type Actions = {
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
   setPermissionProfile: (threadId: string, profileId: string | null, approvalsReviewer?: ApprovalsReviewer | null) => void;
+  setContextUsage: (threadId: string, usage: ContextUsageSnapshot) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
   addApproval: (threadId: string, req: PendingServerRequest) => void;
   setPendingRequests: (reqs: PendingServerRequest[]) => void;
@@ -126,6 +132,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     approvalsReviewer: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
+    contextUsage: null,
     ...init,
     entries,
     entryIndexes
@@ -514,6 +521,13 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  setContextUsage: (threadId, usage) => {
+    saveContextUsageSnapshot(threadId, usage);
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return { threads: { ...state.threads, [threadId]: { ...prev, contextUsage: usage } } };
+    });
+  },
   setPlan: (threadId, plan) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -741,6 +755,17 @@ export const useStore = create<State & Actions>((set, get) => ({
             ...(typeof ev.turnId === "string" ? { turnId: ev.turnId } : {}),
             createdAt: Date.now(),
             body: { kind: "system", text: "压缩上下文已完成" }
+          });
+          break;
+        }
+        case "token_usage_updated": {
+          get().setContextUsage(threadId, {
+            totalTokens: finiteNumberOrZero(ev.totalTokens),
+            inputTokens: finiteNumberOrZero(ev.inputTokens),
+            outputTokens: finiteNumberOrZero(ev.outputTokens),
+            reasoningOutputTokens: finiteNumberOrZero(ev.reasoningOutputTokens),
+            modelContextWindow: finiteNumberOrNull(ev.modelContextWindow),
+            updatedAt: Date.now()
           });
           break;
         }
@@ -1204,6 +1229,14 @@ function hasVisibleServerOutputForTurn(entries: TimelineEntry[], turnId: string)
         return false;
     }
   });
+}
+
+function finiteNumberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function shouldIgnoreStaleItemRevision(

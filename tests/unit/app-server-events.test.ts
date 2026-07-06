@@ -526,10 +526,10 @@ describe("normalizeAppServerNotification", () => {
         kind: "token_usage_updated",
         threadId: "thread-1",
         turnId: "turn-1",
-        totalTokens: 100,
-        inputTokens: 30,
-        outputTokens: 50,
-        reasoningOutputTokens: 20,
+        totalTokens: 40,
+        inputTokens: 15,
+        outputTokens: 20,
+        reasoningOutputTokens: 5,
         modelContextWindow: 200000
       }
     });
