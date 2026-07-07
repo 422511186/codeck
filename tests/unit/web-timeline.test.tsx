@@ -579,6 +579,143 @@ describe("Timeline", () => {
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 
+  it("diff activity 展开后显示结构化 diff view 和完整 diff 复制入口", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    const diff = [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,1 +1,130 @@",
+      "-old",
+      "+new",
+      ...Array.from({ length: 130 }, (_value, index) => `+added-${index}`)
+    ].join("\n");
+
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "diff-structured",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 131,
+              removed: 1,
+              diff
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Files changed · 1 · +131 -1")).toBeInTheDocument();
+    expect(screen.queryByText("old")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Files changed · 1 · +131 -1").closest("button")!);
+
+    expect(screen.queryByRole("button", { name: "src/app.ts · +131 -1" })).not.toBeInTheDocument();
+    expect(screen.getByText("src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("+131")).toBeInTheDocument();
+    expect(screen.getByText("-1")).toBeInTheDocument();
+    expect(screen.getByText("@@ -1,1 +1,130 @@")).toBeInTheDocument();
+    expect(screen.getByText("old")).toBeInTheDocument();
+    expect(screen.getByText("new")).toBeInTheDocument();
+    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+    expect(screen.queryByText("added-129")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "复制完整 diff" }));
+    expect(writeText).toHaveBeenCalledWith(diff);
+  });
+
+  it("file 工具 activity 展开后使用 diff view fallback 且不出现第二层文件按钮", async () => {
+    const user = userEvent.setup();
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "file-tool-structured",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "file",
+              server: "file",
+              tool: "src/file-tool.ts",
+              diffPath: "src/file-tool.ts",
+              added: 1,
+              removed: 1,
+              status: "success",
+              result: "--- a/src/file-tool.ts\n+++ b/src/file-tool.ts\n@@ -4,1 +4,1 @@\n-before\n+after"
+            }
+          }
+        ]}
+      />
+    );
+
+    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+
+    expect(screen.queryByRole("button", { name: "src/file-tool.ts · +1 -1" })).not.toBeInTheDocument();
+    expect(screen.getByText("src/file-tool.ts")).toBeInTheDocument();
+    expect(screen.getByText("@@ -4,1 +4,1 @@")).toBeInTheDocument();
+    expect(screen.getByText("before")).toBeInTheDocument();
+    expect(screen.getByText("after")).toBeInTheDocument();
+    expect(screen.getAllByText("4").length).toBeGreaterThan(0);
+  });
+
+  it("多文件 Files changed 展开后按 entry 顺序直接显示多个 diff block", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "diff-a",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "diff",
+              path: "src/a.ts",
+              added: 1,
+              removed: 1,
+              diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-oldA\n+newA"
+            }
+          },
+          {
+            id: "diff-b",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: {
+              kind: "diff",
+              path: "src/b.ts",
+              added: 1,
+              removed: 1,
+              diff: "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -2,1 +2,1 @@\n-oldB\n+newB"
+            }
+          }
+        ]}
+      />
+    );
+
+    await user.click(screen.getByText("Files changed · 2 · +2 -2").closest("button")!);
+
+    expect(screen.queryByRole("button", { name: "src/a.ts · +1 -1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "src/b.ts · +1 -1" })).not.toBeInTheDocument();
+    expect(screen.getByText("oldA")).toBeInTheDocument();
+    expect(screen.getByText("newA")).toBeInTheDocument();
+    expect(screen.getByText("oldB")).toBeInTheDocument();
+    expect(screen.getByText("newB")).toBeInTheDocument();
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("src/a.ts")).toBeLessThan(text.indexOf("oldA"));
+    expect(text.indexOf("oldA")).toBeLessThan(text.indexOf("src/b.ts"));
+    expect(text.indexOf("src/b.ts")).toBeLessThan(text.indexOf("oldB"));
+  });
+
   it("Loaded tools 活动默认只显示标题，展开后显示 Skill 动作列表", async () => {
     const user = userEvent.setup();
     render(

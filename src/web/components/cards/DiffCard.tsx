@@ -5,10 +5,6 @@ import { BaseCard } from "./BaseCard";
 import { createTextPreview, TruncationFooter } from "./LongTextPreview";
 
 export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
-  const diff = entry.diff || "";
-  const preview = createTextPreview(diff, { maxLines: 120, maxChars: 20_000 });
-  const rows = parseUnifiedDiff(preview.preview);
-
   return (
     <BaseCard
       icon="±"
@@ -21,6 +17,29 @@ export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
       }
       maxBodyHeight={520}
     >
+      <DiffView diff={entry.diff || ""} />
+    </BaseCard>
+  );
+}
+
+export function DiffView({
+  diff,
+  copyLabel = "复制完整 diff",
+  maxLines = 120,
+  maxChars = 20_000
+}: {
+  diff: string;
+  copyLabel?: string;
+  maxLines?: number;
+  maxChars?: number;
+}): JSX.Element {
+  const preview = createTextPreview(diff, { maxLines, maxChars });
+  const rows = parseUnifiedDiff(preview.preview);
+  const gutterWidth = lineNumberGutterWidth(rows);
+  const gridTemplateColumns = `${gutterWidth}px ${gutterWidth}px 18px minmax(0, 1fr)`;
+
+  return (
+    <>
       <div
         style={{
           marginTop: 10,
@@ -32,14 +51,12 @@ export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
       >
         <div style={{ minWidth: 520, fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.65 }}>
           {rows.map((row, idx) => (
-            <DiffRow key={`${idx}-${row.text}`} row={row} />
+            <DiffRow key={`${idx}-${row.text}`} row={row} gridTemplateColumns={gridTemplateColumns} />
           ))}
         </div>
       </div>
-      {preview.truncated ? (
-        <TruncationFooter text={diff} copyLabel="复制完整 diff" omittedLines={preview.omittedLines} />
-      ) : null}
-    </BaseCard>
+      {preview.truncated ? <TruncationFooter text={diff} copyLabel={copyLabel} omittedLines={preview.omittedLines} /> : null}
+    </>
   );
 }
 
@@ -48,13 +65,13 @@ type DiffRow =
   | { kind: "hunk"; text: string }
   | { kind: "context" | "add" | "remove"; oldLine: number | null; newLine: number | null; marker: string; text: string };
 
-function DiffRow({ row }: { row: DiffRow }): JSX.Element {
+function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColumns: string }): JSX.Element {
   if (row.kind === "file" || row.kind === "hunk") {
     return (
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "48px 48px 22px minmax(0, 1fr)",
+          gridTemplateColumns,
           borderBottom: "1px solid var(--cw-border)",
           background: row.kind === "hunk" ? "rgba(59,130,246,0.10)" : "var(--cw-card)",
           color: row.kind === "hunk" ? "var(--cw-accent)" : "var(--cw-fg-muted)"
@@ -74,7 +91,7 @@ function DiffRow({ row }: { row: DiffRow }): JSX.Element {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "48px 48px 22px minmax(0, 1fr)",
+        gridTemplateColumns,
         background: isAdd ? "rgba(34,197,94,0.12)" : isRemove ? "rgba(239,68,68,0.12)" : "transparent"
       }}
     >
@@ -88,6 +105,17 @@ function DiffRow({ row }: { row: DiffRow }): JSX.Element {
       </span>
     </div>
   );
+}
+
+function lineNumberGutterWidth(rows: DiffRow[]): number {
+  const maxLine = rows.reduce((max, row) => {
+    if (row.kind === "file" || row.kind === "hunk") {
+      return max;
+    }
+    return Math.max(max, row.oldLine ?? 0, row.newLine ?? 0);
+  }, 0);
+  const digits = Math.max(2, String(maxLine || 0).length);
+  return Math.max(28, Math.min(44, digits * 8 + 12));
 }
 
 function parseUnifiedDiff(diff: string): DiffRow[] {
@@ -135,7 +163,8 @@ function parseUnifiedDiff(diff: string): DiffRow[] {
 }
 
 const gutterStyle: React.CSSProperties = {
-  padding: "0 8px",
+  boxSizing: "border-box",
+  padding: "0 6px",
   borderRight: "1px solid var(--cw-border)",
   color: "var(--cw-fg-subtle)",
   textAlign: "right",
@@ -144,7 +173,8 @@ const gutterStyle: React.CSSProperties = {
 };
 
 const markerStyle: React.CSSProperties = {
-  padding: "0 6px",
+  boxSizing: "border-box",
+  padding: "0 4px",
   textAlign: "center",
   userSelect: "none"
 };

@@ -154,6 +154,26 @@ describe("DiffCard", () => {
     });
   });
 
+  it("should use compact line number gutters for short diffs", async () => {
+    const user = userEvent.setup();
+    render(
+      <DiffCard
+        entry={{
+          path: "src/app.ts",
+          diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -15,4 +15,4 @@\n-old\n+new",
+          added: 1,
+          removed: 1
+        }}
+      />
+    );
+
+    await user.click(screen.getByText("src/app.ts").closest("button")!);
+
+    const row = screen.getByText("old").closest("div");
+    expect(row).not.toBeNull();
+    expect(row!.style.gridTemplateColumns).toBe("28px 28px 18px minmax(0, 1fr)");
+  });
+
   it("should cap expanded long diff and copy the complete diff", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

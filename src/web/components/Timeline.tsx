@@ -5,7 +5,7 @@ import type { TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
 import { CommandCard } from "./cards/CommandCard";
-import { DiffCard } from "./cards/DiffCard";
+import { DiffCard, DiffView } from "./cards/DiffCard";
 import { ReasoningCard } from "./cards/ReasoningCard";
 import { ToolCard } from "./cards/ToolCard";
 import { SystemMessage } from "./cards/SystemMessage";
@@ -784,6 +784,16 @@ function DirectActivityDetail({
     );
   }
   if (body.kind === "tool") {
+    if (body.toolKind === "file") {
+      return (
+        <InlineDiffActivityDetail
+          path={body.diffPath ?? body.tool}
+          added={body.added ?? 0}
+          removed={body.removed ?? 0}
+          diff={fileActivityDiffText(body)}
+        />
+      );
+    }
     return (
       <ActivityDetailText
         title={body.toolKind === "command" ? body.tool : `${body.diffPath ?? body.tool}`}
@@ -796,7 +806,15 @@ function DirectActivityDetail({
     return <ActivityDetailText title={body.command} text={body.output ?? body.command} showTitle={showTitle} />;
   }
   if (body.kind === "diff") {
-    return <ActivityDetailText title={body.path} text={body.diff} showTitle={showTitle} />;
+    return (
+      <InlineDiffActivityDetail
+        path={body.path}
+        added={body.added}
+        removed={body.removed}
+        diff={body.diff}
+        showTitle={showTitle}
+      />
+    );
   }
   return <ActivityDetailText title={label} text={label} showTitle={showTitle} />;
 }
@@ -826,6 +844,42 @@ function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
     return <ActivityDetailText title={body.path} text={body.diff} />;
   }
   return <></>;
+}
+
+function InlineDiffActivityDetail({
+  path,
+  added,
+  removed,
+  diff,
+  showTitle = true
+}: {
+  path: string;
+  added: number;
+  removed: number;
+  diff: string;
+  showTitle?: boolean;
+}): JSX.Element {
+  return (
+    <div style={activityDetailItemStyle}>
+      {showTitle ? (
+        <div style={inlineDiffHeaderStyle}>
+          <span style={inlineDiffPathStyle}>{path}</span>
+          <span style={inlineDiffAddedStyle}>+{added}</span>
+          <span style={inlineDiffRemovedStyle}>-{removed}</span>
+        </div>
+      ) : null}
+      <DiffView diff={diff} />
+    </div>
+  );
+}
+
+function fileActivityDiffText(body: Extract<TimelineEntry["body"], { kind: "tool" }>): string {
+  const args = body.arguments?.trim() ?? "";
+  const result = body.result?.trim() ?? "";
+  if (args && result && args !== result) {
+    return `${args}\n${result}`;
+  }
+  return result || args || body.tool;
 }
 
 function ActivityDetailText({
@@ -1123,6 +1177,34 @@ const activityDetailTitleStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap"
+};
+
+const inlineDiffHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+  fontFamily: "var(--font-mono)",
+  fontSize: 12
+};
+
+const inlineDiffPathStyle: React.CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "var(--cw-fg-muted)"
+};
+
+const inlineDiffAddedStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  color: "var(--cw-success)"
+};
+
+const inlineDiffRemovedStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  color: "var(--cw-danger)"
 };
 
 const activityDetailPreStyle: React.CSSProperties = {
