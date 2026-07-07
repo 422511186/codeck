@@ -30,8 +30,9 @@ import { settingsStore } from "../../../web/storage/settings";
 const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
-const STARTED_TURN_EMPTY_OUTPUT_REPAIR_DELAY_MS = 2_500;
+const ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS = 3_000;
 const DEFAULT_COMPOSER_HEIGHT = 144;
+const COMPACTING_CONTEXT_TEXT = "正在压缩上下文…";
 
 export default function ThreadPage(): JSX.Element {
   const params = useParams<{ threadId: string }>();
@@ -70,6 +71,7 @@ export default function ThreadPage(): JSX.Element {
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
+  const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const webSettings = settingsStore.get();
 
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
@@ -90,6 +92,7 @@ export default function ThreadPage(): JSX.Element {
   });
   const [renameOpen, setRenameOpen] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
+  const [compactPending, setCompactPending] = useState(false);
   const [archiveToast, setArchiveToast] = useState<{ visible: boolean } | null>(null);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [draftOverride, setDraftOverride] = useState<{ text: string; version: number } | null>(null);
@@ -105,7 +108,7 @@ export default function ThreadPage(): JSX.Element {
   const loadingPageCursorsRef = useRef(new Set<string>());
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
-  const startedTurnRepairTimersRef = useRef(new Map<string, number>());
+  const compactActionPendingRef = useRef(false);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -134,6 +137,12 @@ export default function ThreadPage(): JSX.Element {
       setContextUsage(threadId, cached);
     }
   }, [threadId, threadContextUsage, setContextUsage]);
+
+  useEffect(() => {
+    compactActionPendingRef.current = false;
+    setCompactPending(false);
+  }, [threadId]);
+
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
   const handleComposerHeightChange = useCallback((height: number) => {
@@ -148,38 +157,6 @@ export default function ThreadPage(): JSX.Element {
     mutationEpochRef.current += 1;
     return mutationEpochRef.current;
   }, []);
-
-  const scheduleStartedTurnRepair = useCallback(
-    (turnId: string, requireMissingOutput = true) => {
-      const key = `${threadId}\u0001${turnId}`;
-      const existingTimer = startedTurnRepairTimersRef.current.get(key);
-      if (existingTimer !== undefined) {
-        window.clearTimeout(existingTimer);
-      }
-      const timer = window.setTimeout(() => {
-        startedTurnRepairTimersRef.current.delete(key);
-        const currentThread = useStore.getState().threads[threadId];
-        if (!currentThread?.running || currentThread.activeTurnId !== turnId) {
-          return;
-        }
-        if (requireMissingOutput && hasVisibleServerOutputForStartedTurn(currentThread.entries, turnId)) {
-          return;
-        }
-        requestSnapshotRepair(threadId);
-      }, STARTED_TURN_EMPTY_OUTPUT_REPAIR_DELAY_MS);
-      startedTurnRepairTimersRef.current.set(key, timer);
-    },
-    [threadId, requestSnapshotRepair]
-  );
-
-  useEffect(() => {
-    return () => {
-      for (const timer of startedTurnRepairTimersRef.current.values()) {
-        window.clearTimeout(timer);
-      }
-      startedTurnRepairTimersRef.current.clear();
-    };
-  }, [threadId]);
 
   const enqueueThreadSettings = useCallback(
     (input: UpdateThreadSettingsInput) => {
@@ -318,8 +295,10 @@ export default function ThreadPage(): JSX.Element {
     };
   }, [threadId, ensureThread, applyThreadDetail, setMode, setPermissionProfile, setRunning, setActiveThread]);
 
+  const repairSignal = repairRequest?.key ?? (repairRequestedAt ? String(repairRequestedAt) : null);
+
   useEffect(() => {
-    if (!repairRequestedAt) return;
+    if (!repairSignal) return;
     let cancelled = false;
     const requestEpoch = mutationEpochRef.current;
     (async () => {
@@ -330,7 +309,7 @@ export default function ThreadPage(): JSX.Element {
         );
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) {
-          requestSnapshotRepair(threadId);
+          requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
         const entries = await threadDetailEntriesWithTurnItems(td, threadId);
@@ -348,12 +327,58 @@ export default function ThreadPage(): JSX.Element {
     };
   }, [
     threadId,
-    repairRequestedAt,
+    repairSignal,
+    repairRequest,
     applyThreadDetail,
     setRunning,
     requestSnapshotRepair,
     clearSnapshotRepair
   ]);
+
+  useEffect(() => {
+    if (!threadRunning && !compactPending) return;
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const pollSummary = async () => {
+      try {
+        const summary = await requestCoordinatorRef.current.dedupeRequest(
+          `thread:${threadId}:summary`,
+          () => codex.readThreadSummary(threadId)
+        );
+        if (cancelled) return;
+        const summaryRunning = isThreadRunningStatus(summary.status);
+        setRunning(threadId, summaryRunning);
+        if (!summaryRunning) {
+          const currentThread = useStore.getState().threads[threadId];
+          const activeTurnId = currentThread?.activeTurnId ?? null;
+          compactActionPendingRef.current = false;
+          setCompactPending(false);
+          if (!hasEquivalentPendingCompletionRepair(currentThread?.repairRequest, activeTurnId)) {
+            requestSnapshotRepair(threadId, {
+              reason: "summary-idle",
+              turnId: activeTurnId
+            });
+          }
+          return;
+        }
+      } catch (err) {
+        if (isRequestAbort(err)) return;
+        // Event stream remains the primary live path; summary polling is only a bounded recovery path.
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(pollSummary, ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS);
+      }
+    };
+
+    timer = window.setTimeout(pollSummary, ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS);
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [threadId, threadRunning, compactPending, setRunning, requestSnapshotRepair]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -494,9 +519,11 @@ export default function ThreadPage(): JSX.Element {
           const currentThread = useStore.getState().threads[threadId];
           if (currentThread?.running) {
             setActiveTurnId(threadId, started.turnId);
-            scheduleStartedTurnRepair(started.turnId);
           } else if (!hasVisibleServerOutputForStartedTurn(currentThread?.entries ?? [], started.turnId)) {
-            requestSnapshotRepair(threadId);
+            requestSnapshotRepair(threadId, {
+              reason: "turn-completed",
+              turnId: started.turnId
+            });
           }
         }
         const serverHasUserMessage = started.thread?.timeline.some(
@@ -569,8 +596,7 @@ export default function ThreadPage(): JSX.Element {
       setActiveTurnId,
       bindLocalUserMessageTurn,
       bumpMutationEpoch,
-      requestSnapshotRepair,
-      scheduleStartedTurnRepair
+      requestSnapshotRepair
     ]
   );
 
@@ -832,6 +858,7 @@ export default function ThreadPage(): JSX.Element {
   const mode = threadMode;
   const modelId = effectiveModel;
   const running = threadRunning;
+  const compactDisabled = running || compactPending;
   const currentGoal = visibleDetail.goal ?? null;
 
   return (
@@ -869,6 +896,7 @@ export default function ThreadPage(): JSX.Element {
               : "请按上面的计划开始执行";
           await onSend(text, []);
         }}
+        processingLabel={compactPending ? COMPACTING_CONTEXT_TEXT : "正在处理…"}
       />
 
       {showJumpLatest ? (
@@ -930,8 +958,10 @@ export default function ThreadPage(): JSX.Element {
       {contextUsageOpen ? (
         <ContextUsageSheet
           usage={threadContextUsage}
+          compactDisabled={compactDisabled}
           onClose={() => setContextUsageOpen(false)}
           onCompact={() => {
+            if (compactDisabled) return;
             setContextUsageOpen(false);
             setCompactOpen(true);
           }}
@@ -963,6 +993,7 @@ export default function ThreadPage(): JSX.Element {
             setShowSheet(false);
             setCompactOpen(true);
           }}
+          compactDisabled={compactDisabled}
         />
       ) : null}
 
@@ -1005,13 +1036,35 @@ export default function ThreadPage(): JSX.Element {
           body="将会摘要先前对话以释放上下文窗口。继续？"
           onClose={() => setCompactOpen(false)}
           onConfirm={async () => {
+            if (compactActionPendingRef.current) return;
+            compactActionPendingRef.current = true;
             setCompactOpen(false);
+            setCompactPending(true);
+            appendEntries(threadId, [
+              {
+                id: uniqueTimelineId("compact-pending"),
+                createdAt: Date.now(),
+                body: { kind: "system", text: COMPACTING_CONTEXT_TEXT }
+              }
+            ]);
             try {
-              await requestCoordinatorRef.current.runLockedAction(
+              const result = await requestCoordinatorRef.current.runLockedAction(
                 `compact:${threadId}`,
                 () => codex.compactThread(threadId)
               );
+              if (result.started) {
+                requestSnapshotRepair(threadId, { reason: "context-compacted" });
+              }
             } catch (err) {
+              compactActionPendingRef.current = false;
+              setCompactPending(false);
+              appendEntries(threadId, [
+                {
+                  id: uniqueTimelineId("compact-error"),
+                  createdAt: Date.now(),
+                  body: { kind: "error", text: `压缩失败：${errorMessage(err)}` }
+                }
+              ]);
               console.warn("compact failed", err);
             }
           }}
@@ -1145,7 +1198,8 @@ function ThreadTimelineViewport({
   onRewindToMessage,
   onForkFromMessage,
   onResolveApproval,
-  onExecutePlan
+  onExecutePlan,
+  processingLabel
 }: {
   threadId: string;
   composerHeight: number;
@@ -1156,6 +1210,7 @@ function ThreadTimelineViewport({
   onForkFromMessage: (entry: TimelineEntry) => void | Promise<void>;
   onResolveApproval: (req: PendingServerRequest) => void | Promise<void>;
   onExecutePlan: (entries: TimelineEntry[]) => void | Promise<void>;
+  processingLabel: string;
 }): JSX.Element {
   const entries = useStore((s) => s.threads[threadId]?.entries ?? EMPTY_ENTRIES);
   const approvals = useStore((s) => s.threads[threadId]?.pendingApprovals ?? EMPTY_APPROVALS);
@@ -1189,7 +1244,9 @@ function ThreadTimelineViewport({
         }}
       />
       {running ? (
-        <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>正在生成…</div>
+        <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>
+          {processingLabel}
+        </div>
       ) : null}
       {mode === "plan" && !running && entries.length > 0 ? (
         <div style={{ textAlign: "center", padding: 16 }}>
@@ -1363,10 +1420,12 @@ function GoalEditor({
 
 function ContextUsageSheet({
   usage,
+  compactDisabled,
   onClose,
   onCompact
 }: {
   usage: ContextUsageSnapshot | null;
+  compactDisabled: boolean;
   onClose: () => void;
   onCompact: () => void;
 }): JSX.Element | null {
@@ -1396,9 +1455,13 @@ function ContextUsageSheet({
           <span>输出 {formatTokenCount(usage.outputTokens)}</span>
           <span>推理 {formatTokenCount(usage.reasoningOutputTokens)}</span>
         </div>
-        <button type="button" onClick={onCompact} style={btnPrimary}>
-          压缩上下文
-        </button>
+        {compactDisabled ? (
+          <div style={sheetMutedItemStyle}>运行中不可压缩</div>
+        ) : (
+          <button type="button" onClick={onCompact} style={btnPrimary}>
+            压缩上下文
+          </button>
+        )}
       </section>
     </Overlay>
   );
@@ -1432,13 +1495,18 @@ function ActionSheet(props: {
   onRename: () => void;
   onArchive: () => void;
   onCompact: () => void;
+  compactDisabled: boolean;
 }): JSX.Element {
   return (
     <Overlay onClose={props.onClose} align="bottom">
       <div style={sheetStyle}>
         <SheetItem label="重命名" onClick={props.onRename} />
         <SheetItem label="归档" divided onClick={props.onArchive} />
-        <SheetItem label="压缩上下文" divided onClick={props.onCompact} />
+        {props.compactDisabled ? (
+          <div style={sheetMutedItemStyle}>运行中不可压缩</div>
+        ) : (
+          <SheetItem label="压缩上下文" divided onClick={props.onCompact} />
+        )}
         <SheetItem label="取消" divided onClick={props.onClose} />
       </div>
     </Overlay>
@@ -1832,6 +1900,17 @@ function isThreadNotFoundError(error: unknown): boolean {
 
 function isThreadRunningStatus(status: string): boolean {
   return status === "active";
+}
+
+function hasEquivalentPendingCompletionRepair(
+  repairRequest: { reason?: string; turnId?: string } | null | undefined,
+  turnId: string | null
+): boolean {
+  return Boolean(
+    turnId &&
+    repairRequest?.turnId === turnId &&
+    (repairRequest.reason === "turn-completed" || repairRequest.reason === "summary-idle")
+  );
 }
 
 function sendPayloadKey(text: string, imagePaths: string[], skillReferences: SkillReference[] = []): string {
@@ -2433,6 +2512,13 @@ const sheetStyle: React.CSSProperties = {
   maxHeight: "50dvh",
   overflowY: "auto",
   boxShadow: "0 -12px 32px rgba(0,0,0,0.28)"
+};
+
+const sheetMutedItemStyle: React.CSSProperties = {
+  padding: "14px 12px",
+  borderTop: "1px solid var(--cw-border)",
+  fontSize: 16,
+  color: "var(--cw-fg-muted)"
 };
 
 const goalSheetStyle: React.CSSProperties = {

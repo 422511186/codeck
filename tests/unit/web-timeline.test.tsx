@@ -411,9 +411,7 @@ describe("Timeline", () => {
 
     await user.click(screen.getByText("Thinking").closest("button")!);
 
-    expect(screen.queryByText(/\*\*先看结构\*\*/)).not.toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Thinking" }).at(-1)!);
-
+    expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(1);
     expect(screen.getByText(/\*\*先看结构\*\*/)).toBeInTheDocument();
     expect(screen.getByText(/再运行测试/)).toBeInTheDocument();
 
@@ -426,9 +424,9 @@ describe("Timeline", () => {
 
     await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
 
-    expect(screen.getByRole("button", { name: "src/app.ts · +2 -1" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "src/app.ts · +2 -1" }));
+    expect(screen.queryByRole("button", { name: "src/app.ts · +2 -1" })).not.toBeInTheDocument();
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
   });
 
@@ -511,6 +509,74 @@ describe("Timeline", () => {
     await user.click(screen.getByRole("button", { name: "Read src/app.ts" }));
 
     expect(screen.getByText("content")).toBeInTheDocument();
+  });
+
+  it("失败活动使用中文状态并在展开后直接显示错误详情", async () => {
+    const user = userEvent.setup();
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "cmd-failed",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "sed -n '1,80p' missing.md",
+              status: "failed",
+              result: "sed: can't read missing.md: No such file or directory"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No such file/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("已读取 1 个文件").closest("button")!);
+
+    expect(screen.queryByRole("button", { name: "已运行 sed -n '1,80p' missing.md" })).not.toBeInTheDocument();
+    expect(screen.getByText(/sed -n '1,80p' missing.md/)).toBeInTheDocument();
+    expect(screen.getByText(/No such file or directory/)).toBeInTheDocument();
+  });
+
+  it("file 工具活动展开后直接显示文件输出详情", async () => {
+    const user = userEvent.setup();
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "file-1",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "file",
+              server: "file",
+              tool: "src/app.ts",
+              diffPath: "src/app.ts",
+              added: 1,
+              removed: 1,
+              status: "success",
+              result: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Files changed · 1 · +1 -1")).toBeInTheDocument();
+    expect(screen.queryByText(/--- a\/src\/app.ts/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+
+    expect(screen.queryByRole("button", { name: "src/app.ts · +1 -1" })).not.toBeInTheDocument();
+    expect(screen.getByText("src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 
   it("Loaded tools 活动默认只显示标题，展开后显示 Skill 动作列表", async () => {
@@ -758,10 +824,7 @@ describe("Timeline", () => {
     expect(screen.getByText(/line 1/)).toBeInTheDocument();
 
     await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
-    expect(screen.getByRole("button", { name: "src/app.ts · +1 -1" })).toBeInTheDocument();
-    expect(screen.queryByText("--- a/src/app.ts")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "src/app.ts · +1 -1" }));
+    expect(screen.queryByRole("button", { name: "src/app.ts · +1 -1" })).not.toBeInTheDocument();
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 

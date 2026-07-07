@@ -429,6 +429,44 @@ class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   }
 }
 
+class SnapshotContextCompactionPeer extends NotificationOverlayPeer {
+  override async request(method: string): Promise<unknown> {
+    if (method !== "thread/read") {
+      return super.request(method);
+    }
+
+    return {
+      thread: {
+        ...(threadWithTurns(["turn-1"]) as Record<string, unknown>),
+        preview: "context compaction overlay test",
+        turns: [
+          {
+            id: "turn-1",
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: [
+              {
+                type: "userMessage",
+                id: "user-1",
+                clientId: "client-user-1",
+                content: [{ type: "text", text: "压缩上下文", text_elements: [] }]
+              },
+              {
+                type: "contextCompaction",
+                id: "snapshot-context-compaction"
+              }
+            ]
+          }
+        ]
+      }
+    };
+  }
+}
+
 class PartialRollbackPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
@@ -1351,6 +1389,28 @@ describe("createAppServerGateway", () => {
     expect(reasoningItems[0]).toMatchObject({
       turnId: "turn-1",
       text: "Checking working directory in Chinese"
+    });
+  });
+
+  it("刷新读取合并 snapshot 与 overlay 中同 turn 压缩完成系统消息，避免重复分隔线", async () => {
+    const peer = new SnapshotContextCompactionPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "thread/compacted",
+      params: { threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+    const compactionItems = detail.timeline.filter(
+      (item) => item.role === "system" && item.text === "压缩上下文已完成"
+    );
+
+    expect(compactionItems).toHaveLength(1);
+    expect(compactionItems[0]).toMatchObject({
+      turnId: "turn-1",
+      text: "压缩上下文已完成"
     });
   });
 

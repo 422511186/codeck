@@ -30,7 +30,7 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **THEN** `assertRuntimePathAllowed` 抛出错误，返回 HTTP 502 和 `{ok: false, error: "路径不在允许的工作区范围内"}`
 
 ### Requirement: Thread read
-系统 SHALL 支持通过 threadId 读取会话详情，包含 timeline（用户消息、agent 消息、命令执行等）和 goal 信息。系统 MUST 将尚未 materialized 的空 thread 视为可读取会话，返回空 timeline，而不是把 app-server 的 `includeTurns` 限制暴露给用户。为了支持消息级时间线操作，timeline item MUST 携带足够的 turn 元数据，使前端能够识别 item 所属 turn。运行中 thread 的 `readThread` SHALL 作为初始化、显式刷新、事件流断线修复和 rollback/fork 返回详情的 snapshot API；客户端 MUST NOT 把它作为正常运行中输出的高频 polling 主路径。
+系统 SHALL 支持通过 threadId 读取会话详情，包含 timeline（用户消息、agent 消息、命令执行等）和 goal 信息。系统 MUST 将尚未 materialized 的空 thread 视为可读取会话，返回空 timeline，而不是把 app-server 的 `includeTurns` 限制暴露给用户。为了支持消息级时间线操作，timeline item MUST 携带足够的 turn 元数据，使前端能够识别 item 所属 turn。运行中 thread 的 `readThread` SHALL 作为初始化、显式刷新、事件流断线修复和 rollback/fork 返回详情的 snapshot API；客户端 MUST NOT 把它作为正常运行中输出的高频 polling 主路径。系统 SHALL 另提供不含 timeline 的 thread summary 读取能力，用于运行中状态兜底检测。
 
 #### Scenario: Read thread detail
 - **WHEN** 已认证用户 GET `/api/codex/threads/{threadId}` 且目标 thread 已有可读取 turns
@@ -47,6 +47,12 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **WHEN** thread 处于 running 状态且 timeline event stream 可用
 - **THEN** 客户端 MUST NOT 每隔固定短周期调用 `readThread` 获取完整 timeline
 - **AND** `readThread` MAY 仅用于首屏 snapshot、手动刷新、事件流缺口修复或最终 reconcile
+
+#### Scenario: Read thread summary without timeline
+- **WHEN** 已认证用户 GET `/api/codex/threads/{threadId}/summary`
+- **THEN** 系统 MUST 调用 `gateway.readThreadSummary(threadId)`
+- **AND** 响应 MUST 返回 thread 摘要状态
+- **AND** 响应 MUST NOT 携带完整 timeline
 
 ### Requirement: Thread resume with latest turns
 系统 SHALL 支持恢复已存在的会话，默认获取最近 30 条 turns（倒序）。恢复结果中的 timeline item MUST 保留所属 turn 元数据，以支持历史消息级操作。
@@ -148,11 +154,18 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **THEN** 调用 `gateway.clearThreadGoal()`，触发 `thread/goal/cleared` 通知
 
 ### Requirement: Thread compact
-系统 SHALL 支持压缩会话上下文。
+系统 SHALL 支持压缩空闲会话上下文，并拒绝压缩运行中的会话。
 
 #### Scenario: Compact thread
 - **WHEN** 已认证用户 POST `/api/codex/threads/{threadId}/compact`
+- **AND** 会话处于空闲状态
 - **THEN** 调用 `gateway.compactThread(threadId)`，触发 `thread/compacted` 通知
+
+#### Scenario: Reject active thread compact
+- **WHEN** 已认证用户 POST `/api/codex/threads/{threadId}/compact`
+- **AND** 会话处于运行状态
+- **THEN** 系统 MUST 返回 `409`
+- **AND** 系统 MUST 不调用 `gateway.compactThread(threadId)`
 
 ### Requirement: Thread review
 系统 SHALL 支持对会话启动代码审查。
@@ -286,4 +299,3 @@ TBD - created by archiving change appserver-spec-as-is. Update Purpose after arc
 - **WHEN** 前端调用历史 turns 分页加载更早消息
 - **THEN** Web 适配层 MUST 返回页内正序 timeline items
 - **AND** 前端 prepend 后整体 timeline 顺序 MUST 保持稳定
-

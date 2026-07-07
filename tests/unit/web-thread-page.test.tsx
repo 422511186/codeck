@@ -71,6 +71,7 @@ function mockStoreState(): unknown {
 }
 
 const mockReadThread = vi.fn();
+const mockReadThreadSummary = vi.fn();
 const mockResumeThread = vi.fn();
 const mockListTurnsBefore = vi.fn();
 const mockListTurnItems = vi.fn();
@@ -105,6 +106,7 @@ const sampleGoal = {
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     readThread: (...args: unknown[]) => mockReadThread(...args),
+    readThreadSummary: (...args: unknown[]) => mockReadThreadSummary(...args),
     resumeThread: (...args: unknown[]) => mockResumeThread(...args),
     listTurnsBefore: (...args: unknown[]) => mockListTurnsBefore(...args),
     listTurnItems: (...args: unknown[]) => mockListTurnItems(...args),
@@ -181,6 +183,16 @@ describe("ThreadPage", () => {
       status: "idle",
       timeline: [],
       lastTurnId: null,
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary.mockClear();
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "idle",
       updatedAt: Date.now()
     });
     mockResumeThread.mockResolvedValue({
@@ -547,7 +559,10 @@ describe("ThreadPage", () => {
 
     expect(mockSetThreadEntries).not.toHaveBeenCalled();
     expect(mockClearSnapshotRepair).not.toHaveBeenCalled();
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({ reason: "mutation-retry" })
+    );
   });
 
   it("should preserve older history cursor after bounded snapshot repair", async () => {
@@ -1157,6 +1172,140 @@ describe("ThreadPage", () => {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
     }
+  });
+
+  it("should poll lightweight thread summary while active and request one snapshot repair when it becomes idle", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        updatedAt: Date.now()
+      })
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "idle",
+        updatedAt: Date.now()
+      });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+    });
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "summary-idle",
+        turnId: "turn-running"
+      })
+    );
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should not request a duplicate snapshot repair when summary idle matches a pending completion repair", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      repairRequest: {
+        key: "turn-completed:turn-running:0",
+        reason: "turn-completed",
+        turnId: "turn-running",
+        generation: 0,
+        requestedAt: 123
+      },
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
 
   it("should interrupt the active turn id instead of only toggling local running state", async () => {
@@ -2407,6 +2556,66 @@ describe("ThreadPage", () => {
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
   });
 
+  it("should show local timeline feedback while compacting", async () => {
+    const user = userEvent.setup();
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+    await user.click(screen.getByRole("button", { name: "压缩上下文" }));
+    await user.click(screen.getByRole("button", { name: "继续" }));
+
+    expect(mockAppendEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [
+        expect.objectContaining({
+          body: { kind: "system", text: "正在压缩上下文…" }
+        })
+      ]
+    );
+    expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should not open compact confirmation while the thread is running", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+
+    expect(screen.queryByRole("button", { name: "压缩上下文" })).not.toBeInTheDocument();
+    expect(screen.getByText("运行中不可压缩")).toBeInTheDocument();
+    expect(mockCompactThread).not.toHaveBeenCalled();
+  });
+
   it("should ignore duplicate compact confirmations while request is pending", async () => {
     let resolveCompact: (() => void) | null = null;
     mockCompactThread.mockReturnValue(
@@ -3325,10 +3534,16 @@ describe("ThreadPage", () => {
     });
     expect(mockSetActiveTurnId).not.toHaveBeenCalledWith("thread-1", "turn-fast");
     expect(mockSetRunning.mock.calls.filter((call) => call[0] === "thread-1" && call[1] === true)).toHaveLength(1);
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-fast"
+      })
+    );
   });
 
-  it("should request snapshot repair when a started turn has no visible live output after a short wait", async () => {
+  it("should not request full snapshot repair only because a started turn has no visible live output after a short wait", async () => {
     mockStartTurn.mockImplementation(async () => {
       mockThreadState.mockReturnValue({
         entries: [],
@@ -3369,13 +3584,15 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
+    const initialReadCalls = mockReadThread.mock.calls.length;
     expect(mockStartTurn).toHaveBeenCalledWith(expect.objectContaining({ text: "missing live output" }));
     act(() => {
       vi.advanceTimersByTime(2600);
     });
     vi.useRealTimers();
 
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockReadThread.mock.calls.length).toBe(initialReadCalls);
   });
 
   it("should not request missing-output repair when a started turn already has visible live output", async () => {

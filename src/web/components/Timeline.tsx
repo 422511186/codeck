@@ -354,7 +354,7 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
                 ▣
               </span>
               <span style={inlineActivityTitleStyle}>{section.title}</span>
-              {section.failed ? <span style={inlineActivityFailedStyle}>Failed</span> : null}
+              {section.failed ? <span style={inlineActivityFailedStyle}>失败</span> : null}
               {canExpand ? (
                 <span aria-hidden="true" style={inlineActivityChevronStyle}>
                   {open ? "⌄" : "›"}
@@ -362,27 +362,31 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
               ) : null}
             </button>
             {open ? (
-              <div style={activityDetailsStyle}>
-                {inlineActivityActionRows(section).map((row) => {
-                  const entryOpen = openActionKeys.has(row.key);
-                  return (
-                    <div key={row.key} style={activityDetailItemStyle}>
-                      <button
-                        type="button"
-                        aria-expanded={entryOpen}
-                        onClick={() => toggleAction(row.key)}
-                        style={inlineActivityEntryButtonStyle}
-                      >
-                        <span style={inlineActivityEntryTitleStyle}>{row.label}</span>
-                        <span aria-hidden="true" style={inlineActivityChevronStyle}>
-                          {entryOpen ? "⌄" : "›"}
-                        </span>
-                      </button>
-                      {entryOpen ? <ActivityDetail entry={row.entry} /> : null}
-                    </div>
-                  );
-                })}
-              </div>
+              shouldRenderDirectActivityDetails(section) ? (
+                <DirectActivityDetails section={section} />
+              ) : (
+                <div style={activityDetailsStyle}>
+                  {inlineActivityActionRows(section).map((row) => {
+                    const entryOpen = openActionKeys.has(row.key);
+                    return (
+                      <div key={row.key} style={activityDetailItemStyle}>
+                        <button
+                          type="button"
+                          aria-expanded={entryOpen}
+                          onClick={() => toggleAction(row.key)}
+                          style={inlineActivityEntryButtonStyle}
+                        >
+                          <span style={inlineActivityEntryTitleStyle}>{row.label}</span>
+                          <span aria-hidden="true" style={inlineActivityChevronStyle}>
+                            {entryOpen ? "⌄" : "›"}
+                          </span>
+                        </button>
+                        {entryOpen ? <ActivityDetail entry={row.entry} /> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             ) : null}
           </div>
         );
@@ -393,6 +397,7 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
 
 type InlineActivitySection = {
   key: string;
+  kind: InlineActivitySectionKind;
   title: string;
   details: string[];
   entries: TimelineEntry[];
@@ -436,6 +441,7 @@ function inlineActivitySections(entries: TimelineEntry[]): InlineActivitySection
     : [
         {
           key: "fallback-0",
+          kind: "fallback",
           title: `Used ${entries.length} tools`,
           details: entries.map(genericToolDetail),
           entries,
@@ -472,6 +478,7 @@ function inlineActivitySection(
     const running = entries.some((entry) => entry.body.kind === "reasoning" && !entry.body.done);
     return {
       key: `thinking-${index}`,
+      kind,
       title: running ? "Thinking..." : "Thinking",
       details: [],
       entries,
@@ -484,6 +491,7 @@ function inlineActivitySection(
     const count = names.length || entries.length;
     return {
       key: `skills-${index}`,
+      kind,
       title: count === 1 ? "Loaded a tool" : `Loaded ${count} tools`,
       details: names.length ? names.map((name) => `读取 ${name} 技能`) : [`${count} tools`],
       entries,
@@ -500,6 +508,7 @@ function inlineActivitySection(
     const searchActions = entries.filter((entry) => isSearchActivity(entry));
     return {
       key: `commands-${index}`,
+      kind,
       title: commandActivityTitle({
         read: readActions.length,
         list: listActions.length,
@@ -515,6 +524,7 @@ function inlineActivitySection(
   if (kind === "tools") {
     return {
       key: `tools-${index}`,
+      kind,
       title: `Used ${entries.length} tools`,
       details: entries.map(genericToolDetail),
       entries,
@@ -537,6 +547,7 @@ function inlineActivitySection(
     );
     return {
       key: `files-${index}`,
+      kind,
       title: `Files changed · ${entries.length} · +${stats.added} -${stats.removed}`,
       details: entries.map(fileChangeDetail),
       entries,
@@ -546,6 +557,7 @@ function inlineActivitySection(
 
   return {
     key: `fallback-${index}`,
+    kind,
     title: `Used ${entries.length} tools`,
     details: entries.map(genericToolDetail),
     entries,
@@ -734,6 +746,61 @@ function activityEntryFailed(entry: TimelineEntry): boolean {
   );
 }
 
+function shouldRenderDirectActivityDetails(section: InlineActivitySection): boolean {
+  return section.failed || section.kind === "thinking" || section.kind === "files";
+}
+
+function DirectActivityDetails({ section }: { section: InlineActivitySection }): JSX.Element {
+  return (
+    <div style={activityDetailsStyle}>
+      {section.entries.map((entry, index) => (
+        <DirectActivityDetail
+          key={entry.id}
+          entry={entry}
+          label={section.details[index] ?? genericToolDetail(entry)}
+          showTitle={section.kind !== "thinking"}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DirectActivityDetail({
+  entry,
+  label,
+  showTitle
+}: {
+  entry: TimelineEntry;
+  label: string;
+  showTitle: boolean;
+}): JSX.Element {
+  const body = entry.body;
+  if (body.kind === "reasoning") {
+    return (
+      <ActivityDetailText
+        text={body.text.trim() || (body.done ? "" : "Thinking...")}
+        showTitle={false}
+      />
+    );
+  }
+  if (body.kind === "tool") {
+    return (
+      <ActivityDetailText
+        title={body.toolKind === "command" ? body.tool : `${body.diffPath ?? body.tool}`}
+        text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
+        showTitle={showTitle}
+      />
+    );
+  }
+  if (body.kind === "command") {
+    return <ActivityDetailText title={body.command} text={body.output ?? body.command} showTitle={showTitle} />;
+  }
+  if (body.kind === "diff") {
+    return <ActivityDetailText title={body.path} text={body.diff} showTitle={showTitle} />;
+  }
+  return <ActivityDetailText title={label} text={label} showTitle={showTitle} />;
+}
+
 function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
   const body = entry.body;
   if (body.kind === "reasoning") {
@@ -761,10 +828,18 @@ function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
   return <></>;
 }
 
-function ActivityDetailText({ title, text }: { title: string; text: string }): JSX.Element {
+function ActivityDetailText({
+  title,
+  text,
+  showTitle = true
+}: {
+  title?: string;
+  text: string;
+  showTitle?: boolean;
+}): JSX.Element {
   return (
     <div style={activityDetailItemStyle}>
-      <div style={activityDetailTitleStyle}>{title}</div>
+      {showTitle && title ? <div style={activityDetailTitleStyle}>{title}</div> : null}
       {text.trim() ? <pre style={activityDetailPreStyle}>{text}</pre> : null}
     </div>
   );

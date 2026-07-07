@@ -89,7 +89,7 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 - **AND** toast MUST 关闭
 
 ### Requirement: 压缩上下文需弹确认对话框
-压缩上下文 SHALL 在用户点击后弹出确认对话框，确认后才调用后端，过程中禁用输入框，完成后在 timeline 插入系统消息。
+压缩上下文 SHALL 仅在会话空闲时允许发起。用户点击后 SHALL 弹出确认对话框，确认后才调用后端，并立即在 timeline 给出「正在压缩上下文…」反馈；完成后在 timeline 插入系统消息。
 
 #### Scenario: 弹出确认
 - **WHEN** 用户点击「压缩上下文」
@@ -98,8 +98,13 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 #### Scenario: 确认压缩
 - **WHEN** 用户在对话框中确认
 - **THEN** 系统 MUST 调用 `POST /api/codex/threads/:threadId/compact`
-- **AND** 输入框 MUST 在压缩进行中禁用
-- **AND** 压缩完成后 timeline MUST 在末尾插入一条「上下文已压缩」系统消息
+- **AND** timeline MUST 立即追加一条「正在压缩上下文…」系统消息
+- **AND** 压缩完成后 timeline MUST 在末尾插入一条「压缩上下文已完成」系统消息
+
+#### Scenario: 运行中禁止压缩
+- **WHEN** 当前会话仍在运行
+- **THEN** 系统 MUST 不展示可点击的「压缩上下文」入口
+- **AND** 系统 MUST 不调用 `POST /api/codex/threads/:threadId/compact`
 
 ### Requirement: Header context window progress
 会话聊天页 SHALL 在 sticky header 下方显示当前会话上下文窗口区域。当系统拥有该会话最近一次 `modelContextWindow` 和最近一次请求 token 用量时，进度区域 MUST 显示一条细进度线和百分比；当缺少可靠用量或窗口大小时，系统 MUST 显示不可点击的未知占位条，且不得伪造百分比。
@@ -361,7 +366,7 @@ timeline 背景 SHALL 使用纯背景色，消息块 SHALL 通过浅底色或边
 - **AND** 未授权路径 MUST 返回错误而不是读取文件
 
 ### Requirement: Running chat view uses event stream instead of full-timeline polling
-会话聊天页 SHALL 在首屏 snapshot 后使用 timeline event stream 更新 running thread。页面 MUST NOT 在事件流正常时以固定短间隔轮询 `/api/codex/threads/:threadId` 获取完整 timeline。Snapshot repair SHALL 只作为确认缺口或明确异常窗口的有界恢复手段；一次 repair 返回 active 状态本身 MUST NOT 安排下一次 full-thread detail repair。
+会话聊天页 SHALL 在首屏 snapshot 后使用 timeline event stream 更新 running thread。页面 MUST NOT 在事件流正常时以固定短间隔轮询 `/api/codex/threads/:threadId` 获取完整 timeline。页面 MAY 低频轮询不含 timeline 的轻量 summary 以发现 running thread 已变 idle；发现 idle 或收到完成事件后 SHALL 只触发一次完整 snapshot repair 做最终 reconcile。Snapshot repair SHALL 只作为确认缺口、完成后 reconcile 或明确异常窗口的有界恢复手段；一次 repair 返回 active 状态本身 MUST NOT 安排下一次 full-thread detail repair。
 
 #### Scenario: Initial snapshot then event stream
 - **WHEN** 用户进入会话聊天页
@@ -372,12 +377,19 @@ timeline 背景 SHALL 使用纯背景色，消息块 SHALL 通过浅底色或边
 - **WHEN** thread 处于 running 状态且事件流连接正常
 - **THEN** 页面 MUST NOT 每 2 秒或其他固定短周期调用 `/api/codex/threads/:threadId` 拉取完整 thread detail
 - **AND** timeline 增量 MUST 由事件流驱动
+- **AND** 页面 MAY 轮询轻量 summary endpoint，但该轮询 MUST NOT 携带完整 timeline
 
-#### Scenario: Repair read only after stream gap or explicit missing-output recovery
-- **WHEN** 事件流断线、重连补发失败、检测到事件缺口，或当前 active turn 完成后缺少可见服务端输出
+#### Scenario: Repair read only after stream gap, completion, or explicit missing-output recovery
+- **WHEN** 事件流断线、重连补发失败、检测到事件缺口、当前 active turn 完成，或压缩上下文完成
 - **THEN** 页面 MAY 调用 `readThread` 执行一次 snapshot repair
 - **AND** repair 完成后 MUST 回到事件流主路径
 - **AND** repair 结果仍为 active MUST NOT 仅因此重新安排下一次 full-thread detail repair
+
+#### Scenario: Summary polling triggers one final reconcile
+- **WHEN** 页面正在显示 running thread
+- **AND** 轻量 summary endpoint 返回该 thread 已变为空闲
+- **THEN** 页面 MUST 停止该轮询并触发一次 snapshot repair
+- **AND** MUST NOT 在 running 期间通过 summary 轮询拉取完整 timeline
 
 #### Scenario: Active repair result does not loop
 - **WHEN** 页面因已确认的 repair 标记调用 `/api/codex/threads/:threadId`

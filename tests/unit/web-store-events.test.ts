@@ -1242,7 +1242,67 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
   });
 
-  it("does not request repair when the completed active turn already has visible server output", () => {
+  it("deduplicates equivalent snapshot repair requests for the same completed turn", () => {
+    let now = 10_000;
+    const originalNow = Date.now;
+    Date.now = () => {
+      now += 1;
+      return now;
+    };
+    try {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          generation: 2
+        }
+      });
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+          generation: 2
+        }
+      });
+
+      const firstRequest = useStore.getState().threads["thread-1"]?.repairRequest;
+      expect(firstRequest).toEqual(
+        expect.objectContaining({
+          key: "turn-completed:turn-1:2",
+          reason: "turn-completed",
+          turnId: "turn-1",
+          generation: 2
+        })
+      );
+
+      useStore.getState().requestSnapshotRepair("thread-1", {
+        reason: "summary-idle",
+        turnId: "turn-1",
+        generation: 2
+      });
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "turn_completed",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          status: "completed",
+          generation: 2
+        }
+      });
+
+      expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(firstRequest);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("requests repair when the completed active turn already has visible server output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -1263,7 +1323,7 @@ describe("web store codex events", () => {
       event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
     });
 
-    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeNull();
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
   });
 
   it("invalidates the Skills cache from an ownerless skills_changed event", () => {
@@ -1941,6 +2001,9 @@ describe("web store codex events", () => {
   });
 
   it("shows context compaction completion as a system timeline entry", () => {
+    useStore.getState().setRunning("thread-1", true);
+    useStore.getState().setActiveTurnId("thread-1", "turn-1");
+
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "context_compacted", threadId: "thread-1", turnId: "turn-1" }
@@ -1952,6 +2015,61 @@ describe("web store codex events", () => {
         body: { kind: "system", text: "压缩上下文已完成" }
       })
     ]);
+    expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
+    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBeNull();
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+  });
+
+  it("requests a snapshot repair after turn completion even when live output was visible", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "流式内容"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+  });
+
+  it("merges snapshot context compaction with the live completion event", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "context_compacted", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    useStore.getState().mergeThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "snapshot-context-compaction",
+          turnId: "turn-1",
+          createdAt: 200,
+          body: { kind: "system", text: "压缩上下文已完成" }
+        }
+      ],
+      null
+    );
+
+    const compactionEntries = useStore
+      .getState()
+      .threads["thread-1"]?.entries.filter(
+        (entry) => entry.body.kind === "system" && entry.body.text === "压缩上下文已完成"
+      );
+
+    expect(compactionEntries).toHaveLength(1);
   });
 
   it("stores context usage updates and caches them by thread id", () => {

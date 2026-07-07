@@ -165,6 +165,7 @@ export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequ
 
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
 const MAX_BROWSER_EVENT_BACKLOG = 500;
+const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
 
 function pendingReasoningItemId(threadId: string, turnId: string | null): string {
   return `${turnId ?? threadId}-reasoning-pending`;
@@ -318,7 +319,15 @@ function equivalentTimelineOutput(base: MobileTimelineItem, overlay: MobileTimel
     return equivalentTimelineText(base.text, overlay.text);
   }
 
+  if (base.role === "system") {
+    return isContextCompactionTimelineItem(base) && isContextCompactionTimelineItem(overlay);
+  }
+
   return false;
+}
+
+function isContextCompactionTimelineItem(item: MobileTimelineItem): boolean {
+  return item.role === "system" && item.text.trim() === CONTEXT_COMPACTION_DONE_TEXT;
 }
 
 function equivalentTimelineText(left: string, right: string): boolean {
@@ -2952,7 +2961,7 @@ export class AppServerGateway {
         this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
           id: `${event.turnId}-context-compacted`,
           role: "system",
-          text: "压缩上下文已完成",
+          text: CONTEXT_COMPACTION_DONE_TEXT,
           toolKind: "system"
         });
         break;

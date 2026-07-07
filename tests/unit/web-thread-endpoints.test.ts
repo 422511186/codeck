@@ -73,6 +73,29 @@ describe("web thread endpoints", () => {
     });
   });
 
+  it("读取会话状态时调用不携带 timeline 的 summary endpoint", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      thread: {
+        id: "thread-1",
+        title: "会话",
+        preview: "",
+        cwd: "C:\\repo",
+        modelProvider: "custom",
+        status: "active",
+        updatedAt: 1
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    await expect(codex.readThreadSummary("thread-1")).resolves.toMatchObject({
+      id: "thread-1",
+      status: "active"
+    });
+
+    expect(mockApi).toHaveBeenCalledWith("/api/codex/threads/thread-1/summary");
+  });
+
   it("读取 collaboration modes 时只调用轻量 preset endpoint", async () => {
     mockApi.mockResolvedValue({
       ok: true,

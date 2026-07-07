@@ -101,16 +101,21 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 - **AND** 会话 MUST 回到「进行中」列表
 
 ### Requirement: 压缩上下文需要确认且禁用输入
-点击「压缩上下文」SHALL 弹出确认对话框（说明该操作不可逆）；确认后调用 `POST /api/codex/threads/:threadId/compact`；压缩进行中 MUST 禁用输入框；完成后 MUST 在 timeline 插入系统消息。
+会话空闲时点击「压缩上下文」SHALL 弹出确认对话框（说明该操作不可逆）；确认后调用 `POST /api/codex/threads/:threadId/compact`，并立即在 timeline 显示「正在压缩上下文…」反馈；完成后 MUST 在 timeline 插入系统消息。会话运行中 SHALL 不提供可点击的压缩入口。
 
 #### Scenario: 确认对话框
 - **WHEN** 用户在抽屉点击「压缩上下文」
 - **THEN** 系统 MUST 弹出确认对话框
 - **AND** 文案 MUST 提示该操作不可逆
 
-#### Scenario: 进行中禁用输入
+#### Scenario: 进行中显示反馈
 - **WHEN** 压缩接口在响应中且未完成
-- **THEN** 输入框 MUST 禁用
+- **THEN** timeline MUST 显示「正在压缩上下文…」系统消息或等价进行中反馈
+
+#### Scenario: 会话运行中禁止压缩
+- **WHEN** 当前会话仍在运行
+- **THEN** 抽屉 MUST 不展示可点击的「压缩上下文」操作
+- **AND** 前端 MUST 不调用压缩接口
 
 #### Scenario: 完成插入系统消息
 - **WHEN** 压缩完成
@@ -122,4 +127,3 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 #### Scenario: 无额外状态点
 - **WHEN** 用户在会话头部观察
 - **THEN** 头部 MUST 不显示运行状态指示点或徽标
-

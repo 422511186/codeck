@@ -12,6 +12,31 @@ import type { WsEvent, WsConnectionState } from "../ws/client";
 export type { WsConnectionState };
 
 const MAX_PROCESSED_EVENT_IDS = 2_000;
+const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
+
+export type SnapshotRepairReason =
+  | "manual"
+  | "mutation-retry"
+  | "timeline-gap"
+  | "turn-completed"
+  | "summary-idle"
+  | "context-compacted";
+
+export type SnapshotRepairRequest = {
+  key: string;
+  reason: SnapshotRepairReason;
+  requestedAt: number;
+  turnId?: string;
+  eventId?: string;
+  generation?: number;
+};
+
+export type SnapshotRepairRequestInput = {
+  reason?: SnapshotRepairReason;
+  turnId?: string | null;
+  eventId?: string | null;
+  generation?: number | null;
+};
 
 type TimelineEntryIndexes = {
   byId: Map<string, number>;
@@ -43,6 +68,7 @@ export type ThreadState = {
   snapshotDeltaSuppressions: Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }>;
   timelineGeneration: number;
   localUserMessageIdsByTurn: Map<string, string>;
+  repairRequest: SnapshotRepairRequest | null;
   repairRequestedAt: number | null;
   running: boolean;
   cursor: string | null;
@@ -91,7 +117,7 @@ type Actions = {
   setTimelineGeneration: (threadId: string, generation: number) => void;
   markTurnInterrupted: (threadId: string, turnId: string) => void;
   markTurnDeleted: (threadId: string, turnId: string) => void;
-  requestSnapshotRepair: (threadId: string) => void;
+  requestSnapshotRepair: (threadId: string, input?: SnapshotRepairRequestInput) => void;
   clearSnapshotRepair: (threadId: string) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
@@ -120,6 +146,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     snapshotDeltaSuppressions: new Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }>(),
     timelineGeneration: 0,
     localUserMessageIdsByTurn: new Map<string, string>(),
+    repairRequest: null,
     repairRequestedAt: null,
     running: false,
     cursor: null,
@@ -138,6 +165,46 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     entryIndexes
   };
 };
+
+function snapshotRepairRequest(
+  thread: ThreadState,
+  input?: SnapshotRepairRequestInput
+): SnapshotRepairRequest {
+  const requestedAt = Date.now();
+  const reason = input?.reason ?? "manual";
+  const generation = finiteNumberOrNull(input?.generation) ?? thread.timelineGeneration;
+  const turnId = typeof input?.turnId === "string" && input.turnId ? input.turnId : undefined;
+  const eventId = typeof input?.eventId === "string" && input.eventId ? input.eventId : undefined;
+  const key = snapshotRepairKey({ reason, turnId, eventId, generation, requestedAt });
+  return {
+    key,
+    reason,
+    requestedAt,
+    ...(turnId ? { turnId } : {}),
+    ...(eventId ? { eventId } : {}),
+    ...(typeof generation === "number" ? { generation } : {})
+  };
+}
+
+function snapshotRepairKey(input: {
+  reason: SnapshotRepairReason;
+  turnId?: string;
+  eventId?: string;
+  generation?: number;
+  requestedAt: number;
+}): string {
+  const generation = typeof input.generation === "number" ? String(input.generation) : "legacy";
+  if ((input.reason === "turn-completed" || input.reason === "summary-idle") && input.turnId) {
+    return `turn-completed:${input.turnId}:${generation}`;
+  }
+  if (input.reason === "context-compacted") {
+    return `context-compacted:${input.turnId ?? "thread"}:${generation}`;
+  }
+  if (input.reason === "timeline-gap") {
+    return `timeline-gap:${input.eventId ?? input.turnId ?? "unknown"}:${generation}`;
+  }
+  return `${input.reason}:${input.turnId ?? "thread"}:${generation}:${input.requestedAt}`;
+}
 
 export const useStore = create<State & Actions>((set, get) => ({
   wsState: "idle",
@@ -469,26 +536,30 @@ export const useStore = create<State & Actions>((set, get) => ({
       deletedTurnIds.add(turnId);
       return { threads: { ...state.threads, [threadId]: { ...prev, deletedTurnIds } } };
     }),
-  requestSnapshotRepair: (threadId) =>
+  requestSnapshotRepair: (threadId, input) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const request = snapshotRepairRequest(prev, input);
+      if (prev.repairRequest?.key === request.key) {
+        return state;
+      }
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, repairRequestedAt: Date.now() }
+          [threadId]: { ...prev, repairRequest: request, repairRequestedAt: request.requestedAt }
         }
       };
     }),
   clearSnapshotRepair: (threadId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      if (!prev.repairRequestedAt) {
+      if (!prev.repairRequestedAt && !prev.repairRequest) {
         return state;
       }
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, repairRequestedAt: null }
+          [threadId]: { ...prev, repairRequest: null, repairRequestedAt: null }
         }
       };
     }),
@@ -582,7 +653,10 @@ export const useStore = create<State & Actions>((set, get) => ({
       const threadId = typeof event.threadId === "string" && event.threadId ? event.threadId : null;
       if (threadId) {
         get().ensureThread(threadId);
-        get().requestSnapshotRepair(threadId);
+        get().requestSnapshotRepair(threadId, {
+          reason: "timeline-gap",
+          eventId: typeof event.lastEventId === "string" ? event.lastEventId : undefined
+        });
       }
       return;
     }
@@ -638,17 +712,18 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn_interrupted": {
           const eventTurnId = typeof ev.turnId === "string" ? ev.turnId : null;
           const currentActiveTurnId = get().threads[threadId]?.activeTurnId ?? null;
+          const isCompleted =
+            ev.kind === "turn.completed" || ev.kind === "turn_completed" || ev.status === "completed";
           if (!eventTurnId || !currentActiveTurnId || eventTurnId === currentActiveTurnId) {
             get().setRunning(threadId, false);
           }
           get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
-          if (
-            eventTurnId &&
-            currentActiveTurnId === eventTurnId &&
-            (ev.kind === "turn.completed" || ev.kind === "turn_completed" || ev.status === "completed") &&
-            !hasVisibleServerOutputForTurn(get().threads[threadId]?.entries ?? [], eventTurnId)
-          ) {
-            get().requestSnapshotRepair(threadId);
+          if (eventTurnId && isCompleted && (!currentActiveTurnId || currentActiveTurnId === eventTurnId)) {
+            get().requestSnapshotRepair(threadId, {
+              reason: "turn-completed",
+              turnId: eventTurnId,
+              generation
+            });
           }
           break;
         }
@@ -754,7 +829,13 @@ export const useStore = create<State & Actions>((set, get) => ({
             id: `${turnId}-context-compacted`,
             ...(typeof ev.turnId === "string" ? { turnId: ev.turnId } : {}),
             createdAt: Date.now(),
-            body: { kind: "system", text: "压缩上下文已完成" }
+            body: { kind: "system", text: CONTEXT_COMPACTION_DONE_TEXT }
+          });
+          get().setRunning(threadId, false);
+          get().requestSnapshotRepair(threadId, {
+            reason: "context-compacted",
+            turnId,
+            generation
           });
           break;
         }
@@ -1208,29 +1289,6 @@ function isVisibleTimelineEvent(kind: string): boolean {
   ]).has(kind);
 }
 
-function hasVisibleServerOutputForTurn(entries: TimelineEntry[], turnId: string): boolean {
-  return entries.some((entry) => {
-    if (entry.turnId !== turnId) {
-      return false;
-    }
-    switch (entry.body.kind) {
-      case "agent-message":
-        return entry.body.text.trim().length > 0;
-      case "reasoning":
-        return entry.body.text.trim().length > 0;
-      case "tool":
-        return Boolean((entry.body.result ?? entry.body.arguments ?? entry.body.tool).trim());
-      case "command":
-        return Boolean((entry.body.output ?? entry.body.command).trim());
-      case "diff":
-      case "error":
-        return true;
-      default:
-        return false;
-    }
-  });
-}
-
 function finiteNumberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -1499,9 +1557,18 @@ function areEquivalentOutputEntries(left: TimelineEntry, right: TimelineEntry): 
 function isMergeableOutputEntry(entry: TimelineEntry): boolean {
   return Boolean(
     entry.turnId &&
-      (entry.body.kind === "agent-message" || entry.body.kind === "reasoning" || entry.body.kind === "tool") &&
+      (
+        entry.body.kind === "agent-message" ||
+        entry.body.kind === "reasoning" ||
+        entry.body.kind === "tool" ||
+        isContextCompactionEntry(entry)
+      ) &&
       deltaComparableText(entry).trim()
   );
+}
+
+function isContextCompactionEntry(entry: TimelineEntry): boolean {
+  return entry.body.kind === "system" && entry.body.text.trim() === CONTEXT_COMPACTION_DONE_TEXT;
 }
 
 function equivalentText(left: string, right: string): boolean {

@@ -111,6 +111,13 @@ export async function readThread(threadId: string): Promise<ThreadDetail> {
   return data.thread;
 }
 
+export async function readThreadSummary(threadId: string): Promise<ThreadSummary> {
+  const data = await api<{ thread: ThreadSummary }>(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/summary`
+  );
+  return data.thread;
+}
+
 export async function resumeThread(threadId: string): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/resume`,
@@ -383,6 +390,7 @@ export const codex = {
   },
   listThreadsForCwd,
   readThread,
+  readThreadSummary,
   resumeThread,
   listTurnsBefore,
   listTurnItems,
