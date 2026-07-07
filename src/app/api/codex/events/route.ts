@@ -3,6 +3,8 @@ import { browserEventId, type BrowserTimelineEvent } from "../../../../server/ap
 
 export const dynamic = "force-dynamic";
 
+const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+
 type TimelineGapEvent = {
   type: "timeline-gap";
   lastEventId: string;
@@ -46,6 +48,9 @@ export async function GET(request: Request): Promise<Response> {
       };
 
       write(": connected\n\n");
+      const heartbeat = setInterval(() => {
+        write(": ping\n\n");
+      }, SSE_HEARTBEAT_INTERVAL_MS);
       if (backlog.gap && lastEventId) {
         const threadId = threadIdFromBrowserEventId(lastEventId);
         write(encodeSseData({ type: "timeline-gap", lastEventId, ...(threadId ? { threadId } : {}) }));
@@ -59,6 +64,7 @@ export async function GET(request: Request): Promise<Response> {
       replaying = false;
 
       const close = () => {
+        clearInterval(heartbeat);
         unsubscribe();
         try {
           controller.close();

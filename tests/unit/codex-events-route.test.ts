@@ -82,6 +82,26 @@ describe("codex events route", () => {
     expect(body).toContain('"threadId":"thread-1"');
   });
 
+  it("定期发送 SSE heartbeat，避免代理空闲断开事件流", async () => {
+    vi.useFakeTimers();
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(new Request("http://localhost/api/codex/events", { signal: abort.signal }));
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    const decoder = new TextDecoder();
+    const first = await reader!.read();
+    expect(decoder.decode(first.value)).toContain(": connected");
+
+    const heartbeat = reader!.read();
+    await vi.advanceTimersByTimeAsync(15_000);
+    abort.abort();
+    const second = await heartbeat;
+
+    expect(decoder.decode(second.value)).toContain(": ping");
+  });
+
   it("先订阅实时事件再读取 backlog，避免重连窗口丢事件", async () => {
     const order: string[] = [];
     mockOnBrowserEvent.mockImplementation((handler: (event: unknown) => void) => {

@@ -1380,7 +1380,7 @@ describe("ThreadPage", () => {
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
   });
 
-  it("should request snapshot repair when active summary advances but open event stream does not update timeline", async () => {
+  it("should not request snapshot repair when active summary advances before any visible live output", async () => {
     vi.useFakeTimers();
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -1413,6 +1413,84 @@ describe("ThreadPage", () => {
       });
     mockThreadState.mockReturnValue({
       entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      timelineGeneration: 4,
+      lastSeenItemId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockReadThreadSummary).toHaveBeenCalledTimes(2);
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should request snapshot repair when active summary advances after visible live output stalls", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: 1_000
+    });
+    mockReadThreadSummary
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        updatedAt: 1_000
+      })
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        updatedAt: 1_005
+      });
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "agent-live",
+          turnId: "turn-running",
+          createdAt: 1_001,
+          body: { kind: "agent-message", text: "partial output" }
+        }
+      ],
       pendingApprovals: [],
       mode: "build",
       running: true,
@@ -1480,7 +1558,14 @@ describe("ThreadPage", () => {
       updatedAt: 1_005
     });
     mockThreadState.mockReturnValue({
-      entries: [],
+      entries: [
+        {
+          id: "agent-live",
+          turnId: "turn-running",
+          createdAt: 1_001,
+          body: { kind: "agent-message", text: "partial output" }
+        }
+      ],
       pendingApprovals: [],
       mode: "build",
       running: true,
@@ -1540,7 +1625,14 @@ describe("ThreadPage", () => {
       snapshotSequence: 12
     });
     mockThreadState.mockReturnValue({
-      entries: [],
+      entries: [
+        {
+          id: "agent-live",
+          turnId: "turn-running",
+          createdAt: 1_001,
+          body: { kind: "agent-message", text: "partial output" }
+        }
+      ],
       pendingApprovals: [],
       mode: "build",
       running: true,

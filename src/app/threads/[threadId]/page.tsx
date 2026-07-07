@@ -1988,6 +1988,7 @@ type ActiveSummaryProgressSnapshot = {
   summarySnapshotSequence: number | null;
   timelineGeneration: number;
   timelineProgressKey: string;
+  hasVisibleServerOutput: boolean;
   staleRepairSignal: string | null;
 };
 
@@ -2003,9 +2004,10 @@ function activeSummaryProgressSnapshot(
   const entries = thread?.entries ?? EMPTY_ENTRIES;
   const lastEntry = entries[entries.length - 1] ?? null;
   const lastEntryProgress = timelineEntryProgressValue(lastEntry);
+  const activeTurnId = thread?.activeTurnId ?? null;
   const timelineGeneration = typeof thread?.timelineGeneration === "number" ? thread.timelineGeneration : 0;
   const timelineProgressKey = [
-    thread?.activeTurnId ?? "thread",
+    activeTurnId ?? "thread",
     timelineGeneration,
     entries.length,
     lastEntry?.id ?? "",
@@ -2013,11 +2015,12 @@ function activeSummaryProgressSnapshot(
   ].join("\u0001");
 
   return {
-    turnId: thread?.activeTurnId ?? null,
+    turnId: activeTurnId,
     summaryUpdatedAt: Number.isFinite(summary.updatedAt) ? summary.updatedAt : null,
     summarySnapshotSequence: finiteNumberOrNull(summary.snapshotSequence),
     timelineGeneration,
     timelineProgressKey,
+    hasVisibleServerOutput: activeTurnId ? hasVisibleServerOutputForStartedTurn(entries, activeTurnId) : false,
     staleRepairSignal: null
   };
 }
@@ -2061,6 +2064,7 @@ function shouldRepairStaleActiveSummaryFromTimelineProgress(
 ): boolean {
   if (state !== "open" || !previous) return false;
   if (previous.turnId !== current.turnId) return false;
+  if (!current.hasVisibleServerOutput) return false;
   if (previous.timelineProgressKey !== current.timelineProgressKey) return false;
   if (!activeSummaryProgressAdvanced(previous, current)) return false;
   return current.staleRepairSignal !== activeSummaryProgressSignal(current);
