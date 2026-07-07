@@ -383,6 +383,12 @@ export default function ThreadPage(): JSX.Element {
         if (cancelled) return;
         const summaryRunning = isThreadRunningStatus(summary.status);
         const currentThread = useStore.getState().threads[threadId];
+        if (compactPending && compactActionPendingRef.current && !summaryRunning) {
+          if (!cancelled) {
+            timer = window.setTimeout(pollSummary, ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS);
+          }
+          return;
+        }
         setRunning(threadId, summaryRunning);
         if (summaryRunning) {
           const disconnectedRepairKey = `${currentThread?.activeTurnId ?? "thread"}`;
@@ -911,8 +917,14 @@ export default function ThreadPage(): JSX.Element {
 
   const mode = threadMode;
   const modelId = effectiveModel;
-  const running = threadRunning;
-  const compactDisabled = running || compactPending;
+  const running = threadRunning || isThreadRunningStatus(visibleDetail.status);
+  const compactAllowed = isThreadCompactableStatus(visibleDetail.status) && !running && !compactPending;
+  const compactDisabled = !compactAllowed;
+  const compactDisabledLabel = compactPending
+    ? COMPACTING_CONTEXT_TEXT
+    : running
+      ? "运行中不可压缩"
+      : "当前状态不可压缩";
   const currentGoal = visibleDetail.goal ?? null;
 
   return (
@@ -950,6 +962,7 @@ export default function ThreadPage(): JSX.Element {
               : "请按上面的计划开始执行";
           await onSend(text, []);
         }}
+        processing={running || compactPending}
         processingLabel={compactPending ? COMPACTING_CONTEXT_TEXT : "正在处理…"}
       />
 
@@ -1013,6 +1026,7 @@ export default function ThreadPage(): JSX.Element {
         <ContextUsageSheet
           usage={threadContextUsage}
           compactDisabled={compactDisabled}
+          compactDisabledLabel={compactDisabledLabel}
           onClose={() => setContextUsageOpen(false)}
           onCompact={() => {
             if (compactDisabled) return;
@@ -1048,6 +1062,7 @@ export default function ThreadPage(): JSX.Element {
             setCompactOpen(true);
           }}
           compactDisabled={compactDisabled}
+          compactDisabledLabel={compactDisabledLabel}
         />
       ) : null}
 
@@ -1094,23 +1109,12 @@ export default function ThreadPage(): JSX.Element {
             compactActionPendingRef.current = true;
             setCompactOpen(false);
             setCompactPending(true);
-            appendEntries(threadId, [
-              {
-                id: uniqueTimelineId("compact-pending"),
-                createdAt: Date.now(),
-                body: { kind: "system", text: COMPACTING_CONTEXT_TEXT }
-              }
-            ]);
             try {
-              const result = await requestCoordinatorRef.current.runLockedAction(
+              await requestCoordinatorRef.current.runLockedAction(
                 `compact:${threadId}`,
                 () => codex.compactThread(threadId)
               );
-              if (result.started) {
-                requestSnapshotRepair(threadId, { reason: "context-compacted" });
-              }
             } catch (err) {
-              compactActionPendingRef.current = false;
               setCompactPending(false);
               appendEntries(threadId, [
                 {
@@ -1120,6 +1124,8 @@ export default function ThreadPage(): JSX.Element {
                 }
               ]);
               console.warn("compact failed", err);
+            } finally {
+              compactActionPendingRef.current = false;
             }
           }}
         />
@@ -1253,6 +1259,7 @@ function ThreadTimelineViewport({
   onForkFromMessage,
   onResolveApproval,
   onExecutePlan,
+  processing,
   processingLabel
 }: {
   threadId: string;
@@ -1264,6 +1271,7 @@ function ThreadTimelineViewport({
   onForkFromMessage: (entry: TimelineEntry) => void | Promise<void>;
   onResolveApproval: (req: PendingServerRequest) => void | Promise<void>;
   onExecutePlan: (entries: TimelineEntry[]) => void | Promise<void>;
+  processing: boolean;
   processingLabel: string;
 }): JSX.Element {
   const entries = useStore((s) => s.threads[threadId]?.entries ?? EMPTY_ENTRIES);
@@ -1297,7 +1305,7 @@ function ThreadTimelineViewport({
           await onResolveApproval(req);
         }}
       />
-      {running ? (
+      {processing ? (
         <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>
           {processingLabel}
         </div>
@@ -1475,11 +1483,13 @@ function GoalEditor({
 function ContextUsageSheet({
   usage,
   compactDisabled,
+  compactDisabledLabel,
   onClose,
   onCompact
 }: {
   usage: ContextUsageSnapshot | null;
   compactDisabled: boolean;
+  compactDisabledLabel: string;
   onClose: () => void;
   onCompact: () => void;
 }): JSX.Element | null {
@@ -1510,7 +1520,7 @@ function ContextUsageSheet({
           <span>推理 {formatTokenCount(usage.reasoningOutputTokens)}</span>
         </div>
         {compactDisabled ? (
-          <div style={sheetMutedItemStyle}>运行中不可压缩</div>
+          <div style={sheetMutedItemStyle}>{compactDisabledLabel}</div>
         ) : (
           <button type="button" onClick={onCompact} style={btnPrimary}>
             压缩上下文
@@ -1550,6 +1560,7 @@ function ActionSheet(props: {
   onArchive: () => void;
   onCompact: () => void;
   compactDisabled: boolean;
+  compactDisabledLabel: string;
 }): JSX.Element {
   return (
     <Overlay onClose={props.onClose} align="bottom">
@@ -1557,7 +1568,7 @@ function ActionSheet(props: {
         <SheetItem label="重命名" onClick={props.onRename} />
         <SheetItem label="归档" divided onClick={props.onArchive} />
         {props.compactDisabled ? (
-          <div style={sheetMutedItemStyle}>运行中不可压缩</div>
+          <div style={sheetMutedItemStyle}>{props.compactDisabledLabel}</div>
         ) : (
           <SheetItem label="压缩上下文" divided onClick={props.onCompact} />
         )}
@@ -1954,6 +1965,10 @@ function isThreadNotFoundError(error: unknown): boolean {
 
 function isThreadRunningStatus(status: string): boolean {
   return status === "active";
+}
+
+function isThreadCompactableStatus(status: string): boolean {
+  return status === "idle";
 }
 
 function hasEquivalentPendingCompletionRepair(

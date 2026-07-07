@@ -3274,7 +3274,26 @@ describe("ThreadPage", () => {
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("should show local timeline feedback while compacting", async () => {
+  it("should not append local timeline feedback while compacting", async () => {
+    const user = userEvent.setup();
+    mockCompactThread.mockReturnValue(new Promise(() => undefined));
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+    await user.click(screen.getByRole("button", { name: "压缩上下文" }));
+    await user.click(screen.getByRole("button", { name: "继续" }));
+
+    expect(mockAppendEntries).not.toHaveBeenCalled();
+    expect(screen.getByText("正在压缩上下文…")).toBeInTheDocument();
+    expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should not request full timeline repair after a manual compact request starts", async () => {
     const user = userEvent.setup();
 
     render(<ThreadPage />);
@@ -3287,15 +3306,75 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "压缩上下文" }));
     await user.click(screen.getByRole("button", { name: "继续" }));
 
-    expect(mockAppendEntries).toHaveBeenCalledWith(
-      "thread-1",
-      [
-        expect.objectContaining({
-          body: { kind: "system", text: "正在压缩上下文…" }
-        })
-      ]
+    await waitFor(() => {
+      expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+    });
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockReadThread).toHaveBeenCalledTimes(1);
+    expect(mockListTurnItems).not.toHaveBeenCalled();
+  });
+
+  it("should keep manual compact pending while the compact request is unresolved even if summary reports idle", async () => {
+    vi.useFakeTimers();
+    let resolveCompact: (() => void) | null = null;
+    mockCompactThread.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveCompact = resolve;
+      })
     );
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByLabelText("更多"));
+    fireEvent.click(screen.getByRole("button", { name: "压缩上下文" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+    mockSetRunning.mockClear();
+    mockRequestSnapshotRepair.mockClear();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-compact",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockSetRunning).not.toHaveBeenCalledWith("thread-1", false);
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+
+    act(() => {
+      resolveCompact?.();
+    });
   });
 
   it("should not open compact confirmation while the thread is running", async () => {
@@ -3333,6 +3412,81 @@ describe("ThreadPage", () => {
     expect(screen.getByText("运行中不可压缩")).toBeInTheDocument();
     expect(mockCompactThread).not.toHaveBeenCalled();
   });
+
+  it("should not expose compact when loaded thread detail is active before store running catches up", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+
+    expect(screen.queryByRole("button", { name: "压缩上下文" })).not.toBeInTheDocument();
+    expect(screen.getByText("运行中不可压缩")).toBeInTheDocument();
+    expect(mockCompactThread).not.toHaveBeenCalled();
+  });
+
+  it.each(["notLoaded", "systemError"])(
+    "should not expose compact when loaded thread detail is %s",
+    async (status) => {
+      const user = userEvent.setup();
+      mockThreadState.mockReturnValue({
+        entries: [],
+        pendingApprovals: [],
+        mode: "build",
+        running: false,
+        activeTurnId: null,
+        plan: [],
+        cursor: null,
+        reachedBeginning: false
+      });
+      mockReadThread.mockResolvedValue({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Test Thread",
+        modelProvider: "claude-opus-4",
+        status,
+        timeline: [],
+        lastTurnId: null,
+        updatedAt: Date.now()
+      });
+
+      render(<ThreadPage />);
+
+      await waitFor(() => {
+        expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+      });
+
+      await user.click(screen.getByLabelText("更多"));
+
+      expect(screen.queryByRole("button", { name: "压缩上下文" })).not.toBeInTheDocument();
+      expect(screen.getByText(/不可压缩/)).toBeInTheDocument();
+      expect(mockCompactThread).not.toHaveBeenCalled();
+    }
+  );
 
   it("should ignore duplicate compact confirmations while request is pending", async () => {
     let resolveCompact: (() => void) | null = null;

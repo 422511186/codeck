@@ -2833,6 +2833,7 @@ export class AppServerGateway {
       "file_output_delta",
       "tool_output_delta",
       "turn_diff_updated",
+      "context_compacted",
       "item_updated"
     ]).has(envelope.event.kind);
   }

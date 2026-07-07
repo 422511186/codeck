@@ -89,7 +89,7 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 - **AND** toast MUST 关闭
 
 ### Requirement: 压缩上下文需弹确认对话框
-压缩上下文 SHALL 仅在会话空闲时允许发起。用户点击后 SHALL 弹出确认对话框，确认后才调用后端，并立即在 timeline 给出「正在压缩上下文…」反馈；完成后在 timeline 插入系统消息。
+压缩上下文 SHALL 仅在会话状态明确为 `idle` 时允许发起。用户点击后 SHALL 弹出确认对话框，确认后才调用后端；请求 pending 期间页面 SHALL 给出进行中反馈，但 MUST NOT 本地追加「正在压缩上下文…」timeline 系统消息；完成后 timeline 的系统消息 MUST 来自 app-server live item / compact 事件。
 
 #### Scenario: 弹出确认
 - **WHEN** 用户点击「压缩上下文」
@@ -98,11 +98,12 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 #### Scenario: 确认压缩
 - **WHEN** 用户在对话框中确认
 - **THEN** 系统 MUST 调用 `POST /api/codex/threads/:threadId/compact`
-- **AND** timeline MUST 立即追加一条「正在压缩上下文…」系统消息
-- **AND** 压缩完成后 timeline MUST 在末尾插入一条「压缩上下文已完成」系统消息
+- **AND** 页面 MUST 显示压缩进行中反馈
+- **AND** timeline MUST NOT 立即追加本地「正在压缩上下文…」系统消息
+- **AND** 压缩完成后 timeline MUST 通过 app-server live item / compact 事件插入「压缩上下文已完成」系统消息
 
-#### Scenario: 运行中禁止压缩
-- **WHEN** 当前会话仍在运行
+#### Scenario: 非空闲禁止压缩
+- **WHEN** 当前会话状态不是 `idle`
 - **THEN** 系统 MUST 不展示可点击的「压缩上下文」入口
 - **AND** 系统 MUST 不调用 `POST /api/codex/threads/:threadId/compact`
 
@@ -613,3 +614,4 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **WHEN** 测试构造大量历史 entries 和高频 delta
 - **THEN** 测试 MUST 能断言可见 store 更新次数、挂载 row 数量或复杂度上限
 - **AND** MUST 能防止重新引入全量同步渲染路径
+

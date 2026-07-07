@@ -2130,7 +2130,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("shows context compaction completion as a system timeline entry", () => {
+  it("shows deprecated context compaction completion without stopping the active turn or repairing", () => {
     useStore.getState().setRunning("thread-1", true);
     useStore.getState().setActiveTurnId("thread-1", "turn-1");
 
@@ -2145,9 +2145,61 @@ describe("web store codex events", () => {
         body: { kind: "system", text: "压缩上下文已完成" }
       })
     ]);
-    expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
-    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBeNull();
-    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(useStore.getState().threads["thread-1"]?.running).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBe("turn-1");
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeNull();
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toBeNull();
+  });
+
+  it("ignores a late deprecated context compaction event for a deleted turn", () => {
+    useStore.getState().markTurnDeleted("thread-1", "turn-deleted");
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "context_compacted", threadId: "thread-1", turnId: "turn-deleted" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
+  });
+
+  it("keeps automatic context compaction item updates on the live event path", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "context-compaction-item",
+          role: "system",
+          text: "压缩上下文已完成",
+          toolKind: "system"
+        }
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "turn-1-reasoning-pending",
+        turnId: "turn-1",
+        body: { kind: "reasoning", text: "", done: false }
+      }),
+      expect.objectContaining({
+        id: "context-compaction-item",
+        turnId: "turn-1",
+        body: { kind: "system", text: "压缩上下文已完成" }
+      })
+    ]);
+    expect(thread?.running).toBe(true);
+    expect(thread?.activeTurnId).toBe("turn-1");
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
   });
 
   it("keeps streamed output after turn completion without requesting snapshot repair", () => {

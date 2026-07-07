@@ -101,7 +101,7 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 - **AND** 会话 MUST 回到「进行中」列表
 
 ### Requirement: 压缩上下文需要确认且禁用输入
-会话空闲时点击「压缩上下文」SHALL 弹出确认对话框（说明该操作不可逆）；确认后调用 `POST /api/codex/threads/:threadId/compact`，并立即在 timeline 显示「正在压缩上下文…」反馈；完成后 MUST 在 timeline 插入系统消息。会话运行中 SHALL 不提供可点击的压缩入口。
+会话状态明确为 `idle` 时点击「压缩上下文」SHALL 弹出确认对话框（说明该操作不可逆）；确认后调用 `POST /api/codex/threads/:threadId/compact`，并通过页面进行中状态给出反馈，但 MUST NOT 本地追加「正在压缩上下文…」timeline 系统消息；完成后 MUST 由 app-server live item / compact 事件在 timeline 插入系统消息。会话非 `idle` 时 SHALL 不提供可点击的压缩入口。
 
 #### Scenario: 确认对话框
 - **WHEN** 用户在抽屉点击「压缩上下文」
@@ -110,16 +110,17 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 
 #### Scenario: 进行中显示反馈
 - **WHEN** 压缩接口在响应中且未完成
-- **THEN** timeline MUST 显示「正在压缩上下文…」系统消息或等价进行中反馈
+- **THEN** 页面 MUST 显示「正在压缩上下文…」或等价进行中反馈
+- **AND** timeline MUST NOT 本地追加「正在压缩上下文…」系统消息
 
-#### Scenario: 会话运行中禁止压缩
-- **WHEN** 当前会话仍在运行
+#### Scenario: 会话非空闲禁止压缩
+- **WHEN** 当前会话状态不是 `idle`
 - **THEN** 抽屉 MUST 不展示可点击的「压缩上下文」操作
 - **AND** 前端 MUST 不调用压缩接口
 
 #### Scenario: 完成插入系统消息
 - **WHEN** 压缩完成
-- **THEN** timeline MUST 插入一条「压缩上下文已完成」的系统消息（居中细线 + 灰色小字）
+- **THEN** timeline MUST 通过 app-server live item / compact 事件插入一条「压缩上下文已完成」的系统消息（居中细线 + 灰色小字）
 
 ### Requirement: 会话级运行状态不在头部显式标记
 会话头部 SHALL 不额外显示运行/静止状态点；状态信息通过 timeline 中的微动效与底部按钮（发送/中断）已有的状态变化表达。
@@ -127,3 +128,4 @@ Plan/Build 模式 SHALL 每个会话独立保存；系统初始默认值为 `Bui
 #### Scenario: 无额外状态点
 - **WHEN** 用户在会话头部观察
 - **THEN** 头部 MUST 不显示运行状态指示点或徽标
+

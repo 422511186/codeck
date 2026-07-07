@@ -20,8 +20,7 @@ export type SnapshotRepairReason =
   | "timeline-gap"
   | "turn-completed"
   | "summary-idle"
-  | "stream-disconnected"
-  | "context-compacted";
+  | "stream-disconnected";
 
 export type SnapshotRepairRequest = {
   key: string;
@@ -198,9 +197,6 @@ function snapshotRepairKey(input: {
   const generation = typeof input.generation === "number" ? String(input.generation) : "legacy";
   if ((input.reason === "turn-completed" || input.reason === "summary-idle") && input.turnId) {
     return `turn-completed:${input.turnId}:${generation}`;
-  }
-  if (input.reason === "context-compacted") {
-    return `context-compacted:${input.turnId ?? "thread"}:${generation}`;
   }
   if (input.reason === "stream-disconnected") {
     return `stream-disconnected:${input.turnId ?? "thread"}:${generation}`;
@@ -885,12 +881,6 @@ export const useStore = create<State & Actions>((set, get) => ({
             createdAt: Date.now(),
             body: { kind: "system", text: CONTEXT_COMPACTION_DONE_TEXT }
           });
-          get().setRunning(threadId, false);
-          get().requestSnapshotRepair(threadId, {
-            reason: "context-compacted",
-            turnId,
-            generation
-          });
           break;
         }
         case "token_usage_updated": {
@@ -1343,6 +1333,7 @@ function isVisibleTimelineEvent(kind: string): boolean {
     "file_output_delta",
     "tool_output_delta",
     "turn_diff_updated",
+    "context_compacted",
     "item.appended",
     "item.updated",
     "item_updated"

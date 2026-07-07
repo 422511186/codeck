@@ -3,6 +3,11 @@ import { getAppServerGateway } from "../../../../../../server/app-server/runtime
 import { isRequestAuthenticated } from "../../../../../../server/auth";
 import { audit } from "../../../../../../server/security";
 
+const THREAD_RUNNING_COMPACT_ERROR_PATTERN =
+  /\bactive\b|\brunning\b|\bbusy\b|in[-\s]?progress|non[-\s]?steerable|same[-\s]?turn\s+steer|cannot\s+accept.*steer|current\s+turn|turn\s+in\s+progress|仍在运行|正在运行/i;
+const THREAD_RUNNING_COMPACT_ERROR_MESSAGE = "会话仍在运行，停止后才能压缩上下文";
+const THREAD_NOT_IDLE_COMPACT_ERROR_MESSAGE = "会话未处于空闲状态，恢复或停止后才能压缩上下文";
+
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
@@ -15,9 +20,13 @@ export async function POST(
     const { threadId } = await context.params;
     const gateway = getAppServerGateway();
     const summary = await gateway.readThreadSummary(threadId);
-    if (summary.status === "active") {
+    if (summary.status !== "idle") {
+      const error =
+        summary.status === "active"
+          ? THREAD_RUNNING_COMPACT_ERROR_MESSAGE
+          : THREAD_NOT_IDLE_COMPACT_ERROR_MESSAGE;
       return NextResponse.json(
-        { ok: false, error: "会话仍在运行，停止后才能压缩上下文" },
+        { ok: false, error },
         { status: 409 }
       );
     }
@@ -27,7 +36,7 @@ export async function POST(
   } catch (error) {
     if (isThreadRunningError(error)) {
       return NextResponse.json(
-        { ok: false, error: "会话仍在运行，停止后才能压缩上下文" },
+        { ok: false, error: THREAD_RUNNING_COMPACT_ERROR_MESSAGE },
         { status: 409 }
       );
     }
@@ -40,5 +49,5 @@ export async function POST(
 
 function isThreadRunningError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /active|running|in[-\s]?progress|仍在运行|正在运行/i.test(message);
+  return THREAD_RUNNING_COMPACT_ERROR_PATTERN.test(message);
 }
