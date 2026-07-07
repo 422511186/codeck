@@ -1302,6 +1302,96 @@ describe("web store codex events", () => {
     }
   });
 
+  it("deduplicates stream disconnected repair requests for the same active turn", () => {
+    let now = 20_000;
+    const originalNow = Date.now;
+    Date.now = () => {
+      now += 1;
+      return now;
+    };
+    try {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          generation: 3
+        }
+      });
+      useStore.getState().requestSnapshotRepair("thread-1", {
+        reason: "stream-disconnected",
+        turnId: "turn-1",
+        generation: 3
+      });
+
+      const firstRequest = useStore.getState().threads["thread-1"]?.repairRequest;
+      expect(firstRequest).toEqual(
+        expect.objectContaining({
+          key: "stream-disconnected:turn-1:3",
+          reason: "stream-disconnected",
+          turnId: "turn-1",
+          generation: 3
+        })
+      );
+
+      useStore.getState().requestSnapshotRepair("thread-1", {
+        reason: "stream-disconnected",
+        turnId: "turn-1",
+        generation: 3
+      });
+
+      expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(firstRequest);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it("deduplicates stale active summary repair requests for the same active turn", () => {
+    let now = 30_000;
+    const originalNow = Date.now;
+    Date.now = () => {
+      now += 1;
+      return now;
+    };
+    try {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "turn_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          generation: 5
+        }
+      });
+      useStore.getState().requestSnapshotRepair("thread-1", {
+        reason: "summary-active-stale",
+        turnId: "turn-1",
+        generation: 5
+      });
+
+      const firstRequest = useStore.getState().threads["thread-1"]?.repairRequest;
+      expect(firstRequest).toEqual(
+        expect.objectContaining({
+          key: "summary-active-stale:turn-1:5",
+          reason: "summary-active-stale",
+          turnId: "turn-1",
+          generation: 5
+        })
+      );
+
+      useStore.getState().requestSnapshotRepair("thread-1", {
+        reason: "summary-active-stale",
+        turnId: "turn-1",
+        generation: 5
+      });
+
+      expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(firstRequest);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   it("requests repair when the completed active turn already has visible server output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",

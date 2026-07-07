@@ -72,6 +72,7 @@ export default function ThreadPage(): JSX.Element {
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
+  const wsState = useStore((s) => s.wsState);
   const webSettings = settingsStore.get();
 
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
@@ -109,6 +110,7 @@ export default function ThreadPage(): JSX.Element {
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
+  const activeSummaryProgressRef = useRef<ActiveSummaryProgressSnapshot | null>(null);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -279,7 +281,11 @@ export default function ThreadPage(): JSX.Element {
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail(td, "replace");
-        setRunning(threadId, isThreadRunningStatus(td.status));
+        const running = isThreadRunningStatus(td.status);
+        setRunning(threadId, running);
+        activeSummaryProgressRef.current = running
+          ? activeSummaryProgressSnapshot(td.updatedAt, useStore.getState().threads[threadId])
+          : null;
       } catch (err) {
         if (isRequestAbort(err)) return;
         if (!cancelled) {
@@ -315,7 +321,11 @@ export default function ThreadPage(): JSX.Element {
         const entries = await threadDetailEntriesWithTurnItems(td, threadId);
         if (cancelled) return;
         applyThreadDetail(td, "replace", threadId, entries);
-        setRunning(threadId, isThreadRunningStatus(td.status));
+        const running = isThreadRunningStatus(td.status);
+        setRunning(threadId, running);
+        activeSummaryProgressRef.current = running
+          ? activeSummaryProgressSnapshot(td.updatedAt, useStore.getState().threads[threadId])
+          : null;
         clearSnapshotRepair(threadId);
       } catch (err) {
         if (isRequestAbort(err)) return;
@@ -349,8 +359,29 @@ export default function ThreadPage(): JSX.Element {
         if (cancelled) return;
         const summaryRunning = isThreadRunningStatus(summary.status);
         setRunning(threadId, summaryRunning);
-        if (!summaryRunning) {
-          const currentThread = useStore.getState().threads[threadId];
+        const currentThread = useStore.getState().threads[threadId];
+        if (summaryRunning) {
+          const progress = activeSummaryProgressSnapshot(summary.updatedAt, currentThread);
+          const retainedProgress = retainActiveSummaryRepairMarker(activeSummaryProgressRef.current, progress);
+          if (shouldRepairRunningSummaryFromEventStreamState(wsState) && !currentThread?.repairRequest) {
+            requestSnapshotRepair(threadId, {
+              reason: "stream-disconnected",
+              turnId: currentThread?.activeTurnId ?? null
+            });
+          } else if (
+            shouldRepairStaleActiveSummaryFromTimelineProgress(activeSummaryProgressRef.current, retainedProgress, wsState) &&
+            !currentThread?.repairRequest
+          ) {
+            requestSnapshotRepair(threadId, {
+              reason: "summary-active-stale",
+              turnId: retainedProgress.turnId,
+              generation: retainedProgress.timelineGeneration
+            });
+            retainedProgress.staleRepairSummaryUpdatedAt = retainedProgress.summaryUpdatedAt;
+          }
+          activeSummaryProgressRef.current = retainedProgress;
+        } else {
+          activeSummaryProgressRef.current = null;
           const activeTurnId = currentThread?.activeTurnId ?? null;
           compactActionPendingRef.current = false;
           setCompactPending(false);
@@ -378,7 +409,7 @@ export default function ThreadPage(): JSX.Element {
         window.clearTimeout(timer);
       }
     };
-  }, [threadId, threadRunning, compactPending, setRunning, requestSnapshotRepair]);
+  }, [threadId, threadRunning, compactPending, wsState, setRunning, requestSnapshotRepair]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -546,6 +577,15 @@ export default function ThreadPage(): JSX.Element {
         if (started.thread) {
           setRunning(threadId, isThreadRunningStatus(started.thread.status));
         }
+        const startedRunning = started.thread
+          ? isThreadRunningStatus(started.thread.status)
+          : Boolean(useStore.getState().threads[threadId]?.running);
+        activeSummaryProgressRef.current = startedRunning
+          ? activeSummaryProgressSnapshot(
+              started.thread?.updatedAt ?? currentDetail.updatedAt,
+              useStore.getState().threads[threadId]
+            )
+          : null;
         // Auto-name thread after first user message
         if ((!currentDetail.title || currentDetail.title === "新会话") && text.trim()) {
           try {
@@ -1911,6 +1951,88 @@ function hasEquivalentPendingCompletionRepair(
     repairRequest?.turnId === turnId &&
     (repairRequest.reason === "turn-completed" || repairRequest.reason === "summary-idle")
   );
+}
+
+function shouldRepairRunningSummaryFromEventStreamState(state: string | null | undefined): boolean {
+  return Boolean(state && state !== "open" && state !== "idle");
+}
+
+type ActiveSummaryProgressSnapshot = {
+  turnId: string | null;
+  summaryUpdatedAt: number | null;
+  timelineGeneration: number;
+  timelineProgressKey: string;
+  staleRepairSummaryUpdatedAt: number | null;
+};
+
+function activeSummaryProgressSnapshot(
+  summaryUpdatedAt: number,
+  thread: ReturnType<typeof useStore.getState>["threads"][string] | undefined
+): ActiveSummaryProgressSnapshot {
+  const entries = thread?.entries ?? EMPTY_ENTRIES;
+  const lastEntry = entries[entries.length - 1] ?? null;
+  const lastEntryProgress = timelineEntryProgressValue(lastEntry);
+  const timelineGeneration = typeof thread?.timelineGeneration === "number" ? thread.timelineGeneration : 0;
+  const timelineProgressKey = [
+    thread?.activeTurnId ?? "thread",
+    timelineGeneration,
+    entries.length,
+    lastEntry?.id ?? "",
+    lastEntryProgress
+  ].join("\u0001");
+
+  return {
+    turnId: thread?.activeTurnId ?? null,
+    summaryUpdatedAt: Number.isFinite(summaryUpdatedAt) ? summaryUpdatedAt : null,
+    timelineGeneration,
+    timelineProgressKey,
+    staleRepairSummaryUpdatedAt: null
+  };
+}
+
+function timelineEntryProgressValue(entry: TimelineEntry | null): string {
+  if (!entry) return "";
+  const body = entry.body;
+  switch (body.kind) {
+    case "agent-message":
+    case "reasoning":
+    case "system":
+    case "error":
+    case "user-message":
+      return `${body.kind}:${body.text.length}`;
+    case "command":
+      return `${body.kind}:${body.status}:${body.output?.length ?? 0}`;
+    case "tool":
+      return `${body.kind}:${body.status}:${body.result?.length ?? 0}:${body.added ?? ""}:${body.removed ?? ""}`;
+    case "diff":
+      return `${body.kind}:${body.diff.length}:${body.added}:${body.removed}`;
+  }
+}
+
+function retainActiveSummaryRepairMarker(
+  previous: ActiveSummaryProgressSnapshot | null,
+  current: ActiveSummaryProgressSnapshot
+): ActiveSummaryProgressSnapshot {
+  if (!previous || previous.turnId !== current.turnId || previous.timelineProgressKey !== current.timelineProgressKey) {
+    return current;
+  }
+  return {
+    ...current,
+    staleRepairSummaryUpdatedAt: previous.staleRepairSummaryUpdatedAt
+  };
+}
+
+function shouldRepairStaleActiveSummaryFromTimelineProgress(
+  previous: ActiveSummaryProgressSnapshot | null,
+  current: ActiveSummaryProgressSnapshot,
+  state: string | null | undefined
+): boolean {
+  if (state !== "open" || !previous) return false;
+  if (previous.turnId !== current.turnId) return false;
+  if (previous.timelineProgressKey !== current.timelineProgressKey) return false;
+  if (previous.summaryUpdatedAt === null || current.summaryUpdatedAt === null) return false;
+  if (current.summaryUpdatedAt <= previous.summaryUpdatedAt) return false;
+  return current.staleRepairSummaryUpdatedAt !== current.summaryUpdatedAt;
 }
 
 function sendPayloadKey(text: string, imagePaths: string[], skillReferences: SkillReference[] = []): string {

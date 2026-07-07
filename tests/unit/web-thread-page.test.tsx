@@ -35,6 +35,7 @@ const mockClearSnapshotRepair = vi.fn();
 const mockSetPendingRequests = vi.fn();
 const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
+const mockWsState = vi.fn();
 
 vi.mock("../../src/web/state/store", () => ({
   useStore: Object.assign(
@@ -66,6 +67,7 @@ function mockStoreState(): unknown {
       clearSnapshotRepair: mockClearSnapshotRepair,
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
+      wsState: mockWsState(),
       threads: { "thread-1": mockThreadState() }
   };
 }
@@ -169,6 +171,8 @@ describe("ThreadPage", () => {
     mockClearSnapshotRepair.mockClear();
     mockSetPendingRequests.mockClear();
     mockResolvePendingRequest.mockClear();
+    mockWsState.mockReset();
+    mockWsState.mockReturnValue("open");
     mockResumeThread.mockClear();
     mockListTurnsBefore.mockClear();
     mockListTurnItems.mockClear();
@@ -1247,6 +1251,202 @@ describe("ThreadPage", () => {
       })
     );
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should request snapshot repair when summary remains active while event stream is disconnected", async () => {
+    vi.useFakeTimers();
+    mockWsState.mockReturnValue("reconnecting");
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", true);
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "stream-disconnected",
+        turnId: "turn-running"
+      })
+    );
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should request snapshot repair when active summary advances but open event stream does not update timeline", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: 1_000
+    });
+    mockReadThreadSummary
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        updatedAt: 1_000
+      })
+      .mockResolvedValueOnce({
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "Running Thread",
+        preview: "",
+        modelProvider: "claude-opus-4",
+        status: "active",
+        updatedAt: 1_005
+      });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      timelineGeneration: 4,
+      lastSeenItemId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockReadThreadSummary).toHaveBeenCalledTimes(2);
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "summary-active-stale",
+        turnId: "turn-running",
+        generation: 4
+      })
+    );
+    expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should use initial active detail as the stale summary baseline", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: 1_000
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      updatedAt: 1_005
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      timelineGeneration: 4,
+      lastSeenItemId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "summary-active-stale",
+        turnId: "turn-running",
+        generation: 4
+      })
+    );
   });
 
   it("should not request a duplicate snapshot repair when summary idle matches a pending completion repair", async () => {

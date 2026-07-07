@@ -20,6 +20,8 @@ export type SnapshotRepairReason =
   | "timeline-gap"
   | "turn-completed"
   | "summary-idle"
+  | "stream-disconnected"
+  | "summary-active-stale"
   | "context-compacted";
 
 export type SnapshotRepairRequest = {
@@ -199,6 +201,12 @@ function snapshotRepairKey(input: {
   }
   if (input.reason === "context-compacted") {
     return `context-compacted:${input.turnId ?? "thread"}:${generation}`;
+  }
+  if (input.reason === "stream-disconnected") {
+    return `stream-disconnected:${input.turnId ?? "thread"}:${generation}`;
+  }
+  if (input.reason === "summary-active-stale") {
+    return `summary-active-stale:${input.turnId ?? "thread"}:${generation}`;
   }
   if (input.reason === "timeline-gap") {
     return `timeline-gap:${input.eventId ?? input.turnId ?? "unknown"}:${generation}`;
