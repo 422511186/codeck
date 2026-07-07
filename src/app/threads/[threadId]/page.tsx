@@ -111,7 +111,7 @@ export default function ThreadPage(): JSX.Element {
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
-  const activeSummaryProgressRef = useRef<ActiveSummaryProgressSnapshot | null>(null);
+  const streamDisconnectedRepairKeysRef = useRef(new Set<string>());
   const repairRetryTimerRef = useRef<number | null>(null);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
@@ -159,10 +159,17 @@ export default function ThreadPage(): JSX.Element {
 
   useEffect(() => {
     compactActionPendingRef.current = false;
+    streamDisconnectedRepairKeysRef.current.clear();
     setCompactPending(false);
     clearRepairRetryTimer();
     return clearRepairRetryTimer;
   }, [threadId, clearRepairRetryTimer]);
+
+  useEffect(() => {
+    if (wsState === "open" || wsState === "idle") {
+      streamDisconnectedRepairKeysRef.current.clear();
+    }
+  }, [wsState]);
 
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
@@ -302,9 +309,6 @@ export default function ThreadPage(): JSX.Element {
         applyThreadDetail(td, "replace");
         const running = isThreadRunningStatus(td.status);
         setRunning(threadId, running);
-        activeSummaryProgressRef.current = running
-          ? activeSummaryProgressSnapshot(td, useStore.getState().threads[threadId])
-          : null;
       } catch (err) {
         if (isRequestAbort(err)) return;
         if (!cancelled) {
@@ -342,9 +346,6 @@ export default function ThreadPage(): JSX.Element {
         applyThreadDetail(td, "replace", threadId, entries);
         const running = isThreadRunningStatus(td.status);
         setRunning(threadId, running);
-        activeSummaryProgressRef.current = running
-          ? activeSummaryProgressSnapshot(td, useStore.getState().threads[threadId])
-          : null;
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -369,6 +370,7 @@ export default function ThreadPage(): JSX.Element {
 
   useEffect(() => {
     if (!threadRunning && !compactPending) return;
+    if (!compactPending && !shouldRepairRunningSummaryFromEventStreamState(wsState)) return;
     let cancelled = false;
     let timer: number | null = null;
 
@@ -380,34 +382,33 @@ export default function ThreadPage(): JSX.Element {
         );
         if (cancelled) return;
         const summaryRunning = isThreadRunningStatus(summary.status);
-        setRunning(threadId, summaryRunning);
         const currentThread = useStore.getState().threads[threadId];
+        setRunning(threadId, summaryRunning);
         if (summaryRunning) {
-          const progress = activeSummaryProgressSnapshot(summary, currentThread);
-          const retainedProgress = retainActiveSummaryRepairMarker(activeSummaryProgressRef.current, progress);
-          if (shouldRepairRunningSummaryFromEventStreamState(wsState) && !currentThread?.repairRequest) {
+          const disconnectedRepairKey = `${currentThread?.activeTurnId ?? "thread"}`;
+          if (
+            shouldRepairRunningSummaryFromEventStreamState(wsState) &&
+            !currentThread?.repairRequest &&
+            !streamDisconnectedRepairKeysRef.current.has(disconnectedRepairKey)
+          ) {
+            streamDisconnectedRepairKeysRef.current.add(disconnectedRepairKey);
             requestSnapshotRepair(threadId, {
               reason: "stream-disconnected",
               turnId: currentThread?.activeTurnId ?? null
             });
-          } else if (
-            shouldRepairStaleActiveSummaryFromTimelineProgress(activeSummaryProgressRef.current, retainedProgress, wsState) &&
-            !currentThread?.repairRequest
-          ) {
-            requestSnapshotRepair(threadId, {
-              reason: "summary-active-stale",
-              turnId: retainedProgress.turnId,
-              generation: retainedProgress.timelineGeneration
-            });
-            retainedProgress.staleRepairSignal = activeSummaryProgressSignal(retainedProgress);
           }
-          activeSummaryProgressRef.current = retainedProgress;
         } else {
-          activeSummaryProgressRef.current = null;
           const activeTurnId = currentThread?.activeTurnId ?? null;
+          const hasAssistantOutput = Boolean(
+            activeTurnId && hasAssistantMessageOutputForStartedTurn(currentThread?.entries ?? [], activeTurnId)
+          );
           compactActionPendingRef.current = false;
           setCompactPending(false);
-          if (!hasEquivalentPendingCompletionRepair(currentThread?.repairRequest, activeTurnId)) {
+          if (
+            activeTurnId &&
+            !hasAssistantOutput &&
+            !hasEquivalentPendingCompletionRepair(currentThread?.repairRequest, activeTurnId)
+          ) {
             requestSnapshotRepair(threadId, {
               reason: "summary-idle",
               turnId: activeTurnId
@@ -572,7 +573,7 @@ export default function ThreadPage(): JSX.Element {
           const currentThread = useStore.getState().threads[threadId];
           if (currentThread?.running) {
             setActiveTurnId(threadId, started.turnId);
-          } else if (!hasVisibleServerOutputForStartedTurn(currentThread?.entries ?? [], started.turnId)) {
+          } else if (!hasAssistantMessageOutputForStartedTurn(currentThread?.entries ?? [], started.turnId)) {
             requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: started.turnId
@@ -599,18 +600,6 @@ export default function ThreadPage(): JSX.Element {
         if (started.thread) {
           setRunning(threadId, isThreadRunningStatus(started.thread.status));
         }
-        const startedRunning = started.thread
-          ? isThreadRunningStatus(started.thread.status)
-          : Boolean(useStore.getState().threads[threadId]?.running);
-        activeSummaryProgressRef.current = startedRunning
-          ? activeSummaryProgressSnapshot(
-              {
-                updatedAt: started.thread?.updatedAt ?? currentDetail.updatedAt,
-                snapshotSequence: started.thread?.snapshotSequence ?? currentDetail.snapshotSequence
-              },
-              useStore.getState().threads[threadId]
-            )
-          : null;
         // Auto-name thread after first user message
         if ((!currentDetail.title || currentDetail.title === "新会话") && text.trim()) {
           try {
@@ -1982,119 +1971,6 @@ function shouldRepairRunningSummaryFromEventStreamState(state: string | null | u
   return Boolean(state && state !== "open" && state !== "idle");
 }
 
-type ActiveSummaryProgressSnapshot = {
-  turnId: string | null;
-  summaryUpdatedAt: number | null;
-  summarySnapshotSequence: number | null;
-  timelineGeneration: number;
-  timelineProgressKey: string;
-  hasVisibleServerOutput: boolean;
-  staleRepairSignal: string | null;
-};
-
-type ActiveSummaryProgressInput = {
-  updatedAt: number;
-  snapshotSequence?: number | null;
-};
-
-function activeSummaryProgressSnapshot(
-  summary: ActiveSummaryProgressInput,
-  thread: ReturnType<typeof useStore.getState>["threads"][string] | undefined
-): ActiveSummaryProgressSnapshot {
-  const entries = thread?.entries ?? EMPTY_ENTRIES;
-  const lastEntry = entries[entries.length - 1] ?? null;
-  const lastEntryProgress = timelineEntryProgressValue(lastEntry);
-  const activeTurnId = thread?.activeTurnId ?? null;
-  const timelineGeneration = typeof thread?.timelineGeneration === "number" ? thread.timelineGeneration : 0;
-  const timelineProgressKey = [
-    activeTurnId ?? "thread",
-    timelineGeneration,
-    entries.length,
-    lastEntry?.id ?? "",
-    lastEntryProgress
-  ].join("\u0001");
-
-  return {
-    turnId: activeTurnId,
-    summaryUpdatedAt: Number.isFinite(summary.updatedAt) ? summary.updatedAt : null,
-    summarySnapshotSequence: finiteNumberOrNull(summary.snapshotSequence),
-    timelineGeneration,
-    timelineProgressKey,
-    hasVisibleServerOutput: activeTurnId ? hasVisibleServerOutputForStartedTurn(entries, activeTurnId) : false,
-    staleRepairSignal: null
-  };
-}
-
-function timelineEntryProgressValue(entry: TimelineEntry | null): string {
-  if (!entry) return "";
-  const body = entry.body;
-  switch (body.kind) {
-    case "agent-message":
-    case "reasoning":
-    case "system":
-    case "error":
-    case "user-message":
-      return `${body.kind}:${body.text.length}`;
-    case "command":
-      return `${body.kind}:${body.status}:${body.output?.length ?? 0}`;
-    case "tool":
-      return `${body.kind}:${body.status}:${body.result?.length ?? 0}:${body.added ?? ""}:${body.removed ?? ""}`;
-    case "diff":
-      return `${body.kind}:${body.diff.length}:${body.added}:${body.removed}`;
-  }
-}
-
-function retainActiveSummaryRepairMarker(
-  previous: ActiveSummaryProgressSnapshot | null,
-  current: ActiveSummaryProgressSnapshot
-): ActiveSummaryProgressSnapshot {
-  if (!previous || previous.turnId !== current.turnId || previous.timelineProgressKey !== current.timelineProgressKey) {
-    return current;
-  }
-  return {
-    ...current,
-    staleRepairSignal: previous.staleRepairSignal
-  };
-}
-
-function shouldRepairStaleActiveSummaryFromTimelineProgress(
-  previous: ActiveSummaryProgressSnapshot | null,
-  current: ActiveSummaryProgressSnapshot,
-  state: string | null | undefined
-): boolean {
-  if (state !== "open" || !previous) return false;
-  if (previous.turnId !== current.turnId) return false;
-  if (!current.hasVisibleServerOutput) return false;
-  if (previous.timelineProgressKey !== current.timelineProgressKey) return false;
-  if (!activeSummaryProgressAdvanced(previous, current)) return false;
-  return current.staleRepairSignal !== activeSummaryProgressSignal(current);
-}
-
-function activeSummaryProgressAdvanced(
-  previous: ActiveSummaryProgressSnapshot,
-  current: ActiveSummaryProgressSnapshot
-): boolean {
-  if (previous.summarySnapshotSequence !== null && current.summarySnapshotSequence !== null) {
-    return current.summarySnapshotSequence > previous.summarySnapshotSequence;
-  }
-  if (previous.summaryUpdatedAt === null || current.summaryUpdatedAt === null) return false;
-  return current.summaryUpdatedAt > previous.summaryUpdatedAt;
-}
-
-function activeSummaryProgressSignal(snapshot: ActiveSummaryProgressSnapshot): string | null {
-  if (snapshot.summarySnapshotSequence !== null) {
-    return `sequence:${snapshot.summarySnapshotSequence}`;
-  }
-  if (snapshot.summaryUpdatedAt !== null) {
-    return `updated:${snapshot.summaryUpdatedAt}`;
-  }
-  return null;
-}
-
-function finiteNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function sendPayloadKey(text: string, imagePaths: string[], skillReferences: SkillReference[] = []): string {
   const images = [...imagePaths].sort().join("\u0000");
   const skills = [...skillReferences].map((skill) => `${skill.name}\u0000${skill.path}`).sort().join("\u0000");
@@ -2389,26 +2265,9 @@ function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: st
   };
 }
 
-function hasVisibleServerOutputForStartedTurn(entries: TimelineEntry[], turnId: string): boolean {
+function hasAssistantMessageOutputForStartedTurn(entries: TimelineEntry[], turnId: string): boolean {
   return entries.some((entry) => {
-    if (entry.turnId !== turnId) {
-      return false;
-    }
-    switch (entry.body.kind) {
-      case "agent-message":
-        return entry.body.text.trim().length > 0;
-      case "reasoning":
-        return entry.body.text.trim().length > 0;
-      case "tool":
-        return Boolean((entry.body.result ?? entry.body.arguments ?? entry.body.tool).trim());
-      case "command":
-        return Boolean((entry.body.output ?? entry.body.command).trim());
-      case "diff":
-      case "error":
-        return true;
-      default:
-        return false;
-    }
+    return entry.turnId === turnId && entry.body.kind === "agent-message" && entry.body.text.trim().length > 0;
   });
 }
 

@@ -21,7 +21,6 @@ export type SnapshotRepairReason =
   | "turn-completed"
   | "summary-idle"
   | "stream-disconnected"
-  | "summary-active-stale"
   | "context-compacted";
 
 export type SnapshotRepairRequest = {
@@ -113,6 +112,7 @@ type Actions = {
   startReasoningEntry: (threadId: string, turnId: string | null, itemId: string) => void;
   appendReasoningDelta: (threadId: string, turnId: string | null, itemId: string, delta: string) => void;
   removeEmptyPendingReasoningEntry: (threadId: string, turnId: string | null) => void;
+  finishLiveTurnEntries: (threadId: string, turnId: string, status: string) => void;
   setRunning: (threadId: string, running: boolean) => void;
   setActiveTurnId: (threadId: string, turnId: string | null) => void;
   bindLocalUserMessageTurn: (threadId: string, clientUserMessageId: string, turnId: string) => void;
@@ -204,9 +204,6 @@ function snapshotRepairKey(input: {
   }
   if (input.reason === "stream-disconnected") {
     return `stream-disconnected:${input.turnId ?? "thread"}:${generation}`;
-  }
-  if (input.reason === "summary-active-stale") {
-    return `summary-active-stale:${input.turnId ?? "thread"}:${generation}`;
   }
   if (input.reason === "timeline-gap") {
     return `timeline-gap:${input.eventId ?? input.turnId ?? "unknown"}:${generation}`;
@@ -475,6 +472,43 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  finishLiveTurnEntries: (threadId, turnId, status) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const failed = /fail|error|cancel|interrupt/i.test(status);
+      const completedStatus: "failed" | "success" = failed ? "failed" : "success";
+      let changed = false;
+      const nextEntries = prev.entries.flatMap((entry) => {
+        if (entry.turnId !== turnId) {
+          return [entry];
+        }
+        if (entry.body.kind === "reasoning" && entry.body.done === false) {
+          changed = true;
+          if (!entry.body.text.trim()) {
+            return [];
+          }
+          return [{ ...entry, body: { ...entry.body, done: true } }];
+        }
+        if (entry.body.kind === "tool" && entry.body.status === "running") {
+          changed = true;
+          return [{ ...entry, body: { ...entry.body, status: completedStatus } }];
+        }
+        if (entry.body.kind === "command" && entry.body.status === "running") {
+          changed = true;
+          return [{ ...entry, body: { ...entry.body, status: completedStatus } }];
+        }
+        return [entry];
+      });
+      if (!changed) {
+        return state;
+      }
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState(prev, normalizeTimelineEntries(nextEntries))
+        }
+      };
+    }),
   setRunning: (threadId, running) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -719,14 +753,26 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn_failed":
         case "turn_interrupted": {
           const eventTurnId = typeof ev.turnId === "string" ? ev.turnId : null;
-          const currentActiveTurnId = get().threads[threadId]?.activeTurnId ?? null;
+          const threadBeforeCompletion = get().threads[threadId];
+          const currentActiveTurnId = threadBeforeCompletion?.activeTurnId ?? null;
           const isCompleted =
             ev.kind === "turn.completed" || ev.kind === "turn_completed" || ev.status === "completed";
+          const completedActiveTurn = Boolean(
+            eventTurnId &&
+            isCompleted &&
+            (!currentActiveTurnId || currentActiveTurnId === eventTurnId)
+          );
+          const hasAssistantOutput = Boolean(
+            eventTurnId && hasAssistantMessageOutputForTurn(threadBeforeCompletion?.entries ?? [], eventTurnId)
+          );
           if (!eventTurnId || !currentActiveTurnId || eventTurnId === currentActiveTurnId) {
+            if (eventTurnId) {
+              get().finishLiveTurnEntries(threadId, eventTurnId, typeof ev.status === "string" ? ev.status : ev.kind);
+            }
             get().setRunning(threadId, false);
           }
           get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
-          if (eventTurnId && isCompleted && (!currentActiveTurnId || currentActiveTurnId === eventTurnId)) {
+          if (completedActiveTurn && !hasAssistantOutput) {
             get().requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: eventTurnId,
@@ -1149,6 +1195,12 @@ function deltaComparableText(entry: TimelineEntry): string {
     return entry.body.result ?? "";
   }
   return "";
+}
+
+function hasAssistantMessageOutputForTurn(entries: TimelineEntry[], turnId: string): boolean {
+  return entries.some((entry) => {
+    return entry.turnId === turnId && entry.body.kind === "agent-message" && entry.body.text.trim().length > 0;
+  });
 }
 
 function shouldSuppressSnapshotDelta(

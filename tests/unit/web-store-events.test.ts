@@ -1227,6 +1227,48 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
   });
 
+  it("removes an empty live reasoning entry when a turn completes after assistant output", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "最终回答"
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.running).toBe(false);
+    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-1",
+        body: { kind: "agent-message", text: "最终回答" }
+      })
+    ]);
+  });
+
   it("requests snapshot repair when a completed active turn has no visible server output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -1347,52 +1389,7 @@ describe("web store codex events", () => {
     }
   });
 
-  it("deduplicates stale active summary repair requests for the same active turn", () => {
-    let now = 30_000;
-    const originalNow = Date.now;
-    Date.now = () => {
-      now += 1;
-      return now;
-    };
-    try {
-      useStore.getState().dispatchEvent({
-        type: "codex-event",
-        event: {
-          kind: "turn_started",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          generation: 5
-        }
-      });
-      useStore.getState().requestSnapshotRepair("thread-1", {
-        reason: "summary-active-stale",
-        turnId: "turn-1",
-        generation: 5
-      });
-
-      const firstRequest = useStore.getState().threads["thread-1"]?.repairRequest;
-      expect(firstRequest).toEqual(
-        expect.objectContaining({
-          key: "summary-active-stale:turn-1:5",
-          reason: "summary-active-stale",
-          turnId: "turn-1",
-          generation: 5
-        })
-      );
-
-      useStore.getState().requestSnapshotRepair("thread-1", {
-        reason: "summary-active-stale",
-        turnId: "turn-1",
-        generation: 5
-      });
-
-      expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(firstRequest);
-    } finally {
-      Date.now = originalNow;
-    }
-  });
-
-  it("requests repair when the completed active turn already has visible server output", () => {
+  it("does not request repair when the completed active turn already has visible server output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -1413,7 +1410,50 @@ describe("web store codex events", () => {
       event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
     });
 
-    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.running).toBe(false);
+    expect(thread?.activeTurnId).toBeNull();
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-1",
+        body: { kind: "agent-message", text: "实时回复" }
+      })
+    ]);
+  });
+
+  it("requests repair when a completed active turn only has tool output and no assistant message", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        delta: "npm test\n"
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "cmd-1",
+        turnId: "turn-1",
+        body: expect.objectContaining({ kind: "tool", status: "success", result: "npm test\n" })
+      })
+    ]);
   });
 
   it("invalidates the Skills cache from an ownerless skills_changed event", () => {
@@ -2110,7 +2150,7 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
   });
 
-  it("requests a snapshot repair after turn completion even when live output was visible", () => {
+  it("keeps streamed output after turn completion without requesting snapshot repair", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -2131,7 +2171,14 @@ describe("web store codex events", () => {
     });
 
     expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
-    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeNull();
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-1",
+        body: { kind: "agent-message", text: "流式内容" }
+      })
+    ]);
   });
 
   it("merges snapshot context compaction with the live completion event", () => {
