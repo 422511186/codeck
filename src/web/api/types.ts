@@ -10,6 +10,8 @@ export type ThreadSummary = {
   modelProvider: string;
   status: string;
   updatedAt: number;
+  generation?: number;
+  snapshotSequence?: number;
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalsReviewer?: ApprovalsReviewer | null;
 };

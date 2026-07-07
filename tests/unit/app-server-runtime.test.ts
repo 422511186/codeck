@@ -1734,6 +1734,30 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("thread summary 会返回 timeline 事件快照序号", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    const events: Array<{ type?: string; event?: { sequence?: number } }> = [];
+
+    gateway.onBrowserEvent((event) => events.push(event as { type?: string; event?: { sequence?: number } }));
+    await gateway.ensureReady();
+    await gateway.startTurn({ threadId: "mock-thread-1", text: "summary 游标测试" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const maxSequence = Math.max(
+      ...events
+        .filter((event) => event.type === "codex-event")
+        .map((event) => event.event?.sequence)
+        .filter((sequence): sequence is number => typeof sequence === "number")
+    );
+
+    await expect(gateway.readThreadSummary("mock-thread-1")).resolves.toEqual(
+      expect.objectContaining({
+        generation: expect.any(Number),
+        snapshotSequence: maxSequence
+      })
+    );
+  });
+
   it("mock 模式收到 server request 时会进入 pending 队列并广播给浏览器", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     const events: unknown[] = [];

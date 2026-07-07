@@ -17,6 +17,8 @@ export type MobileThreadSummary = {
   modelProvider: string;
   status: string;
   updatedAt: number;
+  generation?: number;
+  snapshotSequence?: number;
   activePermissionProfile?: MobileActivePermissionProfile | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
 };

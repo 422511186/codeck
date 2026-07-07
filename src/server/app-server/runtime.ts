@@ -3211,7 +3211,7 @@ export class AppServerGateway {
 
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     await this.ensureReady();
-    return this.client.readThreadSummary(threadId);
+    return this.withTimelineSummaryVersion(threadId, await this.client.readThreadSummary(threadId));
   }
 
   private async readSessionJsonl(threadId: string): Promise<string | null> {
@@ -3296,6 +3296,14 @@ export class AppServerGateway {
       generation,
       snapshotSequence,
       timeline: detail.timeline.map((item) => ({ ...item, generation, snapshotSequence }))
+    };
+  }
+
+  private withTimelineSummaryVersion(threadId: string, summary: MobileThreadSummary): MobileThreadSummary {
+    return {
+      ...summary,
+      generation: this.currentTimelineGeneration(threadId),
+      snapshotSequence: this.browserEventSequence
     };
   }
 

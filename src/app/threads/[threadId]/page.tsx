@@ -31,6 +31,7 @@ const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
 const ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS = 3_000;
+const SNAPSHOT_REPAIR_RETRY_DELAY_MS = 3_000;
 const DEFAULT_COMPOSER_HEIGHT = 144;
 const COMPACTING_CONTEXT_TEXT = "正在压缩上下文…";
 
@@ -111,6 +112,7 @@ export default function ThreadPage(): JSX.Element {
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
   const activeSummaryProgressRef = useRef<ActiveSummaryProgressSnapshot | null>(null);
+  const repairRetryTimerRef = useRef<number | null>(null);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -140,10 +142,27 @@ export default function ThreadPage(): JSX.Element {
     }
   }, [threadId, threadContextUsage, setContextUsage]);
 
+  const clearRepairRetryTimer = useCallback(() => {
+    if (repairRetryTimerRef.current !== null) {
+      window.clearTimeout(repairRetryTimerRef.current);
+      repairRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleSnapshotRepairRetry = useCallback(() => {
+    clearRepairRetryTimer();
+    repairRetryTimerRef.current = window.setTimeout(() => {
+      repairRetryTimerRef.current = null;
+      requestSnapshotRepair(threadId, { reason: "mutation-retry" });
+    }, SNAPSHOT_REPAIR_RETRY_DELAY_MS);
+  }, [clearRepairRetryTimer, requestSnapshotRepair, threadId]);
+
   useEffect(() => {
     compactActionPendingRef.current = false;
     setCompactPending(false);
-  }, [threadId]);
+    clearRepairRetryTimer();
+    return clearRepairRetryTimer;
+  }, [threadId, clearRepairRetryTimer]);
 
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
@@ -284,7 +303,7 @@ export default function ThreadPage(): JSX.Element {
         const running = isThreadRunningStatus(td.status);
         setRunning(threadId, running);
         activeSummaryProgressRef.current = running
-          ? activeSummaryProgressSnapshot(td.updatedAt, useStore.getState().threads[threadId])
+          ? activeSummaryProgressSnapshot(td, useStore.getState().threads[threadId])
           : null;
       } catch (err) {
         if (isRequestAbort(err)) return;
@@ -324,12 +343,13 @@ export default function ThreadPage(): JSX.Element {
         const running = isThreadRunningStatus(td.status);
         setRunning(threadId, running);
         activeSummaryProgressRef.current = running
-          ? activeSummaryProgressSnapshot(td.updatedAt, useStore.getState().threads[threadId])
+          ? activeSummaryProgressSnapshot(td, useStore.getState().threads[threadId])
           : null;
+        clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
         if (isRequestAbort(err)) return;
-        // Keep the current cache visible; the next stream gap or manual refresh can retry.
+        scheduleSnapshotRepairRetry();
       }
     })();
     return () => {
@@ -342,7 +362,9 @@ export default function ThreadPage(): JSX.Element {
     applyThreadDetail,
     setRunning,
     requestSnapshotRepair,
-    clearSnapshotRepair
+    clearSnapshotRepair,
+    clearRepairRetryTimer,
+    scheduleSnapshotRepairRetry
   ]);
 
   useEffect(() => {
@@ -361,7 +383,7 @@ export default function ThreadPage(): JSX.Element {
         setRunning(threadId, summaryRunning);
         const currentThread = useStore.getState().threads[threadId];
         if (summaryRunning) {
-          const progress = activeSummaryProgressSnapshot(summary.updatedAt, currentThread);
+          const progress = activeSummaryProgressSnapshot(summary, currentThread);
           const retainedProgress = retainActiveSummaryRepairMarker(activeSummaryProgressRef.current, progress);
           if (shouldRepairRunningSummaryFromEventStreamState(wsState) && !currentThread?.repairRequest) {
             requestSnapshotRepair(threadId, {
@@ -377,7 +399,7 @@ export default function ThreadPage(): JSX.Element {
               turnId: retainedProgress.turnId,
               generation: retainedProgress.timelineGeneration
             });
-            retainedProgress.staleRepairSummaryUpdatedAt = retainedProgress.summaryUpdatedAt;
+            retainedProgress.staleRepairSignal = activeSummaryProgressSignal(retainedProgress);
           }
           activeSummaryProgressRef.current = retainedProgress;
         } else {
@@ -582,7 +604,10 @@ export default function ThreadPage(): JSX.Element {
           : Boolean(useStore.getState().threads[threadId]?.running);
         activeSummaryProgressRef.current = startedRunning
           ? activeSummaryProgressSnapshot(
-              started.thread?.updatedAt ?? currentDetail.updatedAt,
+              {
+                updatedAt: started.thread?.updatedAt ?? currentDetail.updatedAt,
+                snapshotSequence: started.thread?.snapshotSequence ?? currentDetail.snapshotSequence
+              },
               useStore.getState().threads[threadId]
             )
           : null;
@@ -1960,13 +1985,19 @@ function shouldRepairRunningSummaryFromEventStreamState(state: string | null | u
 type ActiveSummaryProgressSnapshot = {
   turnId: string | null;
   summaryUpdatedAt: number | null;
+  summarySnapshotSequence: number | null;
   timelineGeneration: number;
   timelineProgressKey: string;
-  staleRepairSummaryUpdatedAt: number | null;
+  staleRepairSignal: string | null;
+};
+
+type ActiveSummaryProgressInput = {
+  updatedAt: number;
+  snapshotSequence?: number | null;
 };
 
 function activeSummaryProgressSnapshot(
-  summaryUpdatedAt: number,
+  summary: ActiveSummaryProgressInput,
   thread: ReturnType<typeof useStore.getState>["threads"][string] | undefined
 ): ActiveSummaryProgressSnapshot {
   const entries = thread?.entries ?? EMPTY_ENTRIES;
@@ -1983,10 +2014,11 @@ function activeSummaryProgressSnapshot(
 
   return {
     turnId: thread?.activeTurnId ?? null,
-    summaryUpdatedAt: Number.isFinite(summaryUpdatedAt) ? summaryUpdatedAt : null,
+    summaryUpdatedAt: Number.isFinite(summary.updatedAt) ? summary.updatedAt : null,
+    summarySnapshotSequence: finiteNumberOrNull(summary.snapshotSequence),
     timelineGeneration,
     timelineProgressKey,
-    staleRepairSummaryUpdatedAt: null
+    staleRepairSignal: null
   };
 }
 
@@ -2018,7 +2050,7 @@ function retainActiveSummaryRepairMarker(
   }
   return {
     ...current,
-    staleRepairSummaryUpdatedAt: previous.staleRepairSummaryUpdatedAt
+    staleRepairSignal: previous.staleRepairSignal
   };
 }
 
@@ -2030,9 +2062,33 @@ function shouldRepairStaleActiveSummaryFromTimelineProgress(
   if (state !== "open" || !previous) return false;
   if (previous.turnId !== current.turnId) return false;
   if (previous.timelineProgressKey !== current.timelineProgressKey) return false;
+  if (!activeSummaryProgressAdvanced(previous, current)) return false;
+  return current.staleRepairSignal !== activeSummaryProgressSignal(current);
+}
+
+function activeSummaryProgressAdvanced(
+  previous: ActiveSummaryProgressSnapshot,
+  current: ActiveSummaryProgressSnapshot
+): boolean {
+  if (previous.summarySnapshotSequence !== null && current.summarySnapshotSequence !== null) {
+    return current.summarySnapshotSequence > previous.summarySnapshotSequence;
+  }
   if (previous.summaryUpdatedAt === null || current.summaryUpdatedAt === null) return false;
-  if (current.summaryUpdatedAt <= previous.summaryUpdatedAt) return false;
-  return current.staleRepairSummaryUpdatedAt !== current.summaryUpdatedAt;
+  return current.summaryUpdatedAt > previous.summaryUpdatedAt;
+}
+
+function activeSummaryProgressSignal(snapshot: ActiveSummaryProgressSnapshot): string | null {
+  if (snapshot.summarySnapshotSequence !== null) {
+    return `sequence:${snapshot.summarySnapshotSequence}`;
+  }
+  if (snapshot.summaryUpdatedAt !== null) {
+    return `updated:${snapshot.summaryUpdatedAt}`;
+  }
+  return null;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function sendPayloadKey(text: string, imagePaths: string[], skillReferences: SkillReference[] = []): string {
