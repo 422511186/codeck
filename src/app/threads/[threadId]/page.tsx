@@ -338,9 +338,6 @@ export default function ThreadPage(): JSX.Element {
         applyThreadDetail(td, "replace", threadId, entries);
         setRunning(threadId, isThreadRunningStatus(td.status));
         clearSnapshotRepair(threadId);
-        if (isThreadRunningStatus(td.status) && td.lastTurnId) {
-          scheduleStartedTurnRepair(td.lastTurnId, false);
-        }
       } catch (err) {
         if (isRequestAbort(err)) return;
         // Keep the current cache visible; the next stream gap or manual refresh can retry.
@@ -355,8 +352,7 @@ export default function ThreadPage(): JSX.Element {
     applyThreadDetail,
     setRunning,
     requestSnapshotRepair,
-    clearSnapshotRepair,
-    scheduleStartedTurnRepair
+    clearSnapshotRepair
   ]);
 
   useEffect(() => {

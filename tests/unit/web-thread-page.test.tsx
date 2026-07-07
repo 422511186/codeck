@@ -609,7 +609,7 @@ describe("ThreadPage", () => {
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
-  it("should continue snapshot repair fallback while a repaired snapshot is still active without output", async () => {
+  it("should not continue full-detail repair after an active repaired snapshot without output", async () => {
     vi.useFakeTimers();
     const initialDetail = {
       id: "thread-1",
@@ -666,10 +666,10 @@ describe("ThreadPage", () => {
     });
     vi.useRealTimers();
 
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
 
-  it("should continue snapshot repair fallback while a repaired snapshot is still active with partial output", async () => {
+  it("should not continue full-detail repair after an active repaired snapshot with partial output", async () => {
     vi.useFakeTimers();
     const initialDetail = {
       id: "thread-1",
@@ -736,7 +736,7 @@ describe("ThreadPage", () => {
     });
     vi.useRealTimers();
 
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
 
   it("should merge turn item activity into snapshot repair when the main timeline omits command items", async () => {
@@ -3376,6 +3376,65 @@ describe("ThreadPage", () => {
     vi.useRealTimers();
 
     expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should not request missing-output repair when a started turn already has visible live output", async () => {
+    mockStartTurn.mockImplementation(async () => {
+      mockThreadState.mockReturnValue({
+        entries: [
+          {
+            id: "agent-live",
+            turnId: "turn-visible-live",
+            createdAt: Date.now(),
+            body: { kind: "agent-message", text: "streamed output" }
+          }
+        ],
+        pendingApprovals: [],
+        mode: "build",
+        running: true,
+        activeTurnId: "turn-visible-live",
+        plan: [],
+        cursor: null,
+        reachedBeginning: false
+      });
+      return { turnId: "turn-visible-live" };
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+    const initialReadCalls = mockReadThread.mock.calls.length;
+
+    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "visible live output" }
+    });
+    await waitFor(() => expect(screen.getByLabelText("发送")).toBeEnabled());
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("发送"));
+      await Promise.resolve();
+    });
+
+    expect(mockStartTurn).toHaveBeenCalledWith(expect.objectContaining({ text: "visible live output" }));
+    act(() => {
+      vi.advanceTimersByTime(2600);
+    });
+    vi.useRealTimers();
+
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockReadThread.mock.calls.length).toBe(initialReadCalls);
   });
 
   it("should fill the visible input immediately after a rewind succeeds", async () => {
