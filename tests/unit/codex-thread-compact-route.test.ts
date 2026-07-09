@@ -61,6 +61,11 @@ describe("codex thread compact route", () => {
     expect(response.status).toBe(409);
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockCompactThread).not.toHaveBeenCalled();
+    expect(mockAudit).toHaveBeenCalledWith("thread.compact.reject", {
+      threadId: "thread-1",
+      reason: "precheck-active",
+      status: "active"
+    });
   });
 
   it.each(["notLoaded", "systemError", "summary"])(
@@ -89,6 +94,11 @@ describe("codex thread compact route", () => {
       expect(response.status).toBe(409);
       expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
       expect(mockCompactThread).not.toHaveBeenCalled();
+      expect(mockAudit).toHaveBeenCalledWith("thread.compact.reject", {
+        threadId: "thread-1",
+        reason: "precheck-not-idle",
+        status
+      });
     }
   );
 
@@ -104,6 +114,7 @@ describe("codex thread compact route", () => {
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockAudit).toHaveBeenCalledWith("thread.compact.start", { threadId: "thread-1" });
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+    expect(mockAudit).toHaveBeenCalledWith("thread.compact.accepted", { threadId: "thread-1" });
   });
 
   it("app-server 在 compact 阶段发现非可转向 active turn 时返回 409 而不是 502", async () => {
@@ -124,5 +135,53 @@ describe("codex thread compact route", () => {
     expect(response.status).toBe(409);
     expect(mockAudit).toHaveBeenCalledWith("thread.compact.start", { threadId: "thread-1" });
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("app-server 返回结构化 activeTurnNotSteerable 时优先按 409 分类", async () => {
+    const error = new Error("manual compact rejected by app-server") as Error & { data?: unknown };
+    error.data = {
+      codexErrorInfo: {
+        activeTurnNotSteerable: { turnKind: "agent" }
+      }
+    };
+    mockCompactThread.mockRejectedValue(error);
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/compact/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/thread-1/compact", { method: "POST" }),
+      { params: Promise.resolve({ threadId: "thread-1" }) }
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "会话仍在运行，停止后才能压缩上下文"
+    });
+    expect(response.status).toBe(409);
+    expect(mockAudit).toHaveBeenCalledWith("thread.compact.reject", {
+      threadId: "thread-1",
+      reason: "app-server-active-turn",
+      source: "app-server"
+    });
+  });
+
+  it("未知 compact 失败保持 502 并记录诊断", async () => {
+    mockCompactThread.mockRejectedValue(new Error("transport unavailable"));
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/compact/route");
+
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/thread-1/compact", { method: "POST" }),
+      { params: Promise.resolve({ threadId: "thread-1" }) }
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "transport unavailable"
+    });
+    expect(response.status).toBe(502);
+    expect(mockAudit).toHaveBeenCalledWith("thread.compact.failed", {
+      threadId: "thread-1",
+      reason: "unknown",
+      message: "transport unavailable"
+    });
   });
 });

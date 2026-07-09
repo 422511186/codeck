@@ -20,6 +20,7 @@ import {
   type PendingServerRequest,
   type SkillReference,
   type ThreadDetail,
+  type ThreadSummary,
   type ThreadGoal
 } from "../../../web/api/types";
 import { loadJson, saveJson, threadModeKey, threadPermissionProfileKey } from "../../../web/storage/localStore";
@@ -50,7 +51,7 @@ export default function ThreadPage(): JSX.Element {
   const setModel = useStore((s) => s.setModel);
   const setPermissionProfile = useStore((s) => s.setPermissionProfile);
   const setContextUsage = useStore((s) => s.setContextUsage);
-  const setRunning = useStore((s) => s.setRunning);
+  const setThreadStatus = useStore((s) => s.setThreadStatus);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
   const bindLocalUserMessageTurn = useStore((s) => s.bindLocalUserMessageTurn);
   const setTimelineGeneration = useStore((s) => s.setTimelineGeneration);
@@ -62,6 +63,7 @@ export default function ThreadPage(): JSX.Element {
   const setPendingRequests = useStore((s) => s.setPendingRequests);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const threadRunning = useStore((s) => s.threads[threadId]?.running ?? false);
+  const threadStatus = useStore((s) => s.threads[threadId]?.status ?? null);
   const threadActiveTurnId = useStore((s) => s.threads[threadId]?.activeTurnId ?? null);
   const threadMode = useStore((s) => s.threads[threadId]?.mode ?? "build");
   const threadModel = useStore((s) => s.threads[threadId]?.model ?? null);
@@ -72,6 +74,13 @@ export default function ThreadPage(): JSX.Element {
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
+  const compactCompletionSeen = useStore((s) =>
+    Boolean(
+      s.threads[threadId]?.entries.some(
+        (entry) => entry.body.kind === "system" && entry.body.text === "压缩上下文已完成"
+      )
+    )
+  );
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const wsState = useStore((s) => s.wsState);
   const webSettings = settingsStore.get();
@@ -265,7 +274,7 @@ export default function ThreadPage(): JSX.Element {
           });
         }
       }
-      setActiveTurnId(targetThreadId, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
+      setThreadStatus(targetThreadId, td.status, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
     },
     [
       threadId,
@@ -275,8 +284,27 @@ export default function ThreadPage(): JSX.Element {
       setModel,
       setContextUsage,
       setPermissionProfile,
-      setActiveTurnId
+      setThreadStatus
     ]
+  );
+
+  const applyThreadSummaryStatus = useCallback(
+    (summary: ThreadSummary) => {
+      setThreadStatus(summary.id, summary.status);
+      if (summary.id !== threadId) return;
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...summary,
+              lastTurnId: isThreadRunningStatus(summary.status) ? prev.lastTurnId : null,
+              nextCursor: prev.nextCursor,
+              timeline: prev.timeline
+            }
+          : prev
+      );
+    },
+    [threadId, setThreadStatus]
   );
 
   useEffect(() => {
@@ -307,8 +335,6 @@ export default function ThreadPage(): JSX.Element {
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail(td, "replace");
-        const running = isThreadRunningStatus(td.status);
-        setRunning(threadId, running);
       } catch (err) {
         if (isRequestAbort(err)) return;
         if (!cancelled) {
@@ -322,7 +348,7 @@ export default function ThreadPage(): JSX.Element {
       cancelled = true;
       setActiveThread(null);
     };
-  }, [threadId, ensureThread, applyThreadDetail, setMode, setPermissionProfile, setRunning, setActiveThread]);
+  }, [threadId, ensureThread, applyThreadDetail, setMode, setPermissionProfile, setActiveThread]);
 
   const repairSignal = repairRequest?.key ?? (repairRequestedAt ? String(repairRequestedAt) : null);
 
@@ -344,8 +370,6 @@ export default function ThreadPage(): JSX.Element {
         const entries = await threadDetailEntriesWithTurnItems(td, threadId);
         if (cancelled) return;
         applyThreadDetail(td, "replace", threadId, entries);
-        const running = isThreadRunningStatus(td.status);
-        setRunning(threadId, running);
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -361,7 +385,6 @@ export default function ThreadPage(): JSX.Element {
     repairSignal,
     repairRequest,
     applyThreadDetail,
-    setRunning,
     requestSnapshotRepair,
     clearSnapshotRepair,
     clearRepairRetryTimer,
@@ -389,7 +412,7 @@ export default function ThreadPage(): JSX.Element {
           }
           return;
         }
-        setRunning(threadId, summaryRunning);
+        applyThreadSummaryStatus(summary);
         if (summaryRunning) {
           const disconnectedRepairKey = `${currentThread?.activeTurnId ?? "thread"}`;
           if (
@@ -438,7 +461,13 @@ export default function ThreadPage(): JSX.Element {
         window.clearTimeout(timer);
       }
     };
-  }, [threadId, threadRunning, compactPending, wsState, setRunning, requestSnapshotRepair]);
+  }, [threadId, threadRunning, compactPending, wsState, applyThreadSummaryStatus, requestSnapshotRepair]);
+
+  useEffect(() => {
+    if (!compactPending || !compactCompletionSeen) return;
+    compactActionPendingRef.current = false;
+    setCompactPending(false);
+  }, [compactPending, compactCompletionSeen]);
 
   useEffect(() => {
     if (loading || !scrollerRef.current) return;
@@ -507,13 +536,10 @@ export default function ThreadPage(): JSX.Element {
       const currentDetail =
         detail ??
         (useStore.getState().threads[threadId]?.entries.length
-          ? cachedThreadDetail(
-              threadId,
-              useStore.getState().threads[threadId]?.running ?? false,
-              useStore.getState().threads[threadId]?.activeTurnId ?? null
-            )
+          ? cachedThreadDetailFromState(threadId, useStore.getState().threads[threadId])
           : null);
       if (!currentDetail) return;
+      const currentStatus = threadStatus ?? currentDetail.status;
       const sendKey = sendPayloadKey(text, imagePaths, skillReferences);
       if (pendingSendKeysRef.current.has(sendKey)) return;
       pendingSendKeysRef.current.add(sendKey);
@@ -532,15 +558,15 @@ export default function ThreadPage(): JSX.Element {
       };
       appendEntries(threadId, [optimisticEntry]);
       bumpMutationEpoch();
-      setRunning(threadId, true);
+      setThreadStatus(threadId, "active");
       try {
         const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
-        if (currentDetail.status === "notLoaded") {
+        if (currentStatus === "notLoaded") {
           const resumed = await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:resume`,
             () => codex.resumeThread(threadId)
           );
-          setDetail(resumed);
+          applyThreadDetail(resumed, "replace");
         }
         const currentMode = useStore.getState().threads[threadId]?.mode ?? "build";
         const collaborationMode =
@@ -604,7 +630,11 @@ export default function ThreadPage(): JSX.Element {
           });
         }
         if (started.thread) {
-          setRunning(threadId, isThreadRunningStatus(started.thread.status));
+          setThreadStatus(
+            threadId,
+            started.thread.status,
+            isThreadRunningStatus(started.thread.status) ? started.turnId : null
+          );
         }
         // Auto-name thread after first user message
         if ((!currentDetail.title || currentDetail.title === "新会话") && text.trim()) {
@@ -634,7 +664,7 @@ export default function ThreadPage(): JSX.Element {
             body: { kind: "error", text: `发送失败：${errorMessage(err)}` }
           }
         ]);
-        setRunning(threadId, false);
+        setThreadStatus(threadId, "idle", null);
         throw err;
       } finally {
         pendingSendKeysRef.current.delete(sendKey);
@@ -642,6 +672,7 @@ export default function ThreadPage(): JSX.Element {
     },
     [
       detail,
+      threadStatus,
       threadId,
       effectiveModel,
       effectiveReasoningEffort,
@@ -652,7 +683,7 @@ export default function ThreadPage(): JSX.Element {
       appendEntries,
       applyThreadDetail,
       replaceOrAddEntry,
-      setRunning,
+      setThreadStatus,
       setActiveTurnId,
       bindLocalUserMessageTurn,
       bumpMutationEpoch,
@@ -668,8 +699,7 @@ export default function ThreadPage(): JSX.Element {
         if (turnId) {
           markTurnInterrupted(threadId, turnId);
         }
-        setRunning(threadId, false);
-        setActiveTurnId(threadId, null);
+        setThreadStatus(threadId, "idle", null);
       });
     } catch (err) {
       appendEntries(threadId, [
@@ -685,8 +715,7 @@ export default function ThreadPage(): JSX.Element {
     threadActiveTurnId,
     detail?.lastTurnId,
     appendEntries,
-    setRunning,
-    setActiveTurnId,
+    setThreadStatus,
     markTurnInterrupted
   ]);
 
@@ -893,7 +922,7 @@ export default function ThreadPage(): JSX.Element {
   const visibleDetail =
     detail ??
     (hasCachedEntries
-      ? cachedThreadDetail(threadId, threadRunning, threadActiveTurnId)
+      ? cachedThreadDetailFromState(threadId, useStore.getState().threads[threadId])
       : null);
 
   if (error && !visibleDetail) {
@@ -917,14 +946,17 @@ export default function ThreadPage(): JSX.Element {
 
   const mode = threadMode;
   const modelId = effectiveModel;
-  const running = threadRunning || isThreadRunningStatus(visibleDetail.status);
-  const compactAllowed = isThreadCompactableStatus(visibleDetail.status) && !running && !compactPending;
+  const effectiveThreadStatus = threadStatus ?? (threadRunning ? "active" : visibleDetail.status);
+  const running = isThreadRunningStatus(effectiveThreadStatus);
+  const compactAllowed = isThreadCompactableStatus(effectiveThreadStatus) && !running && !compactPending;
   const compactDisabled = !compactAllowed;
   const compactDisabledLabel = compactPending
     ? COMPACTING_CONTEXT_TEXT
     : running
       ? "运行中不可压缩"
-      : "当前状态不可压缩";
+      : effectiveThreadStatus === "notLoaded" || effectiveThreadStatus === "systemError"
+        ? "当前状态不可压缩，请恢复会话后重试"
+        : "当前状态不可压缩";
   const currentGoal = visibleDetail.goal ?? null;
 
   return (
@@ -1116,6 +1148,7 @@ export default function ThreadPage(): JSX.Element {
               );
             } catch (err) {
               setCompactPending(false);
+              compactActionPendingRef.current = false;
               appendEntries(threadId, [
                 {
                   id: uniqueTimelineId("compact-error"),
@@ -1123,6 +1156,17 @@ export default function ThreadPage(): JSX.Element {
                   body: { kind: "error", text: `压缩失败：${errorMessage(err)}` }
                 }
               ]);
+              try {
+                const summary = await requestCoordinatorRef.current.dedupeRequest(
+                  `thread:${threadId}:summary`,
+                  () => codex.readThreadSummary(threadId)
+                );
+                applyThreadSummaryStatus(summary);
+              } catch (summaryError) {
+                if (!isRequestAbort(summaryError)) {
+                  console.warn("compact status refresh failed", summaryError);
+                }
+              }
               console.warn("compact failed", err);
             } finally {
               compactActionPendingRef.current = false;
@@ -2264,16 +2308,20 @@ function mergeTurnDetailEntry(baseEntry: TimelineEntry | undefined, detailEntry:
   };
 }
 
-function cachedThreadDetail(threadId: string, running: boolean, activeTurnId: string | null): ThreadDetail {
+function cachedThreadDetailFromState(
+  threadId: string,
+  thread: { status?: string; running?: boolean; activeTurnId?: string | null } | undefined
+): ThreadDetail {
+  const status = thread?.status ?? (thread?.running ? "active" : "idle");
   return {
     id: threadId,
     title: "会话",
     preview: "",
     cwd: "",
     modelProvider: "",
-    status: running ? "active" : "idle",
+    status,
     updatedAt: Date.now(),
-    lastTurnId: activeTurnId,
+    lastTurnId: thread?.activeTurnId ?? null,
     generation: 0,
     nextCursor: null,
     timeline: []

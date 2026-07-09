@@ -32,6 +32,149 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBeNull();
   });
 
+  it("updates thread status from app-server status events without appending timeline content", () => {
+    useStore.getState().setThreadStatus("thread-1", "active", "turn-live");
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: "thread-1",
+        status: "idle",
+        eventId: "status-idle-1"
+      }
+    });
+
+    const idleThread = useStore.getState().threads["thread-1"] as { status?: string; running?: boolean; activeTurnId?: string | null; entries?: unknown[] };
+    expect(idleThread.status).toBe("idle");
+    expect(idleThread.running).toBe(false);
+    expect(idleThread.activeTurnId).toBeNull();
+    expect(idleThread.entries).toEqual([]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: "thread-1",
+        status: "notLoaded",
+        eventId: "status-not-loaded-1"
+      }
+    });
+
+    const notLoadedThread = useStore.getState().threads["thread-1"] as { status?: string; running?: boolean };
+    expect(notLoadedThread.status).toBe("notLoaded");
+    expect(notLoadedThread.running).toBe(false);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: "thread-1",
+        status: "active",
+        activeFlags: [],
+        eventId: "status-active-1"
+      }
+    });
+
+    const activeThread = useStore.getState().threads["thread-1"] as { status?: string; running?: boolean; activeTurnId?: string | null; entries?: unknown[] };
+    expect(activeThread.status).toBe("active");
+    expect(activeThread.running).toBe(true);
+    expect(activeThread.entries).toEqual([]);
+  });
+
+  it("finishes empty pending reasoning when an idle status arrives for the active turn", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "turn-1-reasoning-pending",
+        turnId: "turn-1",
+        body: { kind: "reasoning", text: "", done: false }
+      })
+    ]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: "thread-1",
+        status: "idle",
+        eventId: "status-idle-finish-reasoning"
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.status).toBe("idle");
+    expect(thread?.running).toBe(false);
+    expect(thread?.activeTurnId).toBeNull();
+    expect(thread?.entries).toEqual([]);
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
+  });
+
+  it("finishes running activity entries when an idle status arrives for the active turn", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-tool-1",
+        delta: "npm test\n"
+      }
+    });
+    useStore.getState().mergeThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "legacy-command-1",
+          turnId: "turn-1",
+          createdAt: 10,
+          body: { kind: "command", status: "running", command: "npm test", output: "pending" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: "thread-1",
+        status: "idle",
+        eventId: "status-idle-finish-activity"
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.running).toBe(false);
+    expect(thread?.activeTurnId).toBeNull();
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "cmd-tool-1",
+          turnId: "turn-1",
+          body: expect.objectContaining({ kind: "tool", status: "success", result: "npm test\n" })
+        }),
+        expect.objectContaining({
+          id: "legacy-command-1",
+          turnId: "turn-1",
+          body: expect.objectContaining({ kind: "command", status: "success", command: "npm test" })
+        })
+      ])
+    );
+    expect(thread?.entries.some((entry) => entry.body.kind === "reasoning" && entry.body.done === false)).toBe(false);
+  });
+
   it("does not stop a newer active turn when an older completion arrives late", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",

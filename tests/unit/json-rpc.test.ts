@@ -36,6 +36,37 @@ describe("JsonRpcPeer", () => {
     expect(received).toEqual([{ method: "thread/status/changed", params: { threadId: "abc" } }]);
   });
 
+  it("保留 JSON-RPC error.data 供 route 层分类", async () => {
+    const sent: string[] = [];
+    const peer = new JsonRpcPeer((message) => sent.push(message));
+
+    const pending = peer.request("thread/compact/start", { threadId: "thread-1" });
+    const request = JSON.parse(sent[0]!) as { id: number };
+    peer.handleMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          message: "active turn cannot be steered",
+          data: {
+            codexErrorInfo: {
+              activeTurnNotSteerable: { turnKind: "agent" }
+            }
+          }
+        }
+      })
+    );
+
+    await expect(pending).rejects.toMatchObject({
+      message: "active turn cannot be steered",
+      data: {
+        codexErrorInfo: {
+          activeTurnNotSteerable: { turnKind: "agent" }
+        }
+      }
+    });
+  });
+
   it("能区分 server request 并回传 response", () => {
     const sent: string[] = [];
     const received: unknown[] = [];

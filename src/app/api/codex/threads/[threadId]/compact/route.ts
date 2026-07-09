@@ -16,8 +16,9 @@ export async function POST(
     return NextResponse.json({ ok: false }, { status: 401 });
   }
 
+  let threadId = "";
   try {
-    const { threadId } = await context.params;
+    ({ threadId } = await context.params);
     const gateway = getAppServerGateway();
     const summary = await gateway.readThreadSummary(threadId);
     if (summary.status !== "idle") {
@@ -25,6 +26,11 @@ export async function POST(
         summary.status === "active"
           ? THREAD_RUNNING_COMPACT_ERROR_MESSAGE
           : THREAD_NOT_IDLE_COMPACT_ERROR_MESSAGE;
+      await audit("thread.compact.reject", {
+        threadId,
+        reason: summary.status === "active" ? "precheck-active" : "precheck-not-idle",
+        status: summary.status
+      });
       return NextResponse.json(
         { ok: false, error },
         { status: 409 }
@@ -32,22 +38,69 @@ export async function POST(
     }
     await audit("thread.compact.start", { threadId });
     await gateway.compactThread(threadId);
+    await audit("thread.compact.accepted", { threadId });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (isThreadRunningError(error)) {
+      if (threadId) {
+        await audit("thread.compact.reject", {
+          threadId,
+          reason: hasStructuredActiveTurnConflict(error) ? "app-server-active-turn" : "app-server-running",
+          source: "app-server"
+        });
+      }
       return NextResponse.json(
         { ok: false, error: THREAD_RUNNING_COMPACT_ERROR_MESSAGE },
         { status: 409 }
       );
     }
+    const message = compactErrorMessage(error);
+    if (threadId) {
+      await audit("thread.compact.failed", {
+        threadId,
+        reason: "unknown",
+        message
+      });
+    }
     return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法压缩上下文" },
+      { ok: false, error: message },
       { status: 502 }
     );
   }
 }
 
 function isThreadRunningError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return THREAD_RUNNING_COMPACT_ERROR_PATTERN.test(message);
+  if (hasStructuredActiveTurnConflict(error)) {
+    return true;
+  }
+  return THREAD_RUNNING_COMPACT_ERROR_PATTERN.test(compactErrorMessage(error));
+}
+
+function hasStructuredActiveTurnConflict(error: unknown): boolean {
+  const data = isRecord(error) ? error.data : undefined;
+  return containsKey(data, "activeTurnNotSteerable");
+}
+
+function containsKey(value: unknown, key: string, depth = 0): boolean {
+  if (depth > 5 || !isRecord(value)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, key)) {
+    return true;
+  }
+  return Object.values(value).some((child) => containsKey(child, key, depth + 1));
+}
+
+function compactErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === "string" && error) {
+    return error;
+  }
+  return "无法压缩上下文";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

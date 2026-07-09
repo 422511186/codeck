@@ -49,6 +49,12 @@ export type BrowserCodexEvent =
       status: string;
     }
   | {
+      kind: "thread_status_changed";
+      threadId: string;
+      status: string;
+      activeFlags?: unknown[];
+    }
+  | {
       kind: "agent_message_delta";
       threadId: string;
       turnId: string;
@@ -702,6 +708,28 @@ export function normalizeAppServerNotification(
         threadId: params.threadId,
         turnId: params.turn.id,
         status: typeof params.turn.status === "string" ? params.turn.status : "completed"
+      }
+    };
+  }
+
+  if (message.method === "thread/status/changed") {
+    const params = message.params as { threadId?: unknown; status?: unknown } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || !isRecord(params.status)) {
+      return null;
+    }
+    const status = typeof params.status.type === "string" ? params.status.type : null;
+    if (!status) {
+      return null;
+    }
+    const activeFlags = Array.isArray(params.status.activeFlags) ? params.status.activeFlags : null;
+
+    return {
+      type: "codex-event",
+      event: {
+        kind: "thread_status_changed",
+        threadId: params.threadId,
+        status,
+        ...(activeFlags ? { activeFlags } : {})
       }
     };
   }

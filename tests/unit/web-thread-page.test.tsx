@@ -24,6 +24,7 @@ const mockSetModel = vi.fn();
 const mockSetPermissionProfile = vi.fn();
 const mockSetContextUsage = vi.fn();
 const mockSetRunning = vi.fn();
+const mockSetThreadStatus = vi.fn();
 const mockSetActiveTurnId = vi.fn();
 const mockBindLocalUserMessageTurn = vi.fn();
 const mockSetTimelineGeneration = vi.fn();
@@ -57,6 +58,7 @@ function mockStoreState(): unknown {
       setPermissionProfile: mockSetPermissionProfile,
       setContextUsage: mockSetContextUsage,
       setRunning: mockSetRunning,
+      setThreadStatus: mockSetThreadStatus,
       setActiveTurnId: mockSetActiveTurnId,
       bindLocalUserMessageTurn: mockBindLocalUserMessageTurn,
       setTimelineGeneration: mockSetTimelineGeneration,
@@ -161,6 +163,7 @@ describe("ThreadPage", () => {
     mockSetPermissionProfile.mockClear();
     mockSetContextUsage.mockClear();
     mockSetRunning.mockClear();
+    mockSetThreadStatus.mockClear();
     mockSetActiveTurnId.mockClear();
     mockBindLocalUserMessageTurn.mockClear();
     mockSetTimelineGeneration.mockClear();
@@ -1122,7 +1125,7 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await waitFor(() => {
-      expect(mockSetRunning).toHaveBeenCalledWith("thread-1", true);
+      expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "active", "turn-running");
     });
   });
 
@@ -1359,7 +1362,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
       "thread-1",
       expect.objectContaining({
@@ -1426,7 +1429,7 @@ describe("ThreadPage", () => {
     });
 
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     expect(mockListTurnItems).not.toHaveBeenCalled();
@@ -1481,7 +1484,7 @@ describe("ThreadPage", () => {
     });
 
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", true);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "active");
     expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
       "thread-1",
       expect.objectContaining({
@@ -1891,7 +1894,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
@@ -1950,7 +1953,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
@@ -2057,7 +2060,7 @@ describe("ThreadPage", () => {
     await user.click(screen.getByLabelText("中断"));
 
     expect(mockInterruptTurn).toHaveBeenCalledWith("thread-1", "turn-running");
-    expect(mockSetRunning).toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle", null);
   });
 
   it("should ignore duplicate interrupt clicks while request is pending", async () => {
@@ -2171,7 +2174,7 @@ describe("ThreadPage", () => {
 
     await user.click(screen.getByLabelText("中断"));
 
-    expect(mockSetRunning).not.toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).not.toHaveBeenCalledWith("thread-1", "idle", null);
     expect(mockAppendEntries).toHaveBeenCalledWith(
       "thread-1",
       [expect.objectContaining({ body: { kind: "error", text: "中断失败：turnId 不能为空" } })]
@@ -3293,6 +3296,33 @@ describe("ThreadPage", () => {
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
   });
 
+  it("should refresh summary status after compact failure without requiring a page reload", async () => {
+    const user = userEvent.setup();
+    mockCompactThread.mockRejectedValue(new Error("compact backend failed"));
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+    await user.click(screen.getByRole("button", { name: "压缩上下文" }));
+    await user.click(screen.getByRole("button", { name: "继续" }));
+
+    await waitFor(() => {
+      expect(mockAppendEntries).toHaveBeenCalledWith(
+        "thread-1",
+        expect.arrayContaining([
+          expect.objectContaining({
+            body: { kind: "error", text: "压缩失败：compact backend failed" }
+          })
+        ])
+      );
+    });
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+  });
+
   it("should not request full timeline repair after a manual compact request starts", async () => {
     const user = userEvent.setup();
 
@@ -3349,7 +3379,7 @@ describe("ThreadPage", () => {
     });
 
     expect(mockCompactThread).toHaveBeenCalledWith("thread-1");
-    mockSetRunning.mockClear();
+    mockSetThreadStatus.mockClear();
     mockRequestSnapshotRepair.mockClear();
     mockThreadState.mockReturnValue({
       entries: [],
@@ -3369,7 +3399,7 @@ describe("ThreadPage", () => {
     });
 
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockSetRunning).not.toHaveBeenCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).not.toHaveBeenCalledWith("thread-1", "idle");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
 
     act(() => {
@@ -3447,6 +3477,42 @@ describe("ThreadPage", () => {
     expect(screen.queryByRole("button", { name: "压缩上下文" })).not.toBeInTheDocument();
     expect(screen.getByText("运行中不可压缩")).toBeInTheDocument();
     expect(mockCompactThread).not.toHaveBeenCalled();
+  });
+
+  it("should prefer live store status over stale active thread detail when deciding compact availability", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      status: "idle",
+      running: false,
+      activeTurnId: null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-stale",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByLabelText("更多"));
+
+    expect(screen.getByRole("button", { name: "压缩上下文" })).toBeInTheDocument();
+    expect(screen.queryByText("运行中不可压缩")).not.toBeInTheDocument();
   });
 
   it.each(["notLoaded", "systemError"])(
@@ -3928,7 +3994,7 @@ describe("ThreadPage", () => {
         null
       );
     });
-    expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", false);
+    expect(mockSetThreadStatus).toHaveBeenLastCalledWith("thread-1", "idle", null);
   });
 
   it("should preserve selected skill references when idle startTurn snapshot omits them", async () => {
@@ -4029,7 +4095,7 @@ describe("ThreadPage", () => {
         null
       );
     });
-    expect(mockSetRunning).toHaveBeenLastCalledWith("thread-1", true);
+    expect(mockSetThreadStatus).toHaveBeenLastCalledWith("thread-1", "active", "turn-2");
   });
 
   it("should reserve dynamic bottom space from composer height changes", async () => {
@@ -4405,7 +4471,9 @@ describe("ThreadPage", () => {
       );
     });
     expect(mockSetActiveTurnId).not.toHaveBeenCalledWith("thread-1", "turn-fast");
-    expect(mockSetRunning.mock.calls.filter((call) => call[0] === "thread-1" && call[1] === true)).toHaveLength(1);
+    expect(
+      mockSetThreadStatus.mock.calls.filter((call) => call[0] === "thread-1" && call[1] === "active")
+    ).toHaveLength(1);
     expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
       "thread-1",
       expect.objectContaining({

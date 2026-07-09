@@ -70,6 +70,7 @@ export type ThreadState = {
   localUserMessageIdsByTurn: Map<string, string>;
   repairRequest: SnapshotRepairRequest | null;
   repairRequestedAt: number | null;
+  status: string;
   running: boolean;
   cursor: string | null;
   reachedBeginning: boolean;
@@ -113,6 +114,7 @@ type Actions = {
   removeEmptyPendingReasoningEntry: (threadId: string, turnId: string | null) => void;
   finishLiveTurnEntries: (threadId: string, turnId: string, status: string) => void;
   setRunning: (threadId: string, running: boolean) => void;
+  setThreadStatus: (threadId: string, status: string, activeTurnId?: string | null) => void;
   setActiveTurnId: (threadId: string, turnId: string | null) => void;
   bindLocalUserMessageTurn: (threadId: string, clientUserMessageId: string, turnId: string) => void;
   setTimelineGeneration: (threadId: string, generation: number) => void;
@@ -149,6 +151,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     localUserMessageIdsByTurn: new Map<string, string>(),
     repairRequest: null,
     repairRequestedAt: null,
+    status: "idle",
     running: false,
     cursor: null,
     reachedBeginning: false,
@@ -508,7 +511,33 @@ export const useStore = create<State & Actions>((set, get) => ({
   setRunning: (threadId, running) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      return { threads: { ...state.threads, [threadId]: { ...prev, running, activeTurnId: running ? prev.activeTurnId : null } } };
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            status: running ? "active" : "idle",
+            running,
+            activeTurnId: running ? prev.activeTurnId : null
+          }
+        }
+      };
+    }),
+  setThreadStatus: (threadId, status, activeTurnId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const running = isRunningThreadStatus(status);
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            status,
+            running,
+            activeTurnId: running ? (activeTurnId !== undefined ? activeTurnId : prev.activeTurnId) : null
+          }
+        }
+      };
     }),
   setActiveTurnId: (threadId, turnId) =>
     set((state) => {
@@ -734,14 +763,30 @@ export const useStore = create<State & Actions>((set, get) => ({
       switch (ev.kind) {
         case "turn.started":
         case "turn_started":
-          get().setRunning(threadId, true);
-          get().setActiveTurnId(threadId, typeof ev.turnId === "string" ? ev.turnId : null);
+          get().setThreadStatus(threadId, "active", typeof ev.turnId === "string" ? ev.turnId : null);
           get().startReasoningEntry(
             threadId,
             typeof ev.turnId === "string" ? ev.turnId : null,
             pendingReasoningId(threadId, typeof ev.turnId === "string" ? ev.turnId : null)
           );
           break;
+        case "thread_status_changed": {
+          if (typeof ev.status !== "string") {
+            break;
+          }
+          const eventActiveTurnId = typeof ev.activeTurnId === "string" ? ev.activeTurnId : undefined;
+          const activeTurnId = eventActiveTurnId ?? get().threads[threadId]?.activeTurnId ?? null;
+          if (ev.status === "idle" && activeTurnId) {
+            get().finishLiveTurnEntries(threadId, activeTurnId, "completed");
+            get().removeEmptyPendingReasoningEntry(threadId, activeTurnId);
+          }
+          get().setThreadStatus(
+            threadId,
+            ev.status,
+            eventActiveTurnId
+          );
+          break;
+        }
         case "turn.completed":
         case "turn.failed":
         case "turn.canceled":
@@ -1338,6 +1383,10 @@ function isVisibleTimelineEvent(kind: string): boolean {
     "item.updated",
     "item_updated"
   ]).has(kind);
+}
+
+function isRunningThreadStatus(status: string): boolean {
+  return status === "active";
 }
 
 function finiteNumberOrZero(value: unknown): number {

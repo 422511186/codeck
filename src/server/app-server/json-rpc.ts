@@ -6,6 +6,17 @@ type PendingRequest = {
 type NotificationHandler = (message: { method: string; params?: unknown }) => void;
 type ServerRequestHandler = (message: { id: number; method: string; params?: unknown }) => void;
 
+export class JsonRpcError extends Error {
+  constructor(
+    message: string,
+    readonly data?: unknown,
+    readonly code?: number
+  ) {
+    super(message);
+    this.name = "JsonRpcError";
+  }
+}
+
 export class JsonRpcPeer {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
@@ -60,7 +71,7 @@ export class JsonRpcPeer {
       method?: string;
       params?: unknown;
       result?: unknown;
-      error?: { message?: string };
+      error?: { message?: string; data?: unknown; code?: number };
     };
 
     if (typeof message.id === "number" && message.method) {
@@ -78,7 +89,13 @@ export class JsonRpcPeer {
 
       this.pending.delete(message.id);
       if (message.error) {
-        pending.reject(new Error(message.error.message || "app-server JSON-RPC error"));
+        pending.reject(
+          new JsonRpcError(
+            message.error.message || "app-server JSON-RPC error",
+            message.error.data,
+            message.error.code
+          )
+        );
       } else {
         pending.resolve(message.result);
       }

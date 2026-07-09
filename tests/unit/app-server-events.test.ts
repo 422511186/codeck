@@ -73,6 +73,29 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it.each(["active", "idle", "notLoaded", "systemError"])(
+    "把 thread/status/changed %s 映射为线程状态事件",
+    (status) => {
+      expect(
+        normalizeAppServerNotification({
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: status === "active" ? { type: status, activeFlags: [] } : { type: status }
+          }
+        })
+      ).toEqual({
+        type: "codex-event",
+        event: {
+          kind: "thread_status_changed",
+          threadId: "thread-1",
+          status,
+          ...(status === "active" ? { activeFlags: [] } : {})
+        }
+      });
+    }
+  );
+
   it("把 turn diff 更新映射为浏览器 diff 事件", () => {
     expect(
       normalizeAppServerNotification({
