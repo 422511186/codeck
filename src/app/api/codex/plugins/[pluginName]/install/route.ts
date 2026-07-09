@@ -1,33 +1,35 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictNullableString,
+  readOptionalJsonRecord,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ pluginName: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { pluginName } = await context.params;
-    const body = (await request.json().catch(() => ({}))) as {
-      marketplaceName?: string | null;
-      marketplacePath?: string | null;
-    };
-    await audit("plugin.install", { pluginName, marketplaceName: body.marketplaceName ?? null });
+    const body = await readOptionalJsonRecord(request);
+    const marketplaceName = optionalStrictNullableString(body.marketplaceName, "marketplaceName");
+    const marketplacePath = optionalStrictNullableString(body.marketplacePath, "marketplacePath");
+    await audit("plugin.install", { pluginName, marketplaceName: marketplaceName ?? null });
     const result = await getAppServerGateway().installPlugin({
-      marketplacePath: body.marketplacePath ?? null,
-      remoteMarketplaceName: body.marketplacePath ? null : body.marketplaceName ?? null,
+      marketplacePath: marketplacePath ?? null,
+      remoteMarketplaceName: marketplacePath ? null : marketplaceName ?? null,
       pluginName
     });
-    return NextResponse.json({ ok: true, result });
+    return ok({ result });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法安装插件" },
-      { status: 502 }
-    );
+    return serverError(error, "无法安装插件");
   }
 }

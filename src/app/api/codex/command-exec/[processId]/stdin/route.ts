@@ -1,26 +1,32 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ processId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { processId } = await context.params;
-    const body = (await request.json()) as { text?: string };
-    await audit("commandExec.stdin", { processId, byteLength: Buffer.byteLength(body.text || "", "utf8") });
-    await getAppServerGateway().writeCommandExecStdin(processId, body.text || "");
-    return NextResponse.json({ ok: true });
+    const body = await readJsonRecord(request);
+    if (typeof body.text !== "string") {
+      throw new RouteValidationError("text 必须是字符串");
+    }
+    await audit("commandExec.stdin", { processId, byteLength: Buffer.byteLength(body.text, "utf8") });
+    await getAppServerGateway().writeCommandExecStdin(processId, body.text);
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法写入 command exec 输入" },
-      { status: 502 }
-    );
+    return serverError(error, "无法写入 command exec 输入");
   }
 }

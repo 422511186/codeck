@@ -1,26 +1,27 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { audit } from "../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  requireNonEmptyString,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { watchId?: unknown };
-    if (typeof body.watchId !== "string" || !body.watchId.trim()) {
-      return NextResponse.json({ ok: false, error: "watchId 不能为空" }, { status: 400 });
-    }
+    const body = await readJsonRecord(request);
+    const watchId = requireNonEmptyString(body.watchId, "watchId");
 
-    await audit("fs.unwatch", { watchId: body.watchId });
-    await getAppServerGateway().unwatchPath(body.watchId);
-    return NextResponse.json({ ok: true });
+    await audit("fs.unwatch", { watchId });
+    await getAppServerGateway().unwatchPath(watchId);
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法停止监听文件变化" },
-      { status: 502 }
-    );
+    return serverError(error, "无法停止监听文件变化");
   }
 }

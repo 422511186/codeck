@@ -420,7 +420,22 @@ export class WebSocketAppServerPeer implements ManagedAppServerPeer {
       });
 
       socket.on("message", (data) => {
-        this.rpc?.handleMessage(data.toString());
+        try {
+          this.rpc?.handleMessage(data.toString());
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) {
+            throw error;
+          }
+
+          const malformedMessageError = new Error("app-server JSON-RPC malformed message");
+          this.rpc?.failPendingRequests(malformedMessageError);
+          this.status = this.withDiagnostics({
+            state: "error",
+            message: malformedMessageError.message,
+            errorKind: "handshake-failed"
+          });
+          socket.close();
+        }
       });
 
       socket.once("close", () => {

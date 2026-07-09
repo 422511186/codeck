@@ -1,31 +1,34 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../../server/auth";
-import { audit } from "../../../../../../../server/security";
 import type { MobileJsonValue } from "../../../../../../../shared/codex";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { event?: unknown };
+    const body = await readJsonRecord(request);
     if (body.event === undefined) {
-      return NextResponse.json({ ok: false, error: "event 不能为空" }, { status: 400 });
+      throw new RouteValidationError("event 不能为空");
     }
 
     await audit("thread.guardian.approveDeniedAction", { threadId });
     await getAppServerGateway().approveGuardianDeniedAction(threadId, body.event as MobileJsonValue);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法批准 Guardian 拦截动作" },
-      { status: 502 }
-    );
+    return serverError(error, "无法批准 Guardian 拦截动作");
   }
 }

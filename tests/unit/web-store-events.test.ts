@@ -690,16 +690,27 @@ describe("web store codex events", () => {
       }
     });
 
-    expect(useStore.getState().threads["thread-1"]?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "agent-1", body: { kind: "agent-message", text: "旧回复新回复" } }),
-        expect.objectContaining({ id: "reasoning-1", body: { kind: "reasoning", text: "旧思考新思考", done: true } }),
-        expect.objectContaining({
-          id: "tool-1",
-          body: expect.objectContaining({ kind: "tool", result: "旧工具输出\n新工具输出\n" })
-        })
-      ])
-    );
+    const entries = useStore.getState().threads["thread-1"]?.entries ?? [];
+    expect(entries.filter((entry) => entry.body.kind === "agent-message")).toEqual([
+      expect.objectContaining({ id: "agent-1", turnId: "turn-old", body: { kind: "agent-message", text: "旧回复" } }),
+      expect.objectContaining({ id: "agent-1", turnId: "turn-new", body: { kind: "agent-message", text: "新回复" } })
+    ]);
+    expect(entries.filter((entry) => entry.body.kind === "reasoning")).toEqual([
+      expect.objectContaining({ id: "reasoning-1", turnId: "turn-old", body: { kind: "reasoning", text: "旧思考", done: true } }),
+      expect.objectContaining({ id: "reasoning-1", turnId: "turn-new", body: { kind: "reasoning", text: "新思考", done: false } })
+    ]);
+    expect(entries.filter((entry) => entry.body.kind === "tool")).toEqual([
+      expect.objectContaining({
+        id: "tool-1",
+        turnId: "turn-old",
+        body: expect.objectContaining({ kind: "tool", result: "旧工具输出\n" })
+      }),
+      expect.objectContaining({
+        id: "tool-1",
+        turnId: "turn-new",
+        body: expect.objectContaining({ kind: "tool", result: "新工具输出\n" })
+      })
+    ]);
   });
 
   it("merges equivalent live and completed agent/reasoning entries in the same turn even when item ids differ", () => {
@@ -1062,7 +1073,13 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
-        body: { kind: "agent-message", text: "旧新" }
+        turnId: "turn-old",
+        body: { kind: "agent-message", text: "旧" }
+      }),
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-new",
+        body: { kind: "agent-message", text: "新" }
       })
     ]);
     expect(useStore.getState().threads["thread-1"]?.entries.some((entry) => entry.id === "agent-deleted")).toBe(false);
@@ -1137,7 +1154,13 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
-        body: { kind: "agent-message", text: "repeatrepeat" }
+        turnId: "turn-old",
+        body: { kind: "agent-message", text: "repeat" }
+      }),
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-new",
+        body: { kind: "agent-message", text: "repeat" }
       })
     ]);
   });

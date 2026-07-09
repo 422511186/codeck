@@ -1,30 +1,47 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictStringArray,
+  readOptionalJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json().catch(() => ({}))) as { numTurns?: number; expectedDeletedTurnIds?: unknown };
-    const numTurns = body.numTurns || 1;
-    const expectedDeletedTurnIds = Array.isArray(body.expectedDeletedTurnIds)
-      ? body.expectedDeletedTurnIds.filter((turnId): turnId is string => typeof turnId === "string" && turnId.length > 0)
-      : undefined;
+    const body = await readOptionalJsonRecord(request);
+    const numTurns = readNumTurns(body.numTurns);
+    const expectedDeletedTurnIds = optionalStrictStringArray(
+      body.expectedDeletedTurnIds,
+      "expectedDeletedTurnIds"
+    ) ?? undefined;
     await audit("thread.rollback", { threadId, numTurns, expectedDeletedTurnIds });
     const thread = await getAppServerGateway().rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
-    return NextResponse.json({ ok: true, thread });
+    return ok({ thread });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法 rollback 会话" },
-      { status: 502 }
-    );
+    return serverError(error, "无法 rollback 会话");
   }
+}
+
+function readNumTurns(value: unknown): number {
+  if (value === undefined) {
+    return 1;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new RouteValidationError("numTurns 必须是正整数");
+  }
+
+  return value;
 }

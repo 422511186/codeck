@@ -2272,6 +2272,37 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("turn timeline pagination applies default and maximum limits before app-server requests", async () => {
+    const peer = new SessionResponseItemsPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.listThreadTurns({ threadId: "thread-1" });
+    await gateway.listThreadTurns({ threadId: "thread-1", limit: 500 });
+    await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1" });
+    await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 500 });
+
+    expect(peer.calls).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/turns/list",
+          params: expect.objectContaining({ threadId: "thread-1", limit: 30 })
+        },
+        {
+          method: "thread/turns/list",
+          params: expect.objectContaining({ threadId: "thread-1", limit: 100 })
+        },
+        {
+          method: "thread/turns/items/list",
+          params: expect.objectContaining({ threadId: "thread-1", turnId: "turn-1", limit: 30 })
+        },
+        {
+          method: "thread/turns/items/list",
+          params: expect.objectContaining({ threadId: "thread-1", turnId: "turn-1", limit: 100 })
+        }
+      ])
+    );
+  });
+
   it("mock 模式支持搜索会话历史", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

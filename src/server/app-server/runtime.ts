@@ -165,10 +165,22 @@ export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequ
 
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
 const MAX_BROWSER_EVENT_BACKLOG = 500;
+const SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT = 1_000_000;
+const SESSION_CONTEXT_USAGE_TAIL_LINES = 500;
 const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
 
 function pendingReasoningItemId(threadId: string, turnId: string | null): string {
   return `${turnId ?? threadId}-reasoning-pending`;
+}
+
+function timelineTurnIdSet(items: MobileTimelineItem[]): Set<string> {
+  const turnIds = new Set<string>();
+  for (const item of items) {
+    if (item.turnId) {
+      turnIds.add(item.turnId);
+    }
+  }
+  return turnIds;
 }
 
 function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem): MobileTimelineItem {
@@ -3221,22 +3233,27 @@ export class AppServerGateway {
       if (!rolloutPath) {
         return null;
       }
-      return (await this.client.readFile(rolloutPath)).text;
+      const jsonl = (await this.client.readFile(rolloutPath)).text;
+      return jsonl.length <= SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT ? jsonl : null;
     } catch {
       return null;
     }
   }
 
   private async applySessionTimelineSupplement(detail: MobileThreadDetail): Promise<MobileThreadDetail> {
+    const allowedTurnIds = timelineTurnIdSet(detail.timeline);
+    if (!allowedTurnIds.size) {
+      return detail;
+    }
     const jsonl = await this.readSessionJsonl(detail.id);
     if (!jsonl) {
       return detail;
     }
-    const contextUsage = latestSessionContextUsage(jsonl);
+    const contextUsage = latestSessionContextUsage(jsonl, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES });
     return {
       ...detail,
       ...(contextUsage ? { contextUsage } : {}),
-      timeline: mergeSessionTimelineItems(detail.timeline, jsonl)
+      timeline: mergeSessionTimelineItems(detail.timeline, jsonl, { allowedTurnIds })
     };
   }
 
@@ -3244,13 +3261,17 @@ export class AppServerGateway {
     threadId: string,
     page: MobileTimelinePage
   ): Promise<MobileTimelinePage> {
+    const allowedTurnIds = timelineTurnIdSet(page.items);
+    if (!allowedTurnIds.size) {
+      return page;
+    }
     const jsonl = await this.readSessionJsonl(threadId);
     if (!jsonl) {
       return page;
     }
     return {
       ...page,
-      items: mergeSessionTimelineItems(page.items, jsonl)
+      items: mergeSessionTimelineItems(page.items, jsonl, { allowedTurnIds })
     };
   }
 

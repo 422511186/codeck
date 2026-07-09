@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 import { audit } from "../../../../../server/security";
+import { readJsonRecord } from "../../_route-helpers";
 import { assertConfigEdit } from "../config-write-policy";
 
 export async function GET(request: Request): Promise<Response> {
@@ -26,7 +27,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const edit = assertConfigEdit(await request.json());
+    const edit = assertConfigEdit(await readJsonRecord(request));
     await audit("config.value.write", { keyPath: edit.keyPath });
     const result = await getAppServerGateway().writeConfigValue(edit.keyPath, edit.value);
     return NextResponse.json({ ok: true, result });

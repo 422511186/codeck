@@ -1,21 +1,27 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictNonEmptyString,
+  readOptionalJsonRecord,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json().catch(() => ({}))) as { turnId?: string };
+    const body = await readOptionalJsonRecord(request);
     const gateway = getAppServerGateway();
-    let turnId = typeof body.turnId === "string" ? body.turnId.trim() : "";
+    let turnId = optionalStrictNonEmptyString(body.turnId, "turnId") ?? "";
 
     if (!turnId) {
       const thread = await gateway.readThread(threadId);
@@ -23,16 +29,16 @@ export async function POST(
     }
 
     if (!turnId) {
-      return NextResponse.json({ ok: false, error: "暂无可中断的 turn" }, { status: 409 });
+      return new Response(JSON.stringify({ ok: false, error: "暂无可中断的 turn" }), {
+        status: 409,
+        headers: { "content-type": "application/json" }
+      });
     }
 
     await audit("turn.interrupt", { threadId, turnId });
     await gateway.interruptTurn(threadId, turnId);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法 interrupt turn" },
-      { status: 502 }
-    );
+    return serverError(error, "无法 interrupt turn");
   }
 }

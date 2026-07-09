@@ -1,33 +1,35 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
+import {
+  assertAllowedPath,
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  requireStrictStringArray,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { command?: string[]; cwd?: string };
-    if (!body.command?.length) {
-      return NextResponse.json({ ok: false, error: "command 不能为空" }, { status: 400 });
+    const body = await readJsonRecord(request);
+    const command = requireStrictStringArray(body.command, "command");
+    if (!command.length) {
+      throw new RouteValidationError("command 不能为空");
     }
-    if (!body.cwd) {
-      return NextResponse.json({ ok: false, error: "cwd 不能为空" }, { status: 400 });
-    }
-
-    const cwd = assertRuntimePathAllowed(body.cwd);
-    await audit("commandExec.spawn", { command: body.command, cwd });
+    const cwd = assertAllowedPath(body.cwd, "cwd");
+    await audit("commandExec.spawn", { command, cwd });
     const session = await getAppServerGateway().startCommandExecSession({
-      command: body.command,
+      command,
       cwd
     });
-    return NextResponse.json({ ok: true, session });
+    return ok({ session });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法启动 command exec 会话" },
-      { status: 502 }
-    );
+    return serverError(error, "无法启动 command exec 会话");
   }
 }

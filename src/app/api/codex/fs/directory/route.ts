@@ -1,50 +1,44 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
+import {
+  assertAllowedPath,
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function GET(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   const url = new URL(request.url);
   const path = url.searchParams.get("path");
-  if (!path) {
-    return NextResponse.json({ ok: false, error: "path 不能为空" }, { status: 400 });
-  }
 
   try {
-    const allowedPath = assertRuntimePathAllowed(path);
+    const allowedPath = assertAllowedPath(path, "path");
     const entries = await getAppServerGateway().readDirectory(allowedPath);
-    return NextResponse.json({ ok: true, entries });
+    return ok({ entries });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取目录" },
-      { status: 502 }
-    );
+    return serverError(error, "无法读取目录");
   }
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { path?: unknown };
-    if (typeof body.path !== "string" || !body.path.trim()) {
-      return NextResponse.json({ ok: false, error: "path 不能为空" }, { status: 400 });
-    }
-
-    const allowedPath = assertRuntimePathAllowed(body.path);
+    const body = await readJsonRecord(request);
+    const allowedPath = assertAllowedPath(body.path, "path");
     await audit("fs.directory.create", { path: allowedPath });
     await getAppServerGateway().createDirectory(allowedPath);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法创建目录" },
-      { status: 502 }
-    );
+    return serverError(error, "无法创建目录");
   }
 }

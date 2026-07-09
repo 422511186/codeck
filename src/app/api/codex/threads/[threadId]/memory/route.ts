@@ -1,30 +1,33 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { mode?: string };
+    const body = await readJsonRecord(request);
     if (body.mode !== "enabled" && body.mode !== "disabled") {
-      return NextResponse.json({ ok: false, error: "记忆模式必须是 enabled 或 disabled" }, { status: 400 });
+      throw new RouteValidationError("记忆模式必须是 enabled 或 disabled");
     }
 
     await audit("thread.memoryMode.set", { threadId, mode: body.mode });
     await getAppServerGateway().setThreadMemoryMode(threadId, body.mode);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法切换记忆模式" },
-      { status: 502 }
-    );
+    return serverError(error, "无法切换记忆模式");
   }
 }

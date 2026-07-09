@@ -1,32 +1,43 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 function positiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new RouteValidationError("尺寸必须是正整数");
+  }
+
+  return value;
 }
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ processId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { processId } = await context.params;
-    const body = (await request.json()) as { cols?: number; rows?: number };
+    const body = await readJsonRecord(request);
     const cols = positiveInteger(body.cols, 80);
     const rows = positiveInteger(body.rows, 24);
     await audit("commandExec.resize", { processId, cols, rows });
     await getAppServerGateway().resizeCommandExecSession(processId, cols, rows);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法调整 command exec 尺寸" },
-      { status: 502 }
-    );
+    return serverError(error, "无法调整 command exec 尺寸");
   }
 }

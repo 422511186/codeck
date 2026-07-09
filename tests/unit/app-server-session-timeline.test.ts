@@ -74,6 +74,37 @@ describe("app-server session timeline merge", () => {
     });
   });
 
+  it("can restrict context usage parsing to a bounded tail window", () => {
+    const oldUsage = JSON.stringify({
+      timestamp: "2026-07-04T19:00:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 1000,
+            output_tokens: 200,
+            reasoning_output_tokens: 50,
+            total_tokens: 1250
+          },
+          model_context_window: 200000
+        }
+      }
+    });
+    const jsonl = [
+      oldUsage,
+      JSON.stringify({ type: "response_item", payload: { type: "message", text: "tail one" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", text: "tail two" } })
+    ].join("\n");
+
+    expect(latestSessionContextUsage(jsonl, { maxTailLines: 2 })).toBeNull();
+    expect(latestSessionContextUsage(jsonl)).toEqual(
+      expect.objectContaining({
+        totalTokens: 1250
+      })
+    );
+  });
+
   it("places unanchored JSONL tool activity before the final assistant message", () => {
     const baseItems: MobileTimelineItem[] = [
       {
@@ -122,5 +153,77 @@ describe("app-server session timeline merge", () => {
       tool: "rg timeline src",
       status: "success"
     });
+  });
+
+  it("only supplements records for the allowed timeline window turns", () => {
+    const baseItems: MobileTimelineItem[] = [
+      {
+        id: "user-1",
+        turnId: "turn-1",
+        turnIndex: 0,
+        role: "user",
+        text: "当前窗口"
+      },
+      {
+        id: "agent-1",
+        turnId: "turn-1",
+        turnIndex: 0,
+        role: "agent",
+        text: "当前窗口回复"
+      },
+      {
+        id: "user-2",
+        turnId: "turn-2",
+        turnIndex: 1,
+        role: "user",
+        text: "窗口外"
+      },
+      {
+        id: "agent-2",
+        turnId: "turn-2",
+        turnIndex: 1,
+        role: "agent",
+        text: "窗口外回复"
+      }
+    ];
+    const line = (turnId: string, payload: Record<string, unknown>) =>
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          ...payload,
+          internal_chat_message_metadata_passthrough: { turn_id: turnId }
+        }
+      });
+    const jsonl = [
+      line("turn-1", {
+        type: "function_call",
+        id: "tool-current",
+        call_id: "call-current",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg current", workdir: "/repo" })
+      }),
+      line("turn-1", {
+        type: "function_call_output",
+        call_id: "call-current",
+        output: "Process exited with code 0\nOutput:\ncurrent"
+      }),
+      line("turn-2", {
+        type: "function_call",
+        id: "tool-outside",
+        call_id: "call-outside",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg outside", workdir: "/repo" })
+      }),
+      line("turn-2", {
+        type: "function_call_output",
+        call_id: "call-outside",
+        output: "Process exited with code 0\nOutput:\noutside"
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl, { allowedTurnIds: new Set(["turn-1"]) });
+
+    expect(merged.map((item) => item.id)).toContain("tool-current");
+    expect(merged.map((item) => item.id)).not.toContain("tool-outside");
   });
 });

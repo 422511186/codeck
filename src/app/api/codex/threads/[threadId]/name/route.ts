@@ -1,31 +1,31 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  requireNonEmptyString,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { name?: string };
-    const name = body.name?.trim();
-    if (!name) {
-      return NextResponse.json({ ok: false, error: "会话名称不能为空" }, { status: 400 });
-    }
+    const body = await readJsonRecord(request);
+    const name = requireNonEmptyString(body.name, "会话名称");
 
     await audit("thread.name.set", { threadId, name });
     const thread = await getAppServerGateway().setThreadName(threadId, name);
-    return NextResponse.json({ ok: true, thread });
+    return ok({ thread });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法重命名会话" },
-      { status: 502 }
-    );
+    return serverError(error, "无法重命名会话");
   }
 }

@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { getRuntimeConfig } from "./runtime";
 import { assertPathAllowed, normalizeWorkspaceRoots } from "./workspace-policy";
 
@@ -20,7 +19,7 @@ export async function readPreviewImage(candidatePath: string): Promise<{ bytes: 
   }
 
   const config = getRuntimeConfig();
-  const roots = normalizeWorkspaceRoots([...config.workspaceRoots, config.uploadDir, tmpdir()]);
+  const roots = normalizeWorkspaceRoots([...config.workspaceRoots, config.uploadDir]);
   const allowedPath = assertPathAllowed(candidatePath, roots);
   const bytes = await readFile(resolve(allowedPath));
 

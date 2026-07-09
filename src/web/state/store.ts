@@ -7,6 +7,7 @@ import {
   type ContextUsageSnapshot
 } from "../storage/contextUsage";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
+import { applyTimelineInput, createTimelineEngineState, selectTimelineEntries } from "./timeline-engine";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
 export type { WsConnectionState };
@@ -297,7 +298,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   replaceOrAddEntry: (threadId, entry) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const idx = findEntryIndexById(prev, entry.id);
+      const idx = findEntryIndexForEntry(prev, entry);
       const equivalentOutputIndex = idx >= 0 ? -1 : findEquivalentOutputIndex(prev.entries, entry);
       const confirmedLocalIndex = idx >= 0 || equivalentOutputIndex >= 0 ? -1 : findConfirmableLocalUserIndex(prev, entry);
       const entryToAdd =
@@ -334,7 +335,7 @@ export const useStore = create<State & Actions>((set, get) => ({
   appendTextToEntry: (threadId, entry) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const idx = findEntryIndexById(prev, entry.id);
+      const idx = findEntryIndexForEntry(prev, entry);
       let appendedExisting = false;
       let normalizeAfterAppend = false;
       const nextEntries = idx >= 0 ? prev.entries.slice() : [...prev.entries, entry];
@@ -381,7 +382,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         createdAt: Date.now(),
         body: { kind: "reasoning", text: "", done: false }
       };
-      const existingIndex = findEntryIndexById(prev, itemId);
+      const existingIndex = findEntryIndexForEntry(prev, entry);
       const pendingIndex = existingIndex >= 0 ? -1 : findEntryIndexById(prev, pendingId);
       const nextEntries =
         existingIndex >= 0
@@ -416,7 +417,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         createdAt: Date.now(),
         body: { kind: "reasoning", text: delta, done: false }
       };
-      const existingIndex = findEntryIndexById(prev, itemId);
+      const existingIndex = findEntryIndexForEntry(prev, deltaEntry);
       const pendingIndex = existingIndex >= 0 ? -1 : findEntryIndexById(prev, pendingId);
       const appendedExisting = existingIndex >= 0 && prev.entries[existingIndex]?.body.kind === "reasoning";
       const replacedPending = !appendedExisting && pendingIndex >= 0;
@@ -1083,7 +1084,7 @@ function mergeTimelineEntries(
     merged[currentIndex] = shouldReplaceLiveEntry(currentEntry, snapshotEntry) ? snapshotEntry : currentEntry;
   }
 
-  return normalizeTimelineEntries(merged);
+  return normalizeTimelineEntriesWithEngine(merged);
 }
 
 function shouldReplaceLiveEntry(current: TimelineEntry, snapshot: TimelineEntry): boolean {
@@ -1101,7 +1102,7 @@ function shouldReplaceLiveEntry(current: TimelineEntry, snapshot: TimelineEntry)
 
 function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
   timelineDiagnostics.normalizeRuns += 1;
-  return orderTimelineEntries(
+  return normalizeTimelineEntriesWithEngine(
     mergeEquivalentOutputEntries(
       removeAdjacentDuplicateUserMessages(
         removeDuplicateConfirmedUserMessages(
@@ -1109,6 +1110,15 @@ function normalizeTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
         )
       )
     )
+  );
+}
+
+function normalizeTimelineEntriesWithEngine(entries: TimelineEntry[]): TimelineEntry[] {
+  return selectTimelineEntries(
+    applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries
+    })
   );
 }
 
@@ -1136,6 +1146,36 @@ function findEntryIndexById(state: ThreadState, id: string): number {
   }
   timelineDiagnostics.linearEntryScans += state.entries.length;
   return state.entries.findIndex((entry) => entry.id === id);
+}
+
+function findEntryIndexForEntry(state: ThreadState, entry: TimelineEntry): number {
+  const indexed = state.entryIndexes.byId.get(entry.id);
+  if (
+    typeof indexed === "number" &&
+    state.entries[indexed]?.id === entry.id &&
+    isSameTimelineEntryIdentity(state.entries[indexed]!, entry)
+  ) {
+    return indexed;
+  }
+  timelineDiagnostics.linearEntryScans += state.entries.length;
+  return state.entries.findIndex((candidate) => candidate.id === entry.id && isSameTimelineEntryIdentity(candidate, entry));
+}
+
+function isSameTimelineEntryIdentity(current: TimelineEntry, next: TimelineEntry): boolean {
+  if (current.id !== next.id) {
+    return false;
+  }
+  if (
+    typeof current.generation === "number" &&
+    typeof next.generation === "number" &&
+    current.generation !== next.generation
+  ) {
+    return false;
+  }
+  if (current.turnId && next.turnId && current.turnId !== next.turnId) {
+    return false;
+  }
+  return true;
 }
 
 function snapshotDeltaSuppressions(entries: TimelineEntry[]): Map<string, { text: string; offset: number; maxSequence?: number; generation?: number }> {

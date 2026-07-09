@@ -1,34 +1,33 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictNonEmptyString,
+  readJsonRecord,
+  requireNonEmptyString,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { server?: unknown; uri?: unknown; threadId?: unknown };
-    if (typeof body.server !== "string" || !body.server.trim()) {
-      return NextResponse.json({ ok: false, error: "server 不能为空" }, { status: 400 });
-    }
-    if (typeof body.uri !== "string" || !body.uri.trim()) {
-      return NextResponse.json({ ok: false, error: "uri 不能为空" }, { status: 400 });
-    }
-
-    const threadId = typeof body.threadId === "string" && body.threadId.trim() ? body.threadId : null;
-    await audit("mcp.resource.read", { server: body.server, uri: body.uri, threadId });
+    const body = await readJsonRecord(request);
+    const server = requireNonEmptyString(body.server, "server");
+    const uri = requireNonEmptyString(body.uri, "uri");
+    const threadId = optionalStrictNonEmptyString(body.threadId, "threadId") ?? null;
+    await audit("mcp.resource.read", { server, uri, threadId });
     const resource = await getAppServerGateway().readMcpResource({
-      server: body.server,
-      uri: body.uri,
+      server,
+      uri,
       threadId
     });
-    return NextResponse.json({ ok: true, resource });
+    return ok({ resource });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取 MCP 资源" },
-      { status: 502 }
-    );
+    return serverError(error, "无法读取 MCP 资源");
   }
 }

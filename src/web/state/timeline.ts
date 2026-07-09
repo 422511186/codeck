@@ -1,4 +1,5 @@
 import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
+import { selectOrderedDistinctTurnsForEntries } from "./timeline-engine";
 
 export type TimelineEntryKind =
   | "user-message"
@@ -229,15 +230,7 @@ export function rollbackTurnsForEntry(entries: TimelineEntry[], target: Timeline
     return null;
   }
 
-  const turnIds: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.turnId || seen.has(entry.turnId)) {
-      continue;
-    }
-    seen.add(entry.turnId);
-    turnIds.push(entry.turnId);
-  }
+  const turnIds = selectOrderedDistinctTurnsForEntries(entries).map((turn) => turn.turnId);
 
   const targetIndex = turnIds.indexOf(target.turnId);
   if (targetIndex < 0) {

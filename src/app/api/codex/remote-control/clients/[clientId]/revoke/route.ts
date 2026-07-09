@@ -1,30 +1,31 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../../server/auth";
-import { audit } from "../../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readOptionalJsonRecord,
+  requireNonEmptyString,
+  serverError,
+  unauthorized
+} from "../../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ clientId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { clientId } = await context.params;
-    const body = (await request.json().catch(() => ({}))) as { environmentId?: string };
-    if (!body.environmentId) {
-      return NextResponse.json({ ok: false, error: "缺少 environmentId" }, { status: 400 });
-    }
+    const body = await readOptionalJsonRecord(request);
+    const environmentId = requireNonEmptyString(body.environmentId, "environmentId");
 
-    await audit("remoteControl.client.revoke", { environmentId: body.environmentId, clientId });
-    await getAppServerGateway().revokeRemoteControlClient(body.environmentId, clientId);
-    return NextResponse.json({ ok: true });
+    await audit("remoteControl.client.revoke", { environmentId, clientId });
+    await getAppServerGateway().revokeRemoteControlClient(environmentId, clientId);
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法撤销远程客户端" },
-      { status: 502 }
-    );
+    return serverError(error, "无法撤销远程客户端");
   }
 }

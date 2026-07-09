@@ -1,7 +1,12 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { audit } from "../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 type CreditType = "credits" | "usage_limit";
 
@@ -10,23 +15,21 @@ function isCreditType(value: unknown): value is CreditType {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as { creditType?: unknown };
+    const body = await readJsonRecord(request);
     if (!isCreditType(body.creditType)) {
-      return NextResponse.json({ ok: false, error: "creditType 只能是 credits 或 usage_limit" }, { status: 400 });
+      throw new RouteValidationError("creditType 只能是 credits 或 usage_limit");
     }
 
     await audit("account.addCreditsNudge.sendEmail", { creditType: body.creditType });
     const result = await getAppServerGateway().sendAddCreditsNudgeEmail(body.creditType);
-    return NextResponse.json({ ok: true, result });
+    return ok({ result });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法发送加购提醒" },
-      { status: 502 }
-    );
+    return serverError(error, "无法发送加购提醒");
   }
 }

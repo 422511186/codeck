@@ -106,6 +106,25 @@ describe("WebSocketAppServerPeer", () => {
     await expect(pending).rejects.toThrow("app-server disconnected");
     expect(peer.getStatus()).toMatchObject({ state: "idle" });
   });
+
+  it("malformed JSON-RPC frame 会隔离连接并拒绝 pending request", async () => {
+    mockSockets.length = 0;
+    const peer = new WebSocketAppServerPeer("ws://127.0.0.1:31317");
+    const connecting = peer.connect();
+    const socket = mockSockets[0]!;
+    socket.emit("open");
+    await connecting;
+
+    const pending = peer.request("thread/list", {});
+    await Promise.resolve();
+    expect(socket.sent).toHaveLength(1);
+
+    expect(() => socket.emit("message", "{")).not.toThrow();
+
+    await expect(pending).rejects.toThrow("app-server JSON-RPC malformed message");
+    expect(socket.closed).toBe(true);
+    expect(peer.getStatus().state).not.toBe("ready");
+  });
 });
 
 class FakePeer implements ManagedAppServerPeer {

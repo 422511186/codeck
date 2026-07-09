@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import { isRequestAuthenticated } from "../../../../../server/auth";
 import { audit } from "../../../../../server/security";
+import { readJsonRecord } from "../../_route-helpers";
 import { assertConfigEdit } from "../config-write-policy";
 
 export async function POST(request: Request): Promise<Response> {
@@ -10,7 +11,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const body = (await request.json()) as { edits?: unknown };
+    const body = await readJsonRecord(request);
     if (!Array.isArray(body.edits) || !body.edits.length) {
       return NextResponse.json({ ok: false, error: "edits 不能为空" }, { status: 400 });
     }

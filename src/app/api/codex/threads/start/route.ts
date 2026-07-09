@@ -1,12 +1,17 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
 import type { MobileThreadSummary } from "../../../../../shared/codex";
 import {
-  assertRuntimePathAllowed,
-  assertRuntimeWorkspaceRootsAllowed,
-  audit
-} from "../../../../../server/security";
+  assertAllowedPath,
+  assertAllowedWorkspaceRoots,
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictNonEmptyString,
+  optionalStrictNullableString,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 type StartThreadRouteResult = {
   thread: MobileThreadSummary;
@@ -16,23 +21,20 @@ const START_THREAD_CACHE_TTL_MS = 60_000;
 const startThreadCache = new Map<string, { expiresAt: number; promise: Promise<StartThreadRouteResult> }>();
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as {
-      cwd?: string;
-      workspaceRoots?: string[];
-      model?: string;
-      permissions?: string | null;
-      approvalsReviewer?: "user" | "auto_review" | "guardian_subagent" | null;
-      clientOperationId?: string;
-    };
+    const body = await readJsonRecord(request);
     const input = {
-      ...body,
-      cwd: body.cwd ? assertRuntimePathAllowed(body.cwd) : undefined,
-      workspaceRoots: assertRuntimeWorkspaceRootsAllowed(body.workspaceRoots)
+      cwd: body.cwd === undefined ? undefined : assertAllowedPath(body.cwd, "cwd"),
+      workspaceRoots: assertAllowedWorkspaceRoots(body.workspaceRoots),
+      model: optionalStrictNonEmptyString(body.model, "model"),
+      permissions: optionalStrictNullableString(body.permissions, "permissions"),
+      approvalsReviewer: readApprovalsReviewer(body.approvalsReviewer),
+      clientOperationId: optionalStrictNonEmptyString(body.clientOperationId, "clientOperationId")
     };
     await audit("thread.start", {
       cwd: input.cwd,
@@ -40,19 +42,16 @@ export async function POST(request: Request): Promise<Response> {
       model: input.model,
       permissions: input.permissions,
       approvalsReviewer: input.approvalsReviewer,
-      clientOperationId: body.clientOperationId
+      clientOperationId: input.clientOperationId
     });
     const start = () => startThreadOnly(input);
-    const result = body.clientOperationId
-      ? await cachedStartThread(body.clientOperationId, start)
+    const result = input.clientOperationId
+      ? await cachedStartThread(input.clientOperationId, start)
       : await start();
     const thread = result.thread;
-    return NextResponse.json({ ok: true, thread });
+    return ok({ thread });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法启动会话" },
-      { status: 502 }
-    );
+    return serverError(error, "无法启动会话");
   }
 }
 
@@ -100,4 +99,16 @@ function purgeExpiredStartThreads(): void {
       startThreadCache.delete(key);
     }
   }
+}
+
+function readApprovalsReviewer(value: unknown): "user" | "auto_review" | "guardian_subagent" | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (value === "user" || value === "auto_review" || value === "guardian_subagent") {
+    return value;
+  }
+
+  throw new RouteValidationError("approvalsReviewer 无效");
 }

@@ -1,31 +1,34 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../../server/auth";
-import { audit } from "../../../../../../../server/security";
 import type { MobileJsonValue } from "../../../../../../../shared/codex";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { items?: unknown };
+    const body = await readJsonRecord(request);
     if (!Array.isArray(body.items)) {
-      return NextResponse.json({ ok: false, error: "items 必须是数组" }, { status: 400 });
+      throw new RouteValidationError("items 必须是数组");
     }
 
     await audit("thread.items.inject", { threadId, count: body.items.length });
     await getAppServerGateway().injectThreadItems(threadId, body.items as MobileJsonValue[]);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法注入会话 items" },
-      { status: 502 }
-    );
+    return serverError(error, "无法注入会话 items");
   }
 }

@@ -1,10 +1,22 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
 import type { StartTurnInput } from "../../../../../server/app-server/client";
 import type { MobileSkillReference } from "../../../../../shared/codex";
-import { isRequestAuthenticated } from "../../../../../server/auth";
 import { getRuntimeConfig } from "../../../../../server/runtime";
-import { assertRuntimePathAllowed, audit } from "../../../../../server/security";
+import {
+  assertAllowedPath,
+  audit,
+  getAppServerGateway,
+  isRecord,
+  ok,
+  optionalStrictNonEmptyString,
+  optionalStrictNullableString,
+  optionalStrictString,
+  optionalStrictStringArray,
+  readJsonRecord,
+  requireNonEmptyString,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 type StartTurnRouteResult = {
   turnId: string;
@@ -14,77 +26,66 @@ const START_TURN_CACHE_TTL_MS = 60_000;
 const startTurnCache = new Map<string, { expiresAt: number; promise: Promise<StartTurnRouteResult> }>();
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json()) as {
-      threadId?: string;
-      text?: string;
-      imagePaths?: string[];
-      skillReferences?: unknown;
-      clientUserMessageId?: string;
-      model?: string;
-      reasoningEffort?: string;
-      reasoningSummary?: string;
-      permissions?: string | null;
-      approvalsReviewer?: StartTurnInput["approvalsReviewer"];
-      additionalContext?: StartTurnInput["additionalContext"];
-      collaborationMode?: StartTurnInput["collaborationMode"];
-    };
-
-    if (!body.threadId) {
-      return NextResponse.json({ ok: false, error: "threadId 不能为空" }, { status: 400 });
-    }
-
-    if (!body.text?.trim()) {
-      return NextResponse.json({ ok: false, error: "消息不能为空" }, { status: 400 });
-    }
+    const body = await readJsonRecord(request);
+    const threadId = requireNonEmptyString(body.threadId, "threadId");
+    const text = requireNonEmptyString(body.text, "消息");
 
     const config = getRuntimeConfig();
-    const imagePaths = body.imagePaths?.map((imagePath) => assertRuntimePathAllowed(imagePath, [config.uploadDir]));
+    const imagePaths = optionalStrictStringArray(body.imagePaths, "imagePaths")?.map((imagePath) =>
+      assertAllowedPath(imagePath, "imagePath", [config.uploadDir])
+    );
     const skillReferences = normalizeSkillReferences(body.skillReferences);
     if (skillReferences.length) {
-      await assertSkillReferencesAllowed(body.threadId, skillReferences);
+      await assertSkillReferencesAllowed(threadId, skillReferences);
     }
+    const clientUserMessageId = optionalStrictNonEmptyString(body.clientUserMessageId, "clientUserMessageId");
+    const model = optionalStrictNonEmptyString(body.model, "model");
+    const reasoningEffort = optionalStrictNonEmptyString(body.reasoningEffort, "reasoningEffort");
+    const reasoningSummary = normalizeReasoningSummary(body.reasoningSummary);
+    const permissions = optionalStrictNullableString(body.permissions, "permissions");
+    const approvalsReviewer = readApprovalsReviewer(body.approvalsReviewer);
+    const additionalContext = readAdditionalContext(body.additionalContext);
+    const collaborationMode = readCollaborationMode(body.collaborationMode);
     await audit("turn.start", {
-      threadId: body.threadId,
-      textLength: body.text.length,
+      threadId,
+      textLength: text.length,
       imageCount: imagePaths?.length || 0,
       skillCount: skillReferences.length,
-      clientUserMessageId: body.clientUserMessageId,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      reasoningSummary: body.reasoningSummary,
-      permissions: body.permissions,
-      approvalsReviewer: body.approvalsReviewer,
-      additionalContext: body.additionalContext,
-      collaborationMode: body.collaborationMode
+      clientUserMessageId,
+      model,
+      reasoningEffort,
+      reasoningSummary,
+      permissions,
+      approvalsReviewer,
+      additionalContext,
+      collaborationMode
     });
     const start = () => startTurnOnly({
-      threadId: body.threadId!,
-      text: body.text!,
+      threadId,
+      text,
       imagePaths,
       skillReferences,
-      clientUserMessageId: body.clientUserMessageId,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      reasoningSummary: normalizeReasoningSummary(body.reasoningSummary),
-      permissions: body.permissions,
-      approvalsReviewer: body.approvalsReviewer,
-      additionalContext: body.additionalContext,
-      collaborationMode: body.collaborationMode
+      clientUserMessageId,
+      model,
+      reasoningEffort,
+      reasoningSummary,
+      permissions,
+      approvalsReviewer,
+      additionalContext,
+      collaborationMode
     });
-    const cacheKey = startTurnCacheKey(body.threadId, body.clientUserMessageId);
+    const cacheKey = startTurnCacheKey(threadId, clientUserMessageId);
     const { turnId } = cacheKey ? await cachedStartTurn(cacheKey, start) : await start();
 
-    return NextResponse.json({ ok: true, turnId });
+    return ok({ turnId });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法发送消息" },
-      { status: 502 }
-    );
+    return serverError(error, "无法发送消息");
   }
 }
 
@@ -134,21 +135,38 @@ function startTurnCacheKey(threadId: string, clientUserMessageId: string | undef
 }
 
 function normalizeReasoningSummary(value: unknown): StartTurnInput["reasoningSummary"] {
-  return value === "auto" || value === "concise" || value === "detailed" || value === "none"
-    ? value
-    : undefined;
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const summary = optionalStrictString(value, "reasoningSummary");
+  if (summary === "auto" || summary === "concise" || summary === "detailed" || summary === "none") {
+    return summary;
+  }
+
+  throw new RouteValidationError("reasoningSummary 无效");
 }
 
 function normalizeSkillReferences(value: unknown): MobileSkillReference[] {
-  if (!Array.isArray(value)) {
+  if (value === undefined || value === null) {
     return [];
   }
 
+  if (!Array.isArray(value)) {
+    throw new RouteValidationError("skillReferences 必须是数组");
+  }
+
   return value.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new RouteValidationError("skillReferences 必须是对象数组");
+    }
     const candidate = item as { name?: unknown; path?: unknown };
+    if (typeof candidate.name !== "string" || typeof candidate.path !== "string") {
+      throw new RouteValidationError("skillReferences 必须包含 name 和 path");
+    }
     return {
-      name: typeof candidate.name === "string" ? candidate.name.trim() : "",
-      path: typeof candidate.path === "string" ? candidate.path.trim() : ""
+      name: candidate.name.trim(),
+      path: candidate.path.trim()
     };
   });
 }
@@ -167,4 +185,40 @@ async function assertSkillReferencesAllowed(threadId: string, skillReferences: M
       throw new Error(`Skill 不可用：${skill.name || skill.path}`);
     }
   }
+}
+
+function readApprovalsReviewer(value: unknown): StartTurnInput["approvalsReviewer"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (value === "user" || value === "auto_review" || value === "guardian_subagent") {
+    return value;
+  }
+
+  throw new RouteValidationError("approvalsReviewer 无效");
+}
+
+function readAdditionalContext(value: unknown): StartTurnInput["additionalContext"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (!isRecord(value)) {
+    throw new RouteValidationError("additionalContext 必须是对象");
+  }
+
+  return value as StartTurnInput["additionalContext"];
+}
+
+function readCollaborationMode(value: unknown): StartTurnInput["collaborationMode"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (!isRecord(value) || typeof value.mode !== "string" || !isRecord(value.settings)) {
+    throw new RouteValidationError("collaborationMode 无效");
+  }
+
+  return value as StartTurnInput["collaborationMode"];
 }

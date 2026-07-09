@@ -425,9 +425,21 @@ function contextUsageFromTokenCountRecord(
   };
 }
 
-export function latestSessionContextUsage(jsonl: string): MobileThreadContextUsage | null {
+export type LatestSessionContextUsageOptions = {
+  maxTailLines?: number;
+};
+
+export function latestSessionContextUsage(
+  jsonl: string,
+  options: LatestSessionContextUsageOptions = {}
+): MobileThreadContextUsage | null {
   let latest: MobileThreadContextUsage | null = null;
-  for (const line of jsonl.split(/\r?\n/)) {
+  const lines = jsonl.split(/\r?\n/);
+  const tailLines =
+    typeof options.maxTailLines === "number" && Number.isFinite(options.maxTailLines) && options.maxTailLines > 0
+      ? lines.slice(-Math.floor(options.maxTailLines))
+      : lines;
+  for (const line of tailLines) {
     if (!line.trim()) {
       continue;
     }
@@ -629,7 +641,15 @@ function fallbackToolInsertIndex(items: MobileTimelineItem[]): number {
   return firstAgentIndex >= 0 ? firstAgentIndex : items.length;
 }
 
-export function mergeSessionTimelineItems(baseItems: MobileTimelineItem[], jsonl: string): MobileTimelineItem[] {
+export type MergeSessionTimelineItemsOptions = {
+  allowedTurnIds?: ReadonlySet<string>;
+};
+
+export function mergeSessionTimelineItems(
+  baseItems: MobileTimelineItem[],
+  jsonl: string,
+  options: MergeSessionTimelineItemsOptions = {}
+): MobileTimelineItem[] {
   const records = sessionTimelineRecords(jsonl);
   if (!records.length || !baseItems.length) {
     return baseItems;
@@ -637,6 +657,9 @@ export function mergeSessionTimelineItems(baseItems: MobileTimelineItem[], jsonl
 
   const recordsByTurn = new Map<string, SessionTimelineRecord[]>();
   for (const record of records) {
+    if (options.allowedTurnIds && !options.allowedTurnIds.has(record.turnId)) {
+      continue;
+    }
     const list = recordsByTurn.get(record.turnId) ?? [];
     list.push(record);
     recordsByTurn.set(record.turnId, list);

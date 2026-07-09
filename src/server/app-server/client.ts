@@ -300,6 +300,16 @@ import type {
 } from "../../shared/codex";
 import { createTurnUserInput } from "./user-input";
 
+const DEFAULT_TIMELINE_PAGE_LIMIT = 30;
+const MAX_TIMELINE_PAGE_LIMIT = 100;
+
+function timelinePageLimit(limit: number | null | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return DEFAULT_TIMELINE_PAGE_LIMIT;
+  }
+  return Math.max(1, Math.min(Math.floor(limit), MAX_TIMELINE_PAGE_LIMIT));
+}
+
 export type AppServerPeer = {
   request(method: string, params: unknown): Promise<unknown>;
   notify?(method: string, params?: unknown): void | Promise<void>;
@@ -2525,7 +2535,7 @@ export class CodexAppServerClient {
     const params: ThreadTurnsListParams = {
       threadId: input.threadId,
       cursor: input.cursor,
-      limit: input.limit,
+      limit: timelinePageLimit(input.limit),
       sortDirection: "desc",
       itemsView: "full"
     };
@@ -2542,7 +2552,7 @@ export class CodexAppServerClient {
       threadId: input.threadId,
       turnId: input.turnId,
       cursor: input.cursor,
-      limit: input.limit
+      limit: timelinePageLimit(input.limit)
     };
     const response = (await this.peer.request("thread/turns/items/list", params)) as ThreadTurnsItemsListResponse;
 

@@ -1,47 +1,76 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
 import type { UpdateThreadSettingsInput } from "../../../../../../server/app-server/client";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  isRecord,
+  ok,
+  optionalStrictNonEmptyString,
+  optionalStrictNullableString,
+  readJsonRecord,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as {
-      model?: string;
-      reasoningEffort?: string;
-      permissions?: string | null;
-      approvalsReviewer?: UpdateThreadSettingsInput["approvalsReviewer"];
-      collaborationMode?: UpdateThreadSettingsInput["collaborationMode"];
-    };
+    const body = await readJsonRecord(request);
+    const model = optionalStrictNonEmptyString(body.model, "model");
+    const reasoningEffort = optionalStrictNonEmptyString(body.reasoningEffort, "reasoningEffort");
+    const permissions = optionalStrictNullableString(body.permissions, "permissions");
+    const approvalsReviewer = readApprovalsReviewer(body.approvalsReviewer);
+    const collaborationMode = readCollaborationMode(body.collaborationMode);
     await audit("thread.settings.update", {
       threadId,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions,
-      approvalsReviewer: body.approvalsReviewer,
-      collaborationMode: body.collaborationMode
+      model,
+      reasoningEffort,
+      permissions,
+      approvalsReviewer,
+      collaborationMode
     });
     await getAppServerGateway().updateThreadSettings({
       threadId,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      permissions: body.permissions,
-      approvalsReviewer: body.approvalsReviewer,
-      collaborationMode: body.collaborationMode
+      model,
+      reasoningEffort,
+      permissions,
+      approvalsReviewer,
+      collaborationMode
     });
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法更新会话设置" },
-      { status: 502 }
-    );
+    return serverError(error, "无法更新会话设置");
   }
+}
+
+function readApprovalsReviewer(value: unknown): UpdateThreadSettingsInput["approvalsReviewer"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (value === "user" || value === "auto_review" || value === "guardian_subagent") {
+    return value;
+  }
+
+  throw new RouteValidationError("approvalsReviewer 无效");
+}
+
+function readCollaborationMode(value: unknown): UpdateThreadSettingsInput["collaborationMode"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (!isRecord(value) || typeof value.mode !== "string" || !isRecord(value.settings)) {
+    throw new RouteValidationError("collaborationMode 无效");
+  }
+
+  return value as UpdateThreadSettingsInput["collaborationMode"];
 }

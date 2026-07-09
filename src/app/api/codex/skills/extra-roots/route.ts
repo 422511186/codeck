@@ -1,23 +1,26 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../server/auth";
-import { audit } from "../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictStringArray,
+  readOptionalJsonRecord,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json().catch(() => ({}))) as { extraRoots?: string[] };
-    const extraRoots = Array.isArray(body.extraRoots) ? body.extraRoots : [];
+    const body = await readOptionalJsonRecord(request);
+    const extraRoots = optionalStrictStringArray(body.extraRoots, "extraRoots") ?? [];
     await audit("skills.extraRoots.set", { count: extraRoots.length });
     await getAppServerGateway().setSkillsExtraRoots(extraRoots);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法设置 Skill 根目录" },
-      { status: 502 }
-    );
+    return serverError(error, "无法设置 Skill 根目录");
   }
 }

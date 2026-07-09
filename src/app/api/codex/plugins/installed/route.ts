@@ -1,4 +1,13 @@
-import { getAppServerGateway, ok, optionalStringArray, readJsonRecord, serverError, unauthorized } from "../../_route-helpers";
+import {
+  assertAllowedPath,
+  getAppServerGateway,
+  ok,
+  optionalStrictStringArray,
+  optionalStringArray,
+  readJsonRecord,
+  serverError,
+  unauthorized
+} from "../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
   const auth = unauthorized(request);
@@ -8,8 +17,9 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const body = await readJsonRecord(request);
+    const cwds = optionalStrictStringArray(body.cwds, "cwds")?.map((cwd) => assertAllowedPath(cwd, "cwd"));
     const result = await getAppServerGateway().listInstalledPlugins({
-      cwds: optionalStringArray(body.cwds),
+      cwds,
       installSuggestionPluginNames: optionalStringArray(body.installSuggestionPluginNames)
     });
     return ok({ result });

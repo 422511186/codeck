@@ -1,30 +1,31 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  requireNonEmptyString,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { command?: unknown };
-    if (typeof body.command !== "string" || !body.command.trim()) {
-      return NextResponse.json({ ok: false, error: "command 不能为空" }, { status: 400 });
-    }
+    const body = await readJsonRecord(request);
+    const command = requireNonEmptyString(body.command, "command");
 
-    await audit("thread.shellCommand", { threadId, command: body.command });
-    await getAppServerGateway().runThreadShellCommand(threadId, body.command);
-    return NextResponse.json({ ok: true });
+    await audit("thread.shellCommand", { threadId, command });
+    await getAppServerGateway().runThreadShellCommand(threadId, command);
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法执行会话 shell command" },
-      { status: 502 }
-    );
+    return serverError(error, "无法执行会话 shell command");
   }
 }

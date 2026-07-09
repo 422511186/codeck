@@ -1,64 +1,68 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  readJsonRecord,
+  requireNonEmptyString,
+  RouteValidationError,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
-    const body = (await request.json()) as { objective?: string; tokenBudget?: number | null };
-    const objective = body.objective?.trim();
-    if (!objective) {
-      return NextResponse.json({ ok: false, error: "会话目标不能为空" }, { status: 400 });
-    }
+    const body = await readJsonRecord(request);
+    const objective = requireNonEmptyString(body.objective, "会话目标");
+    const tokenBudget = readTokenBudget(body.tokenBudget);
 
-    if (
-      body.tokenBudget !== null &&
-      body.tokenBudget !== undefined &&
-      (!Number.isFinite(body.tokenBudget) || body.tokenBudget < 0)
-    ) {
-      return NextResponse.json({ ok: false, error: "token budget 必须是非负数字" }, { status: 400 });
-    }
-
-    await audit("thread.goal.set", { threadId, objectiveLength: objective.length, tokenBudget: body.tokenBudget });
+    await audit("thread.goal.set", { threadId, objectiveLength: objective.length, tokenBudget });
     const goal = await getAppServerGateway().setThreadGoal({
       threadId,
       objective,
-      tokenBudget: body.tokenBudget
+      tokenBudget
     });
-    return NextResponse.json({ ok: true, goal });
+    return ok({ goal });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法设置会话目标" },
-      { status: 502 }
-    );
+    return serverError(error, "无法设置会话目标");
   }
+}
+
+function readTokenBudget(value: unknown): number | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new RouteValidationError("token budget 必须是非负数字");
+  }
+
+  return value;
 }
 
 export async function DELETE(
   request: Request,
   context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
     const { threadId } = await context.params;
     await audit("thread.goal.clear", { threadId });
     await getAppServerGateway().clearThreadGoal(threadId);
-    return NextResponse.json({ ok: true });
+    return ok();
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法清除会话目标" },
-      { status: 502 }
-    );
+    return serverError(error, "无法清除会话目标");
   }
 }

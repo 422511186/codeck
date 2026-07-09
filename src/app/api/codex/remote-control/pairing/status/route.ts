@@ -1,31 +1,33 @@
-import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
-import { isRequestAuthenticated } from "../../../../../../server/auth";
-import { audit } from "../../../../../../server/security";
+import {
+  audit,
+  getAppServerGateway,
+  ok,
+  optionalStrictNullableString,
+  readOptionalJsonRecord,
+  serverError,
+  unauthorized
+} from "../../../_route-helpers";
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isRequestAuthenticated(request)) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+  const auth = unauthorized(request);
+  if (auth) {
+    return auth;
   }
 
   try {
-    const body = (await request.json().catch(() => ({}))) as {
-      pairingCode?: string | null;
-      manualPairingCode?: string | null;
-    };
+    const body = await readOptionalJsonRecord(request);
+    const pairingCode = optionalStrictNullableString(body.pairingCode, "pairingCode");
+    const manualPairingCode = optionalStrictNullableString(body.manualPairingCode, "manualPairingCode");
     await audit("remoteControl.pairing.status", {
-      hasPairingCode: Boolean(body.pairingCode),
-      hasManualPairingCode: Boolean(body.manualPairingCode)
+      hasPairingCode: Boolean(pairingCode),
+      hasManualPairingCode: Boolean(manualPairingCode)
     });
     const pairingStatus = await getAppServerGateway().readRemoteControlPairingStatus({
-      pairingCode: body.pairingCode ?? null,
-      manualPairingCode: body.manualPairingCode ?? null
+      pairingCode: pairingCode ?? null,
+      manualPairingCode: manualPairingCode ?? null
     });
-    return NextResponse.json({ ok: true, pairingStatus });
+    return ok({ pairingStatus });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取配对状态" },
-      { status: 502 }
-    );
+    return serverError(error, "无法读取配对状态");
   }
 }
