@@ -7,7 +7,7 @@ import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoint
 import { ApiError } from "../../../web/api/client";
 import { createRequestCoordinator, isRequestAbort } from "../../../web/api/requestCoordinator";
 import { useStore } from "../../../web/state/store";
-import { rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
+import { hasVisibleTurnOutput, rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
@@ -428,14 +428,14 @@ export default function ThreadPage(): JSX.Element {
           }
         } else {
           const activeTurnId = currentThread?.activeTurnId ?? null;
-          const hasAssistantOutput = Boolean(
-            activeTurnId && hasAssistantMessageOutputForStartedTurn(currentThread?.entries ?? [], activeTurnId)
+          const hasVisibleOutput = Boolean(
+            activeTurnId && hasVisibleTurnOutput(currentThread?.entries ?? [], activeTurnId)
           );
           compactActionPendingRef.current = false;
           setCompactPending(false);
           if (
             activeTurnId &&
-            !hasAssistantOutput &&
+            !hasVisibleOutput &&
             !hasEquivalentPendingCompletionRepair(currentThread?.repairRequest, activeTurnId)
           ) {
             requestSnapshotRepair(threadId, {
@@ -605,7 +605,7 @@ export default function ThreadPage(): JSX.Element {
           const currentThread = useStore.getState().threads[threadId];
           if (currentThread?.running) {
             setActiveTurnId(threadId, started.turnId);
-          } else if (!hasAssistantMessageOutputForStartedTurn(currentThread?.entries ?? [], started.turnId)) {
+          } else if (!hasVisibleTurnOutput(currentThread?.entries ?? [], started.turnId)) {
             requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: started.turnId
@@ -2326,12 +2326,6 @@ function cachedThreadDetailFromState(
     nextCursor: null,
     timeline: []
   };
-}
-
-function hasAssistantMessageOutputForStartedTurn(entries: TimelineEntry[], turnId: string): boolean {
-  return entries.some((entry) => {
-    return entry.turnId === turnId && entry.body.kind === "agent-message" && entry.body.text.trim().length > 0;
-  });
 }
 
 function restorePrependScrollAnchor(

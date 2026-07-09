@@ -36,7 +36,7 @@ export function DiffView({
   const preview = createTextPreview(diff, { maxLines, maxChars });
   const rows = parseUnifiedDiff(preview.preview);
   const gutterWidth = lineNumberGutterWidth(rows);
-  const gridTemplateColumns = `${gutterWidth}px ${gutterWidth}px 18px minmax(0, 1fr)`;
+  const gridTemplateColumns = `${gutterWidth}px 16px minmax(0, 1fr)`;
 
   return (
     <>
@@ -78,8 +78,7 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
         }}
       >
         <span style={gutterStyle} />
-        <span style={gutterStyle} />
-        <span style={markerStyle}>{row.kind === "hunk" ? "@" : ""}</span>
+        <span style={markerStyle} />
         <span style={codeStyle}>{row.text || " "}</span>
       </div>
     );
@@ -87,6 +86,7 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
 
   const isAdd = row.kind === "add";
   const isRemove = row.kind === "remove";
+  const lineNumber = row.kind === "add" ? row.newLine : row.kind === "remove" ? row.oldLine : row.newLine ?? row.oldLine;
   return (
     <div
       style={{
@@ -95,8 +95,7 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
         background: isAdd ? "rgba(34,197,94,0.12)" : isRemove ? "rgba(239,68,68,0.12)" : "transparent"
       }}
     >
-      <span style={gutterStyle}>{row.oldLine ?? ""}</span>
-      <span style={gutterStyle}>{row.newLine ?? ""}</span>
+      <span style={gutterStyle}>{lineNumber ?? ""}</span>
       <span style={{ ...markerStyle, color: isAdd ? "var(--cw-success)" : isRemove ? "var(--cw-danger)" : "var(--cw-fg-muted)" }}>
         {row.marker}
       </span>
@@ -115,7 +114,7 @@ function lineNumberGutterWidth(rows: DiffRow[]): number {
     return Math.max(max, row.oldLine ?? 0, row.newLine ?? 0);
   }, 0);
   const digits = Math.max(2, String(maxLine || 0).length);
-  return Math.max(28, Math.min(44, digits * 8 + 12));
+  return Math.max(32, Math.min(52, digits * 8 + 12));
 }
 
 function parseUnifiedDiff(diff: string): DiffRow[] {

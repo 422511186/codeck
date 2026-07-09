@@ -23,6 +23,116 @@ describe("Timeline", () => {
     vi.useRealTimers();
   });
 
+  it("为用户、助手和 activity 消息显示相对时间", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00.000Z"));
+    const now = Date.now();
+
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "user-1",
+            turnId: "turn-1",
+            createdAt: now - 3 * 60 * 1000,
+            body: {
+              kind: "user-message",
+              text: "请分析 timeline",
+              status: "sent"
+            }
+          },
+          {
+            id: "agent-1",
+            turnId: "turn-1",
+            createdAt: now - 2 * 24 * 60 * 60 * 1000,
+            body: {
+              kind: "agent-message",
+              text: "分析完成"
+            }
+          },
+          {
+            id: "tool-1",
+            turnId: "turn-1",
+            createdAt: now - 10 * 60 * 1000,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "rg timeline src",
+              status: "success",
+              result: "src/web/components/Timeline.tsx"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("3 分钟前")).toBeInTheDocument();
+    expect(screen.getByText("2 天前")).toBeInTheDocument();
+    expect(screen.getByText("10 分钟前")).toBeInTheDocument();
+  });
+
+  it("不为排序占位 createdAt 显示错误的远古相对时间", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00.000Z"));
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "agent-placeholder-created-at",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "这条消息只有排序占位时间"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("这条消息只有排序占位时间")).toBeInTheDocument();
+    expect(screen.queryByText("56 年前")).not.toBeInTheDocument();
+    expect(container.querySelector("time")).toBeNull();
+  });
+
+  it("Markdown 长内容不会撑出 timeline 横向滚动", () => {
+    const longWord = "x".repeat(240);
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "agent-wide-markdown",
+            createdAt: Date.parse("2026-07-09T12:00:00.000Z"),
+            body: {
+              kind: "agent-message",
+              text: [
+                `普通长词 ${longWord}`,
+                "",
+                "| State | Very long column |",
+                "| --- | --- |",
+                `| A | ${longWord} |`,
+                "",
+                "```text",
+                longWord,
+                "```"
+              ].join("\n")
+            }
+          }
+        ]}
+      />
+    );
+
+    const row = container.querySelector("[data-timeline-row='true']");
+    const markdown = container.querySelector(".cw-markdown");
+    const codeBlock = container.querySelector("pre");
+    const tableScroller = container.querySelector("[data-markdown-table-scroll='true']");
+
+    expect(row).toHaveStyle({ maxWidth: "100%", minWidth: "0" });
+    expect(markdown).toHaveStyle({ maxWidth: "100%", minWidth: "0", overflowX: "hidden" });
+    expect(codeBlock).toHaveStyle({ maxWidth: "100%", overflowX: "auto" });
+    expect(tableScroller).toHaveStyle({ maxWidth: "100%", overflowX: "auto" });
+  });
+
   it("把 Default 模式工具不可用提示作为普通 Markdown 文本展示，不生成 question 卡片", () => {
     render(
       <Timeline
@@ -509,6 +619,41 @@ describe("Timeline", () => {
     await user.click(screen.getByRole("button", { name: "Read src/app.ts" }));
 
     expect(screen.getByText("content")).toBeInTheDocument();
+  });
+
+  it("inline activity 展开长文本时只挂载有界预览", async () => {
+    const user = userEvent.setup();
+    const longOutput = Array.from({ length: 160 }, (_value, index) => `output-line-${index}`).join("\n");
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "cmd-long-output",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "success",
+              result: longOutput
+            }
+          }
+        ]}
+      />
+    );
+
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
+
+    expect(
+      screen.getByText((_content, element) => element?.tagName.toLowerCase() === "pre" && Boolean(element.textContent?.includes("output-line-0")))
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText((_content, element) => element?.tagName.toLowerCase() === "pre" && Boolean(element.textContent?.includes("output-line-159")))
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/已截断/)).toBeInTheDocument();
   });
 
   it("失败活动使用中文状态并在展开后直接显示错误详情", async () => {

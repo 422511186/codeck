@@ -1958,7 +1958,7 @@ describe("ThreadPage", () => {
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
 
-  it("should request snapshot repair when summary becomes idle with only tool output", async () => {
+  it("should not request snapshot repair when summary becomes idle with only tool output", async () => {
     vi.useFakeTimers();
     mockWsState.mockReturnValue("reconnecting");
     mockReadThread.mockResolvedValue({
@@ -2020,13 +2020,7 @@ describe("ThreadPage", () => {
     });
 
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
-      "thread-1",
-      expect.objectContaining({
-        reason: "summary-idle",
-        turnId: "turn-running"
-      })
-    );
+    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
   });
 
   it("should interrupt the active turn id instead of only toggling local running state", async () => {

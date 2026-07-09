@@ -226,4 +226,63 @@ describe("app-server session timeline merge", () => {
     expect(merged.map((item) => item.id)).toContain("tool-current");
     expect(merged.map((item) => item.id)).not.toContain("tool-outside");
   });
+
+  it("does not let outside-window records consume the supplement record budget", () => {
+    const baseItems: MobileTimelineItem[] = [
+      {
+        id: "user-1",
+        turnId: "turn-1",
+        turnIndex: 0,
+        role: "user",
+        text: "当前窗口"
+      },
+      {
+        id: "agent-1",
+        turnId: "turn-1",
+        turnIndex: 0,
+        role: "agent",
+        text: "当前窗口回复"
+      }
+    ];
+    const line = (turnId: string, payload: Record<string, unknown>) =>
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          ...payload,
+          internal_chat_message_metadata_passthrough: { turn_id: turnId }
+        }
+      });
+    const jsonl = [
+      line("turn-outside", {
+        type: "function_call",
+        id: "tool-outside",
+        call_id: "call-outside",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg outside", workdir: "/repo" })
+      }),
+      line("turn-1", {
+        type: "function_call",
+        id: "tool-current-1",
+        call_id: "call-current-1",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg current 1", workdir: "/repo" })
+      }),
+      line("turn-1", {
+        type: "function_call",
+        id: "tool-current-2",
+        call_id: "call-current-2",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg current 2", workdir: "/repo" })
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl, {
+      allowedTurnIds: new Set(["turn-1"]),
+      maxSupplementRecords: 1
+    });
+
+    expect(merged.map((item) => item.id)).toContain("tool-current-1");
+    expect(merged.map((item) => item.id)).not.toContain("tool-current-2");
+    expect(merged.map((item) => item.id)).not.toContain("tool-outside");
+  });
 });

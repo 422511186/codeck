@@ -154,7 +154,7 @@ describe("DiffCard", () => {
     });
   });
 
-  it("should use compact line number gutters for short diffs", async () => {
+  it("should use one compact line number gutter for mobile diffs", async () => {
     const user = userEvent.setup();
     render(
       <DiffCard
@@ -171,7 +171,7 @@ describe("DiffCard", () => {
 
     const row = screen.getByText("old").closest("div");
     expect(row).not.toBeNull();
-    expect(row!.style.gridTemplateColumns).toBe("28px 28px 18px minmax(0, 1fr)");
+    expect(row!.style.gridTemplateColumns).toBe("32px 16px minmax(0, 1fr)");
   });
 
   it("should cap expanded long diff and copy the complete diff", async () => {

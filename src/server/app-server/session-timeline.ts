@@ -18,6 +18,7 @@ type SessionToolRecord = Extract<SessionTimelineRecord, { kind: "tool" }>;
 
 const SESSION_TOOL_TEXT_LIMIT = 12_000;
 const INTERNAL_CONTROL_TOOL_NAMES = new Set(["update_plan", "write_stdin", "read_thread", "list_threads", "read_thread_terminal"]);
+const DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT = 120;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -462,9 +463,23 @@ export function latestSessionContextUsage(
   return latest;
 }
 
-function sessionTimelineRecords(jsonl: string): SessionTimelineRecord[] {
+type SessionTimelineRecordsOptions = {
+  allowedTurnIds?: ReadonlySet<string>;
+  maxSupplementRecords?: number;
+};
+
+function sessionTimelineRecords(
+  jsonl: string,
+  options: SessionTimelineRecordsOptions = {}
+): SessionTimelineRecord[] {
   const records: SessionTimelineRecord[] = [];
   const byCallId = new Map<string, SessionToolRecord>();
+  const maxSupplementRecords =
+    typeof options.maxSupplementRecords === "number" &&
+    Number.isFinite(options.maxSupplementRecords) &&
+    options.maxSupplementRecords > 0
+      ? Math.floor(options.maxSupplementRecords)
+      : Number.POSITIVE_INFINITY;
   let sequence = 0;
 
   for (const line of jsonl.split(/\r?\n/)) {
@@ -488,18 +503,24 @@ function sessionTimelineRecords(jsonl: string): SessionTimelineRecord[] {
     if (!turnId) {
       continue;
     }
+    if (options.allowedTurnIds && !options.allowedTurnIds.has(turnId)) {
+      continue;
+    }
 
     sequence += 1;
 
     if (type === "message" || type === "agent_message") {
       const text = rawMessageText(payload).trim();
-      if (text) {
+      if (text && records.length < maxSupplementRecords) {
         records.push({ kind: "message", turnId, text, sequence });
       }
       continue;
     }
 
     if (type === "function_call" || type === "custom_tool_call" || type === "tool_search_call") {
+      if (records.length >= maxSupplementRecords) {
+        continue;
+      }
       const record = toolItemFromFunctionCall(payload, turnId, sequence);
       if (record) {
         records.push(record);
@@ -643,6 +664,7 @@ function fallbackToolInsertIndex(items: MobileTimelineItem[]): number {
 
 export type MergeSessionTimelineItemsOptions = {
   allowedTurnIds?: ReadonlySet<string>;
+  maxSupplementRecords?: number;
 };
 
 export function mergeSessionTimelineItems(
@@ -650,16 +672,16 @@ export function mergeSessionTimelineItems(
   jsonl: string,
   options: MergeSessionTimelineItemsOptions = {}
 ): MobileTimelineItem[] {
-  const records = sessionTimelineRecords(jsonl);
+  const records = sessionTimelineRecords(jsonl, {
+    allowedTurnIds: options.allowedTurnIds,
+    maxSupplementRecords: options.maxSupplementRecords ?? DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT
+  });
   if (!records.length || !baseItems.length) {
     return baseItems;
   }
 
   const recordsByTurn = new Map<string, SessionTimelineRecord[]>();
   for (const record of records) {
-    if (options.allowedTurnIds && !options.allowedTurnIds.has(record.turnId)) {
-      continue;
-    }
     const list = recordsByTurn.get(record.turnId) ?? [];
     list.push(record);
     recordsByTurn.set(record.turnId, list);

@@ -93,6 +93,26 @@ export type TimelineEntry = {
     | ErrorEntry;
 };
 
+export function hasVisibleTurnOutput(entries: TimelineEntry[], turnId: string): boolean {
+  return entries.some((entry) => entry.turnId === turnId && isVisibleTurnOutputEntry(entry));
+}
+
+function isVisibleTurnOutputEntry(entry: TimelineEntry): boolean {
+  switch (entry.body.kind) {
+    case "agent-message":
+    case "reasoning":
+    case "system":
+    case "error":
+      return entry.body.text.trim().length > 0;
+    case "tool":
+    case "command":
+    case "diff":
+      return true;
+    case "user-message":
+      return false;
+  }
+}
+
 const localImagePattern = /[A-Za-z]:[\\/][^\r\n]+?\.(?:png|jpe?g|webp|gif)/gi;
 
 function normalizeUserTextAndImages(text: string, imagePaths?: string[]): { text: string; imagePaths?: string[] } {

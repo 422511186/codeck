@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { isValidElement, type ReactNode } from "react";
+import { isValidElement, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -10,7 +10,7 @@ type Props = { text: string };
 
 export function Markdown({ text }: Props): JSX.Element {
   return (
-    <div className="cw-markdown">
+    <div className="cw-markdown" style={markdownRootStyle}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
@@ -29,6 +29,13 @@ export function Markdown({ text }: Props): JSX.Element {
           },
           pre({ children }) {
             return <>{children}</>;
+          },
+          table({ children }) {
+            return (
+              <div data-markdown-table-scroll="true" style={markdownTableScrollStyle}>
+                <table style={markdownTableStyle}>{children}</table>
+              </div>
+            );
           }
         }}
       >
@@ -37,6 +44,25 @@ export function Markdown({ text }: Props): JSX.Element {
     </div>
   );
 }
+
+const markdownRootStyle: CSSProperties = {
+  maxWidth: "100%",
+  minWidth: 0,
+  overflowX: "hidden",
+  overflowWrap: "anywhere"
+};
+
+const markdownTableScrollStyle: CSSProperties = {
+  maxWidth: "100%",
+  minWidth: 0,
+  overflowX: "auto"
+};
+
+const markdownTableStyle: CSSProperties = {
+  width: "max-content",
+  maxWidth: "100%",
+  borderCollapse: "collapse"
+};
 
 function textFromChildren(children: ReactNode): string {
   if (typeof children === "string" || typeof children === "number") {
@@ -62,7 +88,7 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
   }
 
   return (
-    <div style={{ position: "relative", margin: "8px 0" }}>
+    <div style={{ position: "relative", margin: "8px 0", maxWidth: "100%", minWidth: 0 }}>
       <button
         type="button"
         onClick={copy}
@@ -93,6 +119,7 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
           border: "1px solid var(--cw-code-border)",
           fontFamily: "var(--font-mono)",
           fontSize: 12,
+          maxWidth: "100%",
           overflowX: "auto",
           paddingRight: 72
         }}
@@ -136,5 +163,5 @@ function MermaidBlock({ code }: { code: string }): JSX.Element {
         {err}
       </pre>
     );
-  return <div ref={ref} style={{ overflowX: "auto" }} />;
+  return <div ref={ref} style={{ maxWidth: "100%", minWidth: 0, overflowX: "auto" }} />;
 }

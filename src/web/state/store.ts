@@ -6,7 +6,7 @@ import {
   setContextUsage as saveContextUsageSnapshot,
   type ContextUsageSnapshot
 } from "../storage/contextUsage";
-import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
+import { diffEntryFromText, hasVisibleTurnOutput, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import { applyTimelineInput, createTimelineEngineState, selectTimelineEntries } from "./timeline-engine";
 import type { WsEvent, WsConnectionState } from "../ws/client";
 
@@ -804,8 +804,8 @@ export const useStore = create<State & Actions>((set, get) => ({
             isCompleted &&
             (!currentActiveTurnId || currentActiveTurnId === eventTurnId)
           );
-          const hasAssistantOutput = Boolean(
-            eventTurnId && hasAssistantMessageOutputForTurn(threadBeforeCompletion?.entries ?? [], eventTurnId)
+          const hasVisibleOutput = Boolean(
+            eventTurnId && hasVisibleTurnOutput(threadBeforeCompletion?.entries ?? [], eventTurnId)
           );
           if (!eventTurnId || !currentActiveTurnId || eventTurnId === currentActiveTurnId) {
             if (eventTurnId) {
@@ -814,7 +814,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             get().setRunning(threadId, false);
           }
           get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
-          if (completedActiveTurn && !hasAssistantOutput) {
+          if (completedActiveTurn && !hasVisibleOutput) {
             get().requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: eventTurnId,
@@ -1270,12 +1270,6 @@ function deltaComparableText(entry: TimelineEntry): string {
     return entry.body.result ?? "";
   }
   return "";
-}
-
-function hasAssistantMessageOutputForTurn(entries: TimelineEntry[], turnId: string): boolean {
-  return entries.some((entry) => {
-    return entry.turnId === turnId && entry.body.kind === "agent-message" && entry.body.text.trim().length > 0;
-  });
 }
 
 function shouldSuppressSnapshotDelta(

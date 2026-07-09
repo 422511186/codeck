@@ -1590,7 +1590,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("requests repair when a completed active turn only has tool output and no assistant message", () => {
+  it("does not request repair when a completed active turn only has tool output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -1612,12 +1612,81 @@ describe("web store codex events", () => {
     });
 
     const thread = useStore.getState().threads["thread-1"];
-    expect(thread?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
     expect(thread?.entries).toEqual([
       expect.objectContaining({
         id: "cmd-1",
         turnId: "turn-1",
         body: expect.objectContaining({ kind: "tool", status: "success", result: "npm test\n" })
+      })
+    ]);
+  });
+
+  it("does not request repair when a completed active turn only has reasoning output", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "reasoning_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "公开推理摘要"
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "reasoning-1",
+        turnId: "turn-1",
+        body: { kind: "reasoning", text: "公开推理摘要", done: true }
+      })
+    ]);
+  });
+
+  it("does not request repair when a completed active turn only has command activity output", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+    useStore.getState().mergeThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "activity-1",
+          turnId: "turn-1",
+          createdAt: 100,
+          body: { kind: "command", status: "running", command: "npm test", output: "running tests" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_completed", threadId: "thread-1", turnId: "turn-1", status: "completed" }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.repairRequestedAt).toBeNull();
+    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.entries).toEqual([
+      expect.objectContaining({
+        id: "activity-1",
+        turnId: "turn-1",
+        body: expect.objectContaining({ kind: "command", status: "success", command: "npm test" })
       })
     ]);
   });

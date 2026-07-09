@@ -12,6 +12,7 @@ import { SystemMessage } from "./cards/SystemMessage";
 import { ErrorCard } from "./cards/ErrorCard";
 import { ApprovalCard } from "./cards/ApprovalCard";
 import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
+import { LongTextPreview } from "./cards/LongTextPreview";
 
 const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
@@ -20,6 +21,7 @@ const MAX_INITIAL_TIMELINE_ROWS = 80;
 const TIMELINE_WINDOW_EXPAND_ROWS = 80;
 const EAGER_MARKDOWN_TAIL_ROWS = 2;
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 72;
+const MIN_REAL_TIMELINE_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
 type TimelineDerivationDiagnostics = {
   derivationRuns: number;
@@ -150,7 +152,7 @@ export function Timeline({
           <div aria-hidden="true" data-timeline-spacer="top" style={{ minHeight: topSpacerHeight }} />
         ) : null}
         {visibleBlocks.map((block, visibleIndex) => (
-          <div key={block.id} data-timeline-row="true">
+          <div key={block.id} data-timeline-row="true" style={timelineRowStyle}>
             {block.kind === "inline-activity-log" ? (
               <InlineActivityLog entries={block.entries} />
             ) : (
@@ -272,6 +274,7 @@ function TimelineRow({
   onPreviewImage: (src: string) => void;
 }): JSX.Element {
   const body = entry.body;
+  const content = (() => {
   switch (body.kind) {
     case "user-message":
       return (
@@ -302,6 +305,14 @@ function TimelineRow({
     default:
       return <></>;
   }
+  })();
+
+  return (
+    <>
+      <TimelineRelativeTime createdAt={entry.createdAt} />
+      {content}
+    </>
+  );
 }
 
 function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
@@ -335,6 +346,7 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
 
   return (
     <div style={inlineActivityLogStyle}>
+      <TimelineRelativeTime createdAt={entries[0]?.createdAt} compact />
       {sections.map((section) => {
         const canExpand = section.entries.length > 0;
         const open = canExpand && openKeys.has(section.key);
@@ -393,6 +405,57 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
       })}
     </div>
   );
+}
+
+function TimelineRelativeTime({
+  createdAt,
+  compact = false
+}: {
+  createdAt?: number;
+  compact?: boolean;
+}): JSX.Element | null {
+  if (
+    typeof createdAt !== "number" ||
+    !Number.isFinite(createdAt) ||
+    createdAt < MIN_REAL_TIMELINE_TIMESTAMP_MS
+  ) {
+    return null;
+  }
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return (
+    <time dateTime={date.toISOString()} style={compact ? timelineTimeCompactStyle : timelineTimeStyle}>
+      {formatRelativeTimelineTime(createdAt)}
+    </time>
+  );
+}
+
+function formatRelativeTimelineTime(createdAt: number, now = Date.now()): string {
+  const diffMs = Math.max(0, now - createdAt);
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  const monthMs = 30 * dayMs;
+  const yearMs = 365 * dayMs;
+
+  if (diffMs < minuteMs) {
+    return "刚刚";
+  }
+  if (diffMs < hourMs) {
+    return `${Math.floor(diffMs / minuteMs)} 分钟前`;
+  }
+  if (diffMs < dayMs) {
+    return `${Math.floor(diffMs / hourMs)} 小时前`;
+  }
+  if (diffMs < monthMs) {
+    return `${Math.floor(diffMs / dayMs)} 天前`;
+  }
+  if (diffMs < yearMs) {
+    return `${Math.floor(diffMs / monthMs)} 个月前`;
+  }
+  return `${Math.floor(diffMs / yearMs)} 年前`;
 }
 
 type InlineActivitySection = {
@@ -894,7 +957,11 @@ function ActivityDetailText({
   return (
     <div style={activityDetailItemStyle}>
       {showTitle && title ? <div style={activityDetailTitleStyle}>{title}</div> : null}
-      {text.trim() ? <pre style={activityDetailPreStyle}>{text}</pre> : null}
+      {text.trim() ? (
+        <div style={activityDetailPreviewStyle}>
+          <LongTextPreview text={text} emptyText="（无内容）" copyLabel="复制完整详情" maxLines={80} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1010,70 +1077,76 @@ function deriveTimelineRowState(
   timelineDerivationDiagnostics.derivationRuns += 1;
   const liveAgentEntryIds = new Set<string>();
   const messageActionAvailableById = new Map<string, boolean>();
-  const turnIds = new Set<string>();
   const userMessageCountByTurn = new Map<string, number>();
+  const userMessageEntries: TimelineEntry[] = [];
+  let latestAgentAfterLastUser: string | null = null;
 
   for (const entry of entries) {
-    if (entry.turnId) {
-      turnIds.add(entry.turnId);
-      if (entry.body.kind === "user-message") {
+    if (entry.body.kind === "user-message") {
+      if (entry.turnId) {
+        userMessageEntries.push(entry);
         userMessageCountByTurn.set(entry.turnId, (userMessageCountByTurn.get(entry.turnId) ?? 0) + 1);
+      }
+      latestAgentAfterLastUser = null;
+      continue;
+    }
+
+    if (running && entry.body.kind === "agent-message") {
+      if (activeTurnId && entry.turnId === activeTurnId) {
+        liveAgentEntryIds.add(entry.id);
+      } else if (!activeTurnId) {
+        latestAgentAfterLastUser = entry.id;
       }
     }
   }
 
-  for (const entry of entries) {
-    if (
-      entry.body.kind === "user-message" &&
-      entry.turnId &&
-      turnIds.has(entry.turnId) &&
-      userMessageCountByTurn.get(entry.turnId) === 1
-    ) {
+  for (const entry of userMessageEntries) {
+    if (entry.turnId && userMessageCountByTurn.get(entry.turnId) === 1) {
       messageActionAvailableById.set(entry.id, true);
     }
   }
 
-  if (!running) {
-    return { liveAgentEntryIds, messageActionAvailableById };
+  if (running && !activeTurnId && latestAgentAfterLastUser) {
+    liveAgentEntryIds.add(latestAgentAfterLastUser);
   }
 
-  if (activeTurnId) {
-    for (const entry of entries) {
-      if (entry.body.kind === "agent-message" && entry.turnId === activeTurnId) {
-        liveAgentEntryIds.add(entry.id);
-      }
-    }
-    return { liveAgentEntryIds, messageActionAvailableById };
-  }
-
-  let lastUserIndex = -1;
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index]?.body.kind === "user-message") {
-      lastUserIndex = index;
-      break;
-    }
-  }
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (index <= lastUserIndex) {
-      break;
-    }
-    const candidate = entries[index];
-    if (candidate?.body.kind === "agent-message") {
-      liveAgentEntryIds.add(candidate.id);
-      break;
-    }
-  }
   return { liveAgentEntryIds, messageActionAvailableById };
 }
 
 const agentMessageStyle: React.CSSProperties = {
-  padding: "4px 14px"
+  padding: "4px 14px",
+  maxWidth: "100%",
+  minWidth: 0,
+  overflowX: "hidden"
 };
 
 const plainAgentTextStyle: React.CSSProperties = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
   overflowWrap: "anywhere"
+};
+
+const timelineTimeStyle: React.CSSProperties = {
+  display: "block",
+  padding: "0 14px",
+  margin: "0 0 2px",
+  color: "var(--cw-fg-muted)",
+  fontSize: 11,
+  lineHeight: 1.3
+};
+
+const timelineRowStyle: React.CSSProperties = {
+  maxWidth: "100%",
+  minWidth: 0,
+  overflowX: "hidden"
+};
+
+const timelineTimeCompactStyle: React.CSSProperties = {
+  display: "block",
+  margin: "0 0 1px 20px",
+  color: "var(--cw-fg-muted)",
+  fontSize: 11,
+  lineHeight: 1.3
 };
 
 const inlineActivityLogStyle: React.CSSProperties = {
@@ -1207,16 +1280,12 @@ const inlineDiffRemovedStyle: React.CSSProperties = {
   color: "var(--cw-danger)"
 };
 
-const activityDetailPreStyle: React.CSSProperties = {
+const activityDetailPreviewStyle: React.CSSProperties = {
   margin: "4px 0 0",
   padding: 8,
   borderRadius: 8,
   background: "var(--cw-bg-elevated)",
-  color: "var(--cw-fg)",
-  fontSize: 12,
-  lineHeight: 1.5,
-  whiteSpace: "pre-wrap",
-  overflowWrap: "anywhere"
+  color: "var(--cw-fg)"
 };
 
 function UserMessage({
