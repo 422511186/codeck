@@ -1,14 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { isValidElement, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
-type Props = { text: string };
+type Props = { text: string; cacheKey?: string };
 
-export function Markdown({ text }: Props): JSX.Element {
+type MarkdownDiagnostics = {
+  renderRuns: number;
+};
+
+const markdownDiagnostics: MarkdownDiagnostics = {
+  renderRuns: 0
+};
+
+export function __getMarkdownDiagnostics(): MarkdownDiagnostics {
+  return { ...markdownDiagnostics };
+}
+
+export function __resetMarkdownDiagnostics(): void {
+  markdownDiagnostics.renderRuns = 0;
+}
+
+function MarkdownImpl({ text }: Props): JSX.Element {
+  markdownDiagnostics.renderRuns += 1;
   return (
     <div className="cw-markdown" style={markdownRootStyle}>
       <ReactMarkdown
@@ -44,6 +61,8 @@ export function Markdown({ text }: Props): JSX.Element {
     </div>
   );
 }
+
+export const Markdown = memo(MarkdownImpl);
 
 const markdownRootStyle: CSSProperties = {
   maxWidth: "100%",

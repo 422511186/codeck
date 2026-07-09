@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { codex } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { getDraft, setDraft } from "../storage/drafts";
@@ -34,7 +34,23 @@ type ImageState = {
   status: "uploading" | "ready" | "failed";
 };
 
-export function ChatInput(props: ChatInputProps): JSX.Element {
+type ChatInputDiagnostics = {
+  mounts: number;
+};
+
+const chatInputDiagnostics: ChatInputDiagnostics = {
+  mounts: 0
+};
+
+export function __getChatInputDiagnostics(): ChatInputDiagnostics {
+  return { ...chatInputDiagnostics };
+}
+
+export function __resetChatInputDiagnostics(): void {
+  chatInputDiagnostics.mounts = 0;
+}
+
+function ChatInputImpl(props: ChatInputProps): JSX.Element {
   const [text, setText] = useState<string>(() => (typeof window === "undefined" ? "" : getDraft(props.threadId)));
   const [images, setImages] = useState<ImageState[]>([]);
   const [addPanelOpen, setAddPanelOpen] = useState(false);
@@ -52,6 +68,10 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillsCacheVersion = useStore((s) => s.skillsCacheVersion);
+
+  useEffect(() => {
+    chatInputDiagnostics.mounts += 1;
+  }, []);
 
   useEffect(() => {
     setText(getDraft(props.threadId));
@@ -384,6 +404,8 @@ export function ChatInput(props: ChatInputProps): JSX.Element {
     </>
   );
 }
+
+export const ChatInput = memo(ChatInputImpl);
 
 function skillKey(skill: SkillReference): string {
   return `${skill.name}\u0001${skill.path}`;

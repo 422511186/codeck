@@ -21,16 +21,20 @@ npm run verify
 长会话和流式输出性能不绑定 CI 机器上的具体毫秒数，使用可重复的数量级预算验证：
 
 ```bash
-npm run test -- tests/unit/codex-client.test.ts tests/unit/web-thread-endpoints.test.ts tests/unit/web-store-events.test.ts tests/unit/web-events-client.test.ts tests/unit/web-timeline.test.tsx tests/unit/web-cards.test.tsx
+npm run test -- tests/unit/app-server-session-timeline.test.ts tests/unit/app-server-runtime.test.ts tests/unit/web-timeline-engine.test.ts tests/unit/web-store-events.test.ts tests/unit/web-events-client.test.ts tests/unit/web-timeline.test.tsx tests/unit/web-thread-page.test.tsx
 ```
 
 当前关键指标：
 
 - 首屏读取：普通 `readThread` 不使用 `thread/read includeTurns=true` 拉全量历史，而是读取 metadata 后调用 `thread/turns/list`，默认 `limit: 30`、`sortDirection: "desc"`、`itemsView: "full"`，并保留继续向上分页的 cursor。
+- Rollout supplement：补充 JSONL 只按当前 window、分页 page 或目标 `turnId` 有界扫描，受最大行数、字节数、记录数和耗时预算约束；预算耗尽时跳过 supplement，主 timeline 仍返回。
+- Context usage：优先使用 app-server summary、live `token_usage_updated`、本地缓存或尾部有界扫描，不为 header/context sheet 完整解析 rollout JSONL。
 - 流式 delta：同一 `threadId + turnId + itemId + kind + generation` 的短窗口文本 delta 合并后再进入可见 UI；测试中 10ms 窗口内同 item 两段文本只产生一个 `codex-event-batch`，重复 `eventId` 不重复追加。
-- Store 复杂度：测试构造 1200 条历史 entry、追加 200 次 live 文本、再合并 40 条分页 entry，断言 normalize 次数不超过 2、索引构建 entry 数不超过 1400、线性扫描不超过 3000、等价输出候选检查不超过 2000。
-- Timeline 挂载：长 timeline 初始挂载的 `[data-timeline-row='true']` 不超过 80，历史 Markdown 不同步生成全量高亮/复制按钮。
-- 长内容 DOM：命令输出、工具结果、reasoning 和 diff 默认有界预览，完整内容通过展开或复制路径访问，不进入首屏主 timeline DOM。
+- Timeline engine：snapshot、pagination、live batch、overlay、turn item、supplement 和 optimistic user 都通过统一 reducer；测试构造 1200 条历史 entry 和多来源合并，断言 store 不再先旧 normalize 后再提交 engine。
+- Viewport 回收：长 timeline 初始尾部挂载 `[data-timeline-row='true']` 不超过 80；连续向上/向下浏览后 DOM rows 仍保持在 100 以内，离开 buffer 的 rows 被卸载；顶部/底部 spacer 使用 row height cache 的动态高度，并保留 prepend scroll anchor、live delta 不抢滚动和“跳到最新”行为。
+- 页面订阅隔离：timeline delta、pagination 和 repair 不重置 composer 草稿、图片选择、Skill 选择、context usage sheet、目标编辑器或 action sheet；`ChatInput` 诊断中 timeline-only update 不触发 remount。
+- 长输出派生：Markdown、diff rows、LongTextPreview 和 inline activity detail 使用 `entry.id + generation + snapshotSequence + 文本签名` 等派生 key 复用缓存；无关 timeline update 不重新解析长 Markdown/diff/tool 文本，文本或 generation 变化会失效。
+- 长内容 DOM：命令输出、工具结果、reasoning 和 diff 默认有界预览，完整内容通过展开或复制路径访问，不进入首屏主 timeline DOM；preview 缓存只保存摘要、rows、hash 和截断状态，不保存完整大文本副本。
 
 ## 真实 app-server 验收
 

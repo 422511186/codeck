@@ -6,6 +6,13 @@ import {
   __getTimelineDerivationDiagnostics,
   __resetTimelineDerivationDiagnostics
 } from "../../src/web/components/Timeline";
+import { __getMarkdownDiagnostics, __resetMarkdownDiagnostics } from "../../src/web/components/Markdown";
+import { __getDiffViewDiagnostics, __resetDiffViewDiagnostics } from "../../src/web/components/cards/DiffCard";
+import {
+  createTextPreview,
+  __getTextPreviewDiagnostics,
+  __resetTextPreviewDiagnostics
+} from "../../src/web/components/cards/LongTextPreview";
 import { useStore } from "../../src/web/state/store";
 
 describe("Timeline", () => {
@@ -261,6 +268,24 @@ describe("Timeline", () => {
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
   });
 
+  it("长文本 preview 使用有界扫描而不是 split 完整文本", () => {
+    const split = vi.spyOn(String.prototype, "split");
+    const longText = Array.from({ length: 1_000 }, (_value, index) => `line-${index}`).join("\n");
+
+    const preview = createTextPreview(longText, {
+      maxLines: 4,
+      maxChars: 80,
+      cacheKey: `bounded-scan-${Date.now()}`
+    });
+
+    expect(split).not.toHaveBeenCalled();
+    expect(preview.preview).toContain("line-0");
+    expect(preview.preview).not.toContain("line-999");
+    expect(preview.truncated).toBe(true);
+    expect(preview.omittedLines).toBe(996);
+    split.mockRestore();
+  });
+
   it("长 timeline 初始挂载只渲染可见窗口附近 rows，历史 Markdown 不全部同步渲染", () => {
     const entries = Array.from({ length: 240 }, (_value, index) => ({
       id: `agent-${index}`,
@@ -317,6 +342,119 @@ describe("Timeline", () => {
 
     expect(screen.getByText("历史回复 130")).toBeInTheDocument();
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThan(entries.length);
+  });
+
+  it("长时间上下滚动后回收 viewport 外的 timeline rows", () => {
+    const entries = Array.from({ length: 360 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "agent-message" as const,
+        text: `历史回复 ${index}`
+      }
+    }));
+
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 25_000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 600
+    });
+
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
+
+    scrollTop = 10_000;
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    expect(screen.getByText("历史回复 140")).toBeInTheDocument();
+    expect(screen.queryByText("历史回复 350")).not.toBeInTheDocument();
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(100);
+
+    scrollTop = 22_000;
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    expect(screen.getByText("历史回复 350")).toBeInTheDocument();
+    expect(screen.queryByText("历史回复 140")).not.toBeInTheDocument();
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(100);
+  });
+
+  it("回收窗口使用已测量的动态 row height 更新 spacer", () => {
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "agent-message" as const,
+        text: `历史回复 ${index}`
+      }
+    }));
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const text = this.textContent ?? "";
+        const match = text.match(/历史回复 (\d+)/);
+        const index = match ? Number(match[1]) : -1;
+        const height = index >= 185 ? 96 : 72;
+        return {
+          x: 0,
+          y: 0,
+          width: 360,
+          height,
+          top: 0,
+          right: 360,
+          bottom: height,
+          left: 0,
+          toJSON: () => ({})
+        };
+      });
+
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 9_000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 600
+    });
+
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    const bottomSpacer = container.querySelector("[data-timeline-spacer='bottom']") as HTMLDivElement;
+    expect(bottomSpacer.style.minHeight).toBe("5280px");
+    expect(bottomSpacer.style.minHeight).not.toBe("3960px");
+
+    getBoundingClientRect.mockRestore();
   });
 
   it("窗口化后仍渲染尾部系统消息、错误卡片和审批卡片", async () => {
@@ -384,6 +522,216 @@ describe("Timeline", () => {
     const diagnostics = __getTimelineDerivationDiagnostics();
     expect(diagnostics.derivationRuns).toBe(1);
     expect(diagnostics.rowEntryScans).toBe(0);
+  });
+
+  it("无关 timeline 更新不会重新派生未变化的长 Markdown、diff、tool 和 activity detail", async () => {
+    const user = userEvent.setup();
+    const longToolResult = Array.from({ length: 180 }, (_value, index) => `tool output line ${index}`).join("\n");
+    const diff = [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,3 +1,4 @@",
+      " context",
+      "-old",
+      "+new",
+      "+added"
+    ].join("\n");
+    const entries = [
+      {
+        id: "agent-markdown",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: {
+          kind: "agent-message" as const,
+          text: "```ts\nconst cachedMarkdown = true;\n```"
+        }
+      },
+      {
+        id: "tool-long",
+        turnId: "turn-1",
+        createdAt: 2,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "/repo",
+          tool: "npm test",
+          status: "success" as const,
+          result: longToolResult
+        }
+      },
+      {
+        id: "diff-long",
+        turnId: "turn-1",
+        createdAt: 3,
+        body: {
+          kind: "diff" as const,
+          path: "src/app.ts",
+          added: 2,
+          removed: 1,
+          diff
+        }
+      },
+      {
+        id: "agent-stable",
+        turnId: "turn-1",
+        createdAt: 4,
+        body: {
+          kind: "agent-message" as const,
+          text: "已完成"
+        }
+      }
+    ];
+
+    const { rerender } = render(<Timeline entries={entries} />);
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
+    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
+
+    __resetMarkdownDiagnostics();
+    __resetDiffViewDiagnostics();
+    __resetTextPreviewDiagnostics();
+    __resetTimelineDerivationDiagnostics();
+
+    rerender(
+      <Timeline
+        running
+        activeTurnId="turn-2"
+        entries={[
+          ...entries,
+          {
+            id: "agent-unrelated",
+            turnId: "turn-2",
+            createdAt: 5,
+            body: {
+              kind: "agent-message" as const,
+              text: "无关更新"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(__getMarkdownDiagnostics().renderRuns).toBe(0);
+    expect(__getDiffViewDiagnostics().parseRuns).toBe(0);
+    expect(__getTextPreviewDiagnostics().previewRuns).toBe(0);
+    expect(__getTimelineDerivationDiagnostics().inlineActivitySectionRuns).toBe(0);
+  });
+
+  it("entry generation 或文本变化会失效长输出派生缓存", async () => {
+    const user = userEvent.setup();
+    const longToolResult = Array.from({ length: 160 }, (_value, index) => `tool output line ${index}`).join("\n");
+    const diff = [
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1,2 +1,3 @@",
+      " context",
+      "-old",
+      "+new",
+      "+added"
+    ].join("\n");
+    const baseEntries = [
+      {
+        id: "agent-markdown",
+        turnId: "turn-1",
+        generation: 1,
+        createdAt: 1,
+        body: {
+          kind: "agent-message" as const,
+          text: "```ts\nconst cachedMarkdown = true;\n```"
+        }
+      },
+      {
+        id: "tool-long",
+        turnId: "turn-1",
+        generation: 1,
+        createdAt: 2,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "/repo",
+          tool: "npm test",
+          status: "success" as const,
+          result: longToolResult
+        }
+      },
+      {
+        id: "diff-long",
+        turnId: "turn-1",
+        generation: 1,
+        createdAt: 3,
+        body: {
+          kind: "diff" as const,
+          path: "src/app.ts",
+          added: 2,
+          removed: 1,
+          diff
+        }
+      }
+    ];
+
+    const { rerender } = render(<Timeline entries={baseEntries} />);
+    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
+    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
+
+    __resetMarkdownDiagnostics();
+    __resetDiffViewDiagnostics();
+    __resetTextPreviewDiagnostics();
+    __resetTimelineDerivationDiagnostics();
+
+    rerender(
+      <Timeline
+        entries={baseEntries.map((entry) => ({
+          ...entry,
+          generation: 2
+        }))}
+      />
+    );
+
+    expect(__getMarkdownDiagnostics().renderRuns).toBeGreaterThan(0);
+    expect(__getDiffViewDiagnostics().parseRuns).toBeGreaterThan(0);
+    expect(__getTextPreviewDiagnostics().previewRuns).toBeGreaterThan(0);
+    expect(__getTimelineDerivationDiagnostics().inlineActivitySectionRuns).toBeGreaterThan(0);
+
+    __resetMarkdownDiagnostics();
+    __resetDiffViewDiagnostics();
+    __resetTextPreviewDiagnostics();
+
+    rerender(
+      <Timeline
+        entries={[
+          {
+            ...baseEntries[0]!,
+            generation: 2,
+            body: {
+              kind: "agent-message" as const,
+              text: "```ts\nconst changedMarkdown = true;\n```"
+            }
+          },
+          {
+            ...baseEntries[1]!,
+            generation: 2,
+            body: {
+              ...baseEntries[1]!.body,
+              result: `${longToolResult}\nchanged`
+            }
+          },
+          {
+            ...baseEntries[2]!,
+            generation: 2,
+            body: {
+              ...baseEntries[2]!.body,
+              diff: `${diff}\n+changed`,
+              added: 3
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(__getMarkdownDiagnostics().renderRuns).toBeGreaterThan(0);
+    expect(__getDiffViewDiagnostics().parseRuns).toBeGreaterThan(0);
+    expect(__getTextPreviewDiagnostics().previewRuns).toBeGreaterThan(0);
   });
 
   it("在本页弹窗预览用户消息图片，不打开新页面", async () => {

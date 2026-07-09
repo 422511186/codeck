@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { userEvent } from "@testing-library/user-event";
 import ThreadPage from "../../src/app/threads/[threadId]/page";
 import { ApiError } from "../../src/web/api/client";
+import { __getChatInputDiagnostics, __resetChatInputDiagnostics } from "../../src/web/components/ChatInput";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -95,6 +96,8 @@ const mockCompactThread = vi.fn();
 const mockForkThread = vi.fn();
 const mockSetThreadGoal = vi.fn();
 const mockClearThreadGoal = vi.fn();
+const mockSkills = vi.fn();
+const mockUploadImage = vi.fn();
 
 const sampleGoal = {
   threadId: "thread-1",
@@ -129,7 +132,9 @@ vi.mock("../../src/web/api/endpoints", () => ({
     compactThread: (...args: unknown[]) => mockCompactThread(...args),
     forkThread: (...args: unknown[]) => mockForkThread(...args),
     setThreadGoal: (...args: unknown[]) => mockSetThreadGoal(...args),
-    clearThreadGoal: (...args: unknown[]) => mockClearThreadGoal(...args)
+    clearThreadGoal: (...args: unknown[]) => mockClearThreadGoal(...args),
+    skills: (...args: unknown[]) => mockSkills(...args),
+    uploadImage: (...args: unknown[]) => mockUploadImage(...args)
   }
 }));
 
@@ -274,6 +279,20 @@ describe("ThreadPage", () => {
     mockSetThreadGoal.mockResolvedValue(sampleGoal);
     mockClearThreadGoal.mockReset();
     mockClearThreadGoal.mockResolvedValue(undefined);
+    mockSkills.mockReset();
+    mockSkills.mockResolvedValue({
+      skills: [
+        {
+          name: "openspec-explore",
+          path: "/repo/.codex/skills/openspec-explore/SKILL.md",
+          scope: "workspace",
+          shortDescription: "探索需求",
+          description: "探索需求"
+        }
+      ]
+    });
+    mockUploadImage.mockReset();
+    mockUploadImage.mockResolvedValue({ path: "/tmp/uploaded.png" });
     mockSettingsGet.mockReturnValue({ defaultMode: "build" });
     mockThreadState.mockReturnValue({
       entries: [],
@@ -1249,7 +1268,7 @@ describe("ThreadPage", () => {
     }
   });
 
-  it("should not poll thread summary while the event stream is open for a running thread", async () => {
+  it("should poll lightweight thread summary while the event stream is open for a running thread", async () => {
     vi.useFakeTimers();
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -1292,7 +1311,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockReadThreadSummary).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
     expect(mockListTurnItems).not.toHaveBeenCalled();
   });
@@ -1371,6 +1390,62 @@ describe("ThreadPage", () => {
       })
     );
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
+  });
+
+  it("should request bounded repair when an active turn has no visible output despite an open event stream", async () => {
+    vi.useFakeTimers();
+    mockWsState.mockReturnValue("open");
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      updatedAt: Date.now()
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-running",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "stream-disconnected",
+        turnId: "turn-running"
+      })
+    );
   });
 
   it("should ignore a late idle summary after the live completion event clears the active turn", async () => {
@@ -1562,7 +1637,7 @@ describe("ThreadPage", () => {
     expect(mockListTurnItems).not.toHaveBeenCalled();
   });
 
-  it("should not poll active summary while the event stream is open before any visible live output", async () => {
+  it("should poll summary and repair when the open event stream misses turn completion", async () => {
     vi.useFakeTimers();
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -1574,25 +1649,15 @@ describe("ThreadPage", () => {
       lastTurnId: "turn-running",
       updatedAt: 1_000
     });
-    mockReadThreadSummary
-      .mockResolvedValueOnce({
-        id: "thread-1",
-        cwd: "C:/test",
-        title: "Running Thread",
-        preview: "",
-        modelProvider: "claude-opus-4",
-        status: "active",
-        updatedAt: 1_000
-      })
-      .mockResolvedValueOnce({
-        id: "thread-1",
-        cwd: "C:/test",
-        title: "Running Thread",
-        preview: "",
-        modelProvider: "claude-opus-4",
-        status: "active",
-        updatedAt: 1_005
-      });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      updatedAt: 1_005
+    });
     mockThreadState.mockReturnValue({
       entries: [],
       pendingApprovals: [],
@@ -1620,21 +1685,20 @@ describe("ThreadPage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
-
-    await act(async () => {
-      vi.advanceTimersByTime(3_100);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(mockReadThreadSummary).not.toHaveBeenCalled();
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
+    expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        reason: "summary-idle",
+        turnId: "turn-running"
+      })
+    );
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     expect(mockListTurnItems).not.toHaveBeenCalled();
   });
 
-  it("should not poll active summary while the event stream is open after visible live output stalls", async () => {
+  it("should poll active summary without repairing while the event stream is open after visible live output stalls", async () => {
     vi.useFakeTimers();
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -1707,7 +1771,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockReadThreadSummary).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     expect(mockListTurnItems).not.toHaveBeenCalled();
@@ -1769,7 +1833,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockReadThreadSummary).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     expect(mockListTurnItems).not.toHaveBeenCalled();
@@ -1833,7 +1897,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockReadThreadSummary).not.toHaveBeenCalled();
+    expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
     expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
     expect(mockReadThread.mock.calls.length - initialReadCalls).toBe(1);
     expect(mockListTurnItems).not.toHaveBeenCalled();
@@ -2529,6 +2593,101 @@ describe("ThreadPage", () => {
     expect(screen.getByText("Message 9")).toBeInTheDocument();
   });
 
+  it("should not scroll to latest when live delta arrives while reading history", async () => {
+    const baseThread = {
+      entries: Array.from({ length: 12 }, (_value, index) => ({
+        id: `entry-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `Message ${index}` }
+      })),
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-active",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    };
+    let threadState = baseThread;
+    mockThreadState.mockImplementation(() => threadState);
+
+    const { container, rerender } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 320;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 2_000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 500 });
+
+    fireEvent.scroll(scroller);
+
+    threadState = {
+      ...baseThread,
+      entries: [
+        ...baseThread.entries,
+        {
+          id: "agent-live-delta",
+          turnId: "turn-active",
+          createdAt: 13,
+          body: { kind: "agent-message" as const, text: "live delta" }
+        }
+      ]
+    };
+    rerender(<ThreadPage />);
+
+    expect(scroller.scrollTop).toBe(320);
+    expect(screen.getByRole("button", { name: /跳到最新/ })).toBeInTheDocument();
+  });
+
+  it("should scroll to timeline tail from jump-to-latest button", async () => {
+    mockThreadState.mockReturnValue({
+      entries: Array.from({ length: 12 }, (_value, index) => ({
+        id: `entry-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `Message ${index}` }
+      })),
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 240;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 1_800 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 500 });
+
+    fireEvent.scroll(scroller);
+    fireEvent.click(screen.getByRole("button", { name: /跳到最新/ }));
+
+    expect(scroller.scrollTop).toBe(1_800);
+  });
+
   it("should switch Plan/Build and persist collaboration mode", async () => {
     const user = userEvent.setup();
 
@@ -3082,6 +3241,75 @@ describe("ThreadPage", () => {
     expect(within(dialog).getByText("输入 96K")).toBeInTheDocument();
     expect(within(dialog).getByText("输出 24K")).toBeInTheDocument();
     expect(within(dialog).getByText("推理 8K")).toBeInTheDocument();
+  });
+
+  it("should preserve composer context and open sheets across timeline-only updates", async () => {
+    const user = userEvent.setup();
+    const baseThread = {
+      entries: [
+        {
+          id: "user-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "user-message" as const, text: "cached", status: "sent" as const }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      contextUsage: {
+        totalTokens: 128000,
+        inputTokens: 96000,
+        outputTokens: 24000,
+        reasoningOutputTokens: 8000,
+        modelContextWindow: 200000,
+        updatedAt: 1
+      }
+    };
+    let threadState = baseThread;
+    mockThreadState.mockImplementation(() => threadState);
+
+    const { rerender } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "保留这段草稿");
+    await user.click(screen.getByRole("button", { name: "添加内容" }));
+    await user.click(within(screen.getByRole("dialog", { name: "添加内容" })).getByRole("button", { name: "引用 Skill" }));
+    await waitFor(() => expect(mockSkills).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: /openspec-explore/ }));
+    await user.click(within(screen.getByRole("dialog", { name: "选择 Skill" })).getByRole("button", { name: "完成" }));
+    await user.click(screen.getByLabelText("上下文窗口 64%"));
+
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("保留这段草稿");
+    expect(screen.getByText("openspec-explore")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "上下文用量" })).toBeInTheDocument();
+
+    __resetChatInputDiagnostics();
+    threadState = {
+      ...baseThread,
+      entries: [
+        ...baseThread.entries,
+        {
+          id: "agent-delta",
+          turnId: "turn-1",
+          createdAt: 2,
+          body: { kind: "agent-message" as const, text: "live delta" }
+        }
+      ]
+    };
+
+    rerender(<ThreadPage />);
+
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("保留这段草稿");
+    expect(screen.getByText("openspec-explore")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "上下文用量" })).toBeInTheDocument();
+    expect(__getChatInputDiagnostics().mounts).toBe(0);
   });
 
   it("should confirm compact from context usage details before calling API", async () => {
@@ -4401,6 +4629,94 @@ describe("ThreadPage", () => {
     expect(JSON.parse(localStorage.getItem("codex-web:drafts") ?? "{}")).toMatchObject({
       "thread-1": "previous prompt"
     });
+  });
+
+  it("should not rewind when the visible message is no longer present in current normalized entries", async () => {
+    const originalEntries = [
+      {
+        id: "visible-target",
+        turnId: "turn-2",
+        turnIndex: 1,
+        createdAt: Date.now(),
+        body: { kind: "user-message" as const, text: "same only text", status: "sent" as const }
+      }
+    ];
+    const currentEntries = [
+      {
+        id: "other-user",
+        turnId: "turn-1",
+        turnIndex: 0,
+        createdAt: Date.now() - 1,
+        body: { kind: "user-message" as const, text: "same only text", status: "sent" as const }
+      }
+    ];
+    mockThreadState.mockReturnValue({
+      entries: originalEntries,
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: true
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("same only text"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+
+    mockThreadState.mockReturnValue({
+      entries: currentEntries,
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: true
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
+
+    expect(mockRollbackThread).not.toHaveBeenCalled();
+    expect(mockAppendEntries).toHaveBeenCalledWith(
+      "thread-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: expect.objectContaining({ kind: "error", text: "无法定位这条消息所属的 turn，请刷新后重试。" })
+        })
+      ])
+    );
+  });
+
+  it("should recover the initial thread page by resuming after a transient read failure", async () => {
+    mockReadThread.mockRejectedValueOnce(new ApiError("thread not loaded", 502));
+    mockResumeThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-1");
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+    expect(screen.queryByText("thread not loaded")).not.toBeInTheDocument();
   });
 
   it("should bind turn id to a freshly sent local user message so it can rewind without refresh", async () => {

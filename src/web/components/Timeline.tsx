@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
@@ -18,19 +18,27 @@ const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
 const LAZY_MARKDOWN_ROOT_MARGIN = "720px 0px";
 const MAX_INITIAL_TIMELINE_ROWS = 80;
-const TIMELINE_WINDOW_EXPAND_ROWS = 80;
+const TIMELINE_WINDOW_BUFFER_ROWS = 20;
 const EAGER_MARKDOWN_TAIL_ROWS = 2;
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 72;
+const MIN_MEASURED_TIMELINE_ROW_HEIGHT = 24;
 const MIN_REAL_TIMELINE_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
 type TimelineDerivationDiagnostics = {
   derivationRuns: number;
   rowEntryScans: number;
+  inlineActivitySectionRuns: number;
+};
+
+type TimelineWindowRange = {
+  start: number;
+  end: number;
 };
 
 const timelineDerivationDiagnostics: TimelineDerivationDiagnostics = {
   derivationRuns: 0,
-  rowEntryScans: 0
+  rowEntryScans: 0,
+  inlineActivitySectionRuns: 0
 };
 
 type Props = {
@@ -56,15 +64,24 @@ export function Timeline({
 }: Props): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const [windowStartIndex, setWindowStartIndex] = useState(() => initialTimelineWindowStart(entries.length));
+  const rowHeightCacheRef = useRef<Map<string, number>>(new Map());
+  const [rowHeightVersion, setRowHeightVersion] = useState(0);
+  const [windowRange, setWindowRange] = useState<TimelineWindowRange>(() => initialTimelineWindowRange(entries.length));
   const previousEntriesRef = useRef<{ length: number; firstId: string | null; lastId: string | null }>({
     length: entries.length,
     firstId: entries[0]?.id ?? null,
     lastId: entries[entries.length - 1]?.id ?? null
   });
-  const visibleEntries = windowStartIndex > 0 ? entries.slice(windowStartIndex) : entries;
+  const visibleEntries = entries.slice(windowRange.start, windowRange.end);
   const visibleBlocks = useMemo(() => deriveTimelineRenderBlocks(visibleEntries), [visibleEntries]);
-  const topSpacerHeight = windowStartIndex * ESTIMATED_TIMELINE_ROW_HEIGHT;
+  const topSpacerHeight = useMemo(
+    () => timelineSpacerHeight(entries, 0, windowRange.start, rowHeightCacheRef.current),
+    [entries, windowRange.start, rowHeightVersion]
+  );
+  const bottomSpacerHeight = useMemo(
+    () => timelineSpacerHeight(entries, windowRange.end, entries.length, rowHeightCacheRef.current),
+    [entries, windowRange.end, rowHeightVersion]
+  );
   const longTimeline = entries.length > MAX_INITIAL_TIMELINE_ROWS;
   const rowState = useMemo(
     () => deriveTimelineRowState(entries, running, activeTurnId),
@@ -75,8 +92,6 @@ export function Timeline({
     const previous = previousEntriesRef.current;
     const nextFirstId = entries[0]?.id ?? null;
     const nextLastId = entries[entries.length - 1]?.id ?? null;
-    const maxWindowStart = initialTimelineWindowStart(entries.length);
-    const previousMaxWindowStart = initialTimelineWindowStart(previous.length);
     const prependedAtHead =
       previous.length > 0 &&
       entries.length > previous.length &&
@@ -90,20 +105,27 @@ export function Timeline({
       nextFirstId === previous.firstId &&
       nextLastId !== previous.lastId;
 
-    setWindowStartIndex((current) => {
+    setWindowRange((current) => {
       if (entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
-        return 0;
+        return { start: 0, end: entries.length };
       }
       if (previous.length === 0 || entries.length < previous.length) {
-        return maxWindowStart;
+        return initialTimelineWindowRange(entries.length);
       }
       if (prependedAtHead) {
-        return current === 0 ? 0 : Math.min(current + (entries.length - previous.length), maxWindowStart);
+        if (current.start === 0) {
+          return clampTimelineWindowRange({ start: 0, end: current.end }, entries.length);
+        }
+        const offset = entries.length - previous.length;
+        return clampTimelineWindowRange(
+          { start: current.start + offset, end: current.end + offset },
+          entries.length
+        );
       }
-      if (appendedAtTail && current >= previousMaxWindowStart) {
-        return maxWindowStart;
+      if (appendedAtTail && current.end >= previous.length) {
+        return initialTimelineWindowRange(entries.length);
       }
-      return Math.min(current, maxWindowStart);
+      return clampTimelineWindowRange(current, entries.length);
     });
 
     previousEntriesRef.current = {
@@ -112,6 +134,47 @@ export function Timeline({
       lastId: nextLastId
     };
   }, [entries]);
+
+  useEffect(() => {
+    const visibleIds = new Set(entries.map((entry) => entry.id));
+    let changed = false;
+    for (const key of rowHeightCacheRef.current.keys()) {
+      if (!visibleIds.has(key)) {
+        rowHeightCacheRef.current.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setRowHeightVersion((version) => version + 1);
+    }
+  }, [entries]);
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
+      return;
+    }
+    let changed = false;
+    const rows = root.querySelectorAll<HTMLElement>("[data-timeline-row='true']");
+    rows.forEach((row) => {
+      const entryId = row.dataset.timelineEntryId;
+      if (!entryId) {
+        return;
+      }
+      const measuredHeight = measureTimelineRowHeight(row);
+      if (measuredHeight === null) {
+        return;
+      }
+      const previousHeight = rowHeightCacheRef.current.get(entryId);
+      if (previousHeight === undefined || Math.abs(previousHeight - measuredHeight) >= 1) {
+        rowHeightCacheRef.current.set(entryId, measuredHeight);
+        changed = true;
+      }
+    });
+    if (changed) {
+      setRowHeightVersion((version) => version + 1);
+    }
+  }, [entries, visibleBlocks]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -124,24 +187,13 @@ export function Timeline({
       return;
     }
 
-    const expandVisibleWindow = () => {
-      const preloadDistance = Math.max(scroller.clientHeight * 1.5, ESTIMATED_TIMELINE_ROW_HEIGHT * 10);
-      setWindowStartIndex((current) => {
-        if (current <= 0) {
-          return current;
-        }
-        const targetSpacerHeight = Math.max(0, scroller.scrollTop - preloadDistance);
-        const targetStartIndex = Math.floor(targetSpacerHeight / ESTIMATED_TIMELINE_ROW_HEIGHT);
-        if (targetStartIndex >= current) {
-          return current;
-        }
-        return Math.max(0, Math.min(current - TIMELINE_WINDOW_EXPAND_ROWS, targetStartIndex));
-      });
+    const updateVisibleWindow = () => {
+      setWindowRange(timelineWindowRangeForScroll(scroller.scrollTop, scroller.clientHeight, entries.length));
     };
 
-    scroller.addEventListener("scroll", expandVisibleWindow, { passive: true });
+    scroller.addEventListener("scroll", updateVisibleWindow, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", expandVisibleWindow);
+      scroller.removeEventListener("scroll", updateVisibleWindow);
     };
   }, [entries.length]);
 
@@ -152,7 +204,12 @@ export function Timeline({
           <div aria-hidden="true" data-timeline-spacer="top" style={{ minHeight: topSpacerHeight }} />
         ) : null}
         {visibleBlocks.map((block, visibleIndex) => (
-          <div key={block.id} data-timeline-row="true" style={timelineRowStyle}>
+          <div
+            key={block.id}
+            data-timeline-row="true"
+            data-timeline-entry-id={timelineRenderBlockEntryId(block)}
+            style={timelineRowStyle}
+          >
             {block.kind === "inline-activity-log" ? (
               <InlineActivityLog entries={block.entries} />
             ) : (
@@ -170,6 +227,9 @@ export function Timeline({
             )}
           </div>
         ))}
+        {bottomSpacerHeight > 0 ? (
+          <div aria-hidden="true" data-timeline-spacer="bottom" style={{ minHeight: bottomSpacerHeight }} />
+        ) : null}
         {approvals?.map((approval) => (
           <ApprovalCard
             key={approval.requestId}
@@ -188,6 +248,10 @@ export function Timeline({
 export type TimelineRenderBlock =
   | { kind: "entry"; id: string; entry: TimelineEntry }
   | { kind: "inline-activity-log"; id: string; turnId?: string; entries: TimelineEntry[] };
+
+function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
+  return block.kind === "entry" ? block.entry.id : block.entries[0]?.id ?? block.id;
+}
 
 export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
   const blocks: TimelineRenderBlock[] = [];
@@ -231,8 +295,64 @@ function isActivityEntry(entry: TimelineEntry): boolean {
   );
 }
 
-function initialTimelineWindowStart(entryCount: number): number {
-  return Math.max(0, entryCount - MAX_INITIAL_TIMELINE_ROWS);
+function initialTimelineWindowRange(entryCount: number): TimelineWindowRange {
+  return {
+    start: Math.max(0, entryCount - MAX_INITIAL_TIMELINE_ROWS),
+    end: entryCount
+  };
+}
+
+function timelineSpacerHeight(
+  entries: TimelineEntry[],
+  start: number,
+  end: number,
+  rowHeightCache: ReadonlyMap<string, number>
+): number {
+  let height = 0;
+  for (let index = start; index < end; index += 1) {
+    const entry = entries[index];
+    if (!entry) {
+      continue;
+    }
+    height += rowHeightCache.get(entry.id) ?? ESTIMATED_TIMELINE_ROW_HEIGHT;
+  }
+  return height;
+}
+
+function measureTimelineRowHeight(row: HTMLElement): number | null {
+  const rectHeight = row.getBoundingClientRect().height;
+  const height = rectHeight || row.offsetHeight;
+  if (!Number.isFinite(height) || height < MIN_MEASURED_TIMELINE_ROW_HEIGHT) {
+    return null;
+  }
+  return Math.ceil(height);
+}
+
+function timelineWindowRangeForScroll(
+  scrollTop: number,
+  clientHeight: number,
+  entryCount: number
+): TimelineWindowRange {
+  if (entryCount <= MAX_INITIAL_TIMELINE_ROWS) {
+    return { start: 0, end: entryCount };
+  }
+  const viewportRows = Math.max(1, Math.ceil(clientHeight / ESTIMATED_TIMELINE_ROW_HEIGHT));
+  const windowRows = Math.max(MAX_INITIAL_TIMELINE_ROWS, viewportRows + TIMELINE_WINDOW_BUFFER_ROWS * 2);
+  const targetStart = Math.floor(Math.max(0, scrollTop) / ESTIMATED_TIMELINE_ROW_HEIGHT) - TIMELINE_WINDOW_BUFFER_ROWS;
+  const start = Math.max(0, Math.min(targetStart, Math.max(0, entryCount - windowRows)));
+  return clampTimelineWindowRange({ start, end: start + windowRows }, entryCount);
+}
+
+function clampTimelineWindowRange(range: TimelineWindowRange, entryCount: number): TimelineWindowRange {
+  if (entryCount <= MAX_INITIAL_TIMELINE_ROWS) {
+    return { start: 0, end: entryCount };
+  }
+  const size = Math.max(1, Math.min(entryCount, range.end - range.start || MAX_INITIAL_TIMELINE_ROWS));
+  const start = Math.max(0, Math.min(range.start, Math.max(0, entryCount - size)));
+  return {
+    start,
+    end: Math.min(entryCount, start + size)
+  };
 }
 
 function findTimelineScrollContainer(root: HTMLElement): HTMLElement | null {
@@ -274,6 +394,7 @@ function TimelineRow({
   onPreviewImage: (src: string) => void;
 }): JSX.Element {
   const body = entry.body;
+  const derivationKey = timelineEntryDerivationKey(entry);
   const content = (() => {
   switch (body.kind) {
     case "user-message":
@@ -289,15 +410,15 @@ function TimelineRow({
         />
       );
     case "agent-message":
-      return <AgentMessage text={body.text} live={live} eagerMarkdown={eagerMarkdown} />;
+      return <AgentMessage text={body.text} live={live} eagerMarkdown={eagerMarkdown} cacheKey={derivationKey} />;
     case "reasoning":
       return <ReasoningCard entry={body} />;
     case "command":
-      return <CommandCard entry={body} />;
+      return <CommandCard entry={body} cacheKey={derivationKey} />;
     case "diff":
-      return <DiffCard entry={body} />;
+      return <DiffCard entry={body} cacheKey={derivationKey} />;
     case "tool":
-      return <ToolCard entry={body} />;
+      return <ToolCard entry={body} cacheKey={derivationKey} />;
     case "system":
       return <SystemMessage entry={body} />;
     case "error":
@@ -318,7 +439,8 @@ function TimelineRow({
 function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const [openActionKeys, setOpenActionKeys] = useState<Set<string>>(() => new Set());
-  const sections = inlineActivitySections(entries);
+  const sectionsCacheKey = inlineActivitySectionsCacheKey(entries);
+  const sections = useMemo(() => inlineActivitySections(entries), [sectionsCacheKey]);
 
   function toggleSection(key: string): void {
     setOpenKeys((current) => {
@@ -475,7 +597,57 @@ type InlineActivityActionRow = {
 
 type InlineActivitySectionKind = "thinking" | "skills" | "commands" | "tools" | "files" | "fallback";
 
+function inlineActivitySectionsCacheKey(entries: TimelineEntry[]): string {
+  return entries.map(activityEntryCacheSignature).join("|");
+}
+
+function activityEntryCacheSignature(entry: TimelineEntry): string {
+  return timelineEntryDerivationKey(entry);
+}
+
+function timelineEntryDerivationKey(entry: TimelineEntry): string {
+  const body = entry.body;
+  const base = [
+    entry.id,
+    entry.turnId ?? "",
+    entry.generation ?? "",
+    entry.snapshotSequence ?? "",
+    body.kind
+  ];
+  switch (body.kind) {
+    case "reasoning":
+      return [...base, body.done ? "done" : "running", textCacheSignature(body.text)].join(":");
+    case "tool":
+      return [
+        ...base,
+        body.status,
+        body.toolKind,
+        body.server,
+        body.tool,
+        textCacheSignature(body.arguments ?? ""),
+        textCacheSignature(body.result ?? "")
+      ].join(":");
+    case "command":
+      return [...base, body.status, body.command, textCacheSignature(body.output ?? "")].join(":");
+    case "diff":
+      return [...base, body.path, body.added, body.removed, textCacheSignature(body.diff)].join(":");
+    default:
+      return base.join(":");
+  }
+}
+
+function textCacheSignature(text: string): string {
+  if (!text) {
+    return "0:0:0:0";
+  }
+  const middle = Math.floor(text.length / 2);
+  const hash =
+    (text.charCodeAt(0) * 31 + text.charCodeAt(middle) * 17 + text.charCodeAt(text.length - 1)) >>> 0;
+  return `${text.length}:${hash}`;
+}
+
 function inlineActivitySections(entries: TimelineEntry[]): InlineActivitySection[] {
+  timelineDerivationDiagnostics.inlineActivitySectionRuns += 1;
   const sections: InlineActivitySection[] = [];
   let currentKind: InlineActivitySectionKind | null = null;
   let currentEntries: TimelineEntry[] = [];
@@ -838,11 +1010,13 @@ function DirectActivityDetail({
   showTitle: boolean;
 }): JSX.Element {
   const body = entry.body;
+  const cacheKey = timelineEntryDerivationKey(entry);
   if (body.kind === "reasoning") {
     return (
       <ActivityDetailText
         text={body.text.trim() || (body.done ? "" : "Thinking...")}
         showTitle={false}
+        cacheKey={cacheKey}
       />
     );
   }
@@ -854,6 +1028,7 @@ function DirectActivityDetail({
           added={body.added ?? 0}
           removed={body.removed ?? 0}
           diff={fileActivityDiffText(body)}
+          cacheKey={cacheKey}
         />
       );
     }
@@ -862,11 +1037,12 @@ function DirectActivityDetail({
         title={body.toolKind === "command" ? body.tool : `${body.diffPath ?? body.tool}`}
         text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
         showTitle={showTitle}
+        cacheKey={cacheKey}
       />
     );
   }
   if (body.kind === "command") {
-    return <ActivityDetailText title={body.command} text={body.output ?? body.command} showTitle={showTitle} />;
+    return <ActivityDetailText title={body.command} text={body.output ?? body.command} showTitle={showTitle} cacheKey={cacheKey} />;
   }
   if (body.kind === "diff") {
     return (
@@ -876,19 +1052,22 @@ function DirectActivityDetail({
         removed={body.removed}
         diff={body.diff}
         showTitle={showTitle}
+        cacheKey={cacheKey}
       />
     );
   }
-  return <ActivityDetailText title={label} text={label} showTitle={showTitle} />;
+  return <ActivityDetailText title={label} text={label} showTitle={showTitle} cacheKey={cacheKey} />;
 }
 
 function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
   const body = entry.body;
+  const cacheKey = timelineEntryDerivationKey(entry);
   if (body.kind === "reasoning") {
     return (
       <ActivityDetailText
         title={body.done ? "Thinking" : "Thinking..."}
         text={body.text.trim() || (body.done ? "" : "Thinking...")}
+        cacheKey={cacheKey}
       />
     );
   }
@@ -897,14 +1076,15 @@ function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
       <ActivityDetailText
         title={body.toolKind === "command" ? body.tool : `${body.server} · ${body.diffPath ?? body.tool}`}
         text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
+        cacheKey={cacheKey}
       />
     );
   }
   if (body.kind === "command") {
-    return <ActivityDetailText title={body.command} text={body.output ?? body.command} />;
+    return <ActivityDetailText title={body.command} text={body.output ?? body.command} cacheKey={cacheKey} />;
   }
   if (body.kind === "diff") {
-    return <ActivityDetailText title={body.path} text={body.diff} />;
+    return <ActivityDetailText title={body.path} text={body.diff} cacheKey={cacheKey} />;
   }
   return <></>;
 }
@@ -914,13 +1094,15 @@ function InlineDiffActivityDetail({
   added,
   removed,
   diff,
-  showTitle = true
+  showTitle = true,
+  cacheKey
 }: {
   path: string;
   added: number;
   removed: number;
   diff: string;
   showTitle?: boolean;
+  cacheKey?: string;
 }): JSX.Element {
   return (
     <div style={activityDetailItemStyle}>
@@ -931,7 +1113,7 @@ function InlineDiffActivityDetail({
           <span style={inlineDiffRemovedStyle}>-{removed}</span>
         </div>
       ) : null}
-      <DiffView diff={diff} />
+      <DiffView diff={diff} cacheKey={cacheKey ? `${cacheKey}:inline-diff` : undefined} />
     </div>
   );
 }
@@ -948,25 +1130,37 @@ function fileActivityDiffText(body: Extract<TimelineEntry["body"], { kind: "tool
 function ActivityDetailText({
   title,
   text,
-  showTitle = true
+  showTitle = true,
+  cacheKey
 }: {
   title?: string;
   text: string;
   showTitle?: boolean;
+  cacheKey?: string;
 }): JSX.Element {
   return (
     <div style={activityDetailItemStyle}>
       {showTitle && title ? <div style={activityDetailTitleStyle}>{title}</div> : null}
       {text.trim() ? (
         <div style={activityDetailPreviewStyle}>
-          <LongTextPreview text={text} emptyText="（无内容）" copyLabel="复制完整详情" maxLines={80} />
+          <LongTextPreview text={text} emptyText="（无内容）" copyLabel="复制完整详情" maxLines={80} cacheKey={cacheKey} />
         </div>
       ) : null}
     </div>
   );
 }
 
-function AgentMessage({ text, live, eagerMarkdown }: { text: string; live: boolean; eagerMarkdown: boolean }): JSX.Element {
+function AgentMessage({
+  text,
+  live,
+  eagerMarkdown,
+  cacheKey
+}: {
+  text: string;
+  live: boolean;
+  eagerMarkdown: boolean;
+  cacheKey: string;
+}): JSX.Element {
   if (live) {
     return (
       <div style={agentMessageStyle}>
@@ -974,10 +1168,18 @@ function AgentMessage({ text, live, eagerMarkdown }: { text: string; live: boole
       </div>
     );
   }
-  return <LazyAgentMarkdown text={text} eagerMarkdown={eagerMarkdown} />;
+  return <LazyAgentMarkdown text={text} eagerMarkdown={eagerMarkdown} cacheKey={cacheKey} />;
 }
 
-function LazyAgentMarkdown({ text, eagerMarkdown }: { text: string; eagerMarkdown: boolean }): JSX.Element {
+function LazyAgentMarkdown({
+  text,
+  eagerMarkdown,
+  cacheKey
+}: {
+  text: string;
+  eagerMarkdown: boolean;
+  cacheKey: string;
+}): JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null);
   const [renderMarkdown, setRenderMarkdown] = useState(() => eagerMarkdown && text.length <= EAGER_MARKDOWN_TEXT_LIMIT);
 
@@ -1055,7 +1257,7 @@ function LazyAgentMarkdown({ text, eagerMarkdown }: { text: string; eagerMarkdow
 
   return (
     <div ref={ref} style={agentMessageStyle}>
-      {renderMarkdown ? <Markdown text={text} /> : <PlainAgentText text={text} />}
+      {renderMarkdown ? <Markdown text={text} cacheKey={cacheKey} /> : <PlainAgentText text={text} />}
     </div>
   );
 }
@@ -1507,4 +1709,5 @@ export function __getTimelineDerivationDiagnostics(): TimelineDerivationDiagnost
 export function __resetTimelineDerivationDiagnostics(): void {
   timelineDerivationDiagnostics.derivationRuns = 0;
   timelineDerivationDiagnostics.rowEntryScans = 0;
+  timelineDerivationDiagnostics.inlineActivitySectionRuns = 0;
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  latestSessionContextUsageFromLines,
   latestSessionContextUsage,
-  mergeSessionTimelineItems
+  mergeSessionTimelineItems,
+  scanSessionTimelineSupplement
 } from "../../src/server/app-server/session-timeline";
 import type { MobileTimelineItem } from "../../src/shared/codex";
 
@@ -16,6 +18,88 @@ function sessionLine(payload: Record<string, unknown>): string {
 }
 
 describe("app-server session timeline merge", () => {
+  it("stops scanning rollout records when the line budget is exhausted", () => {
+    const outsideLine = JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        id: "tool-outside",
+        call_id: "call-outside",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg outside", workdir: "/repo" }),
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-outside" }
+      }
+    });
+    const allowedLine = sessionLine({
+      type: "function_call",
+      id: "tool-current",
+      call_id: "call-current",
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "rg current", workdir: "/repo" })
+    });
+    let pulledLines = 0;
+    const lines = {
+      *[Symbol.iterator]() {
+        for (const line of [outsideLine, outsideLine, allowedLine]) {
+          pulledLines += 1;
+          if (pulledLines > 2) {
+            throw new Error("scanner read beyond maxScanLines");
+          }
+          yield line;
+        }
+      }
+    };
+
+    const supplement = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"]),
+      maxScanLines: 2,
+      maxSupplementRecords: 1
+    });
+
+    expect(supplement.records).toEqual([]);
+    expect(supplement.diagnostics).toMatchObject({
+      scannedLines: 2,
+      budgetExhausted: true
+    });
+    expect(pulledLines).toBe(2);
+  });
+
+  it("reports exhaustion when the matching supplement record budget is consumed", () => {
+    const lines = [
+      sessionLine({
+        type: "function_call",
+        id: "tool-first",
+        call_id: "call-first",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg first", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "function_call",
+        id: "tool-second",
+        call_id: "call-second",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg second", workdir: "/repo" })
+      })
+    ];
+
+    const supplement = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"]),
+      maxSupplementRecords: 1
+    });
+
+    expect(supplement.records).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        item: expect.objectContaining({ id: "tool-first" })
+      })
+    ]);
+    expect(supplement.diagnostics).toMatchObject({
+      scannedLines: 2,
+      parsedRecords: 1,
+      budgetExhausted: true
+    });
+  });
+
   it("reads the latest context usage from session token_count records", () => {
     const jsonl = [
       JSON.stringify({
@@ -103,6 +187,50 @@ describe("app-server session timeline merge", () => {
         totalTokens: 1250
       })
     );
+  });
+
+  it("reads context usage from bounded line input without requiring a full JSONL string", () => {
+    const oldUsage = JSON.stringify({
+      timestamp: "2026-07-04T19:00:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 1000,
+            output_tokens: 200,
+            reasoning_output_tokens: 50,
+            total_tokens: 1250
+          },
+          model_context_window: 200000
+        }
+      }
+    });
+    const latestUsage = JSON.stringify({
+      timestamp: "2026-07-04T19:02:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          last_token_usage: {
+            input_tokens: 2000,
+            output_tokens: 300,
+            reasoning_output_tokens: 80,
+            total_tokens: 2380
+          },
+          model_context_window: 258400
+        }
+      }
+    });
+
+    expect(latestSessionContextUsageFromLines([oldUsage, "{}", latestUsage], { maxTailLines: 2 })).toEqual({
+      totalTokens: 2380,
+      inputTokens: 2000,
+      outputTokens: 300,
+      reasoningOutputTokens: 80,
+      modelContextWindow: 258400,
+      updatedAt: Date.parse("2026-07-04T19:02:00.000Z")
+    });
   });
 
   it("places unanchored JSONL tool activity before the final assistant message", () => {

@@ -1557,6 +1557,51 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("读取刚创建未加载空会话时返回空 timeline", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: "empty-thread",
+            sessionId: "empty-session",
+            forkedFromId: null,
+            parentThreadId: null,
+            preview: "",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 100,
+            updatedAt: 200,
+            status: { type: "idle" },
+            path: null,
+            cwd: "C:\\Users\\huang\\workspace\\demo",
+            cliVersion: "0.141.0",
+            source: "vscode",
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: "新会话"
+          }
+        };
+      }
+      if (method === "thread/turns/list") {
+        throw new Error("thread empty-thread is not loaded; thread/turns/list unavailable before first user message");
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readThread("empty-thread")).resolves.toMatchObject({
+      id: "empty-thread",
+      title: "新会话",
+      timeline: [],
+      lastTurnId: null
+    });
+  });
+
   it("读取普通会话时使用 metadata 加最近 turns 窗口，不请求 includeTurns 全量历史", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -2224,9 +2269,27 @@ describe("CodexAppServerClient", () => {
     const thread = await client.rollbackThread("thread-1", 1);
 
     expect(thread.id).toBe("thread-1");
-    expect(peer.calls.at(-1)).toEqual({
+    expect(peer.calls).toContainEqual({
       method: "thread/rollback",
       params: { threadId: "thread-1", numTurns: 1 }
+    });
+  });
+
+  it("rollback 后保留最近 turns 窗口的分页 cursor", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const thread = await client.rollbackThread("thread-1", 1);
+
+    expect(thread.nextCursor).toBe("turn-older");
+    expect(peer.calls).toContainEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        limit: 30,
+        sortDirection: "desc",
+        itemsView: "full"
+      }
     });
   });
 

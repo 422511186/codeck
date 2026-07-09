@@ -304,7 +304,7 @@ markdown 中的代码块 SHALL 占满 timeline 宽度，超长行通过横向滑
 - **THEN** 系统 MUST 把代码块原文复制到剪贴板
 
 ### Requirement: 每条消息显示相对时间且始终用相对时间
-timeline 上每条消息 SHALL 在头部显示相对时间，不论时间是否超过一天，始终使用相对时间格式。
+timeline 上每条用户、agent、system 和可见 activity 消息 SHALL 在头部或等价元信息区域显示相对时间，不论时间是否超过一天，始终使用相对时间格式。相对时间文本 MUST 不挤压主要消息内容，且在移动端窄宽度下保持换行或省略稳定。
 
 #### Scenario: 近期消息
 - **WHEN** 消息发生在不久前
@@ -313,6 +313,11 @@ timeline 上每条消息 SHALL 在头部显示相对时间，不论时间是否�
 #### Scenario: 久远消息
 - **WHEN** 消息发生在数天或数月前
 - **THEN** 时间 MUST 仍使用相对时间（如「3 天前」「2 个月前」）
+
+#### Scenario: Activity 消息显示时间
+- **WHEN** timeline 中渲染可见 activity、system 或 tool 输出行
+- **THEN** 该行 MUST 显示与普通消息一致的相对时间或等价可见时间元信息
+- **AND** 时间元信息 MUST NOT 导致移动端消息正文重叠
 
 ### Requirement: 用户消息长按弹菜单
 用户消息 SHALL 在被长按时弹出操作菜单，菜单至少包含「复制」。
@@ -648,7 +653,7 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **AND** MUST 能防止重新引入全量同步渲染路径
 
 ### Requirement: Timeline 数据读取必须保持有界
-会话聊天页 SHALL 在首屏、分页、snapshot repair、turn item 补齐和 rollout supplement 中使用有界 timeline window。系统 MUST NOT 为了补充 activity、context usage、repair 或分页而默认读取完整 turns 历史或完整 rollout JSONL。
+会话聊天页 SHALL 在首屏、分页、snapshot repair、turn item 补齐和 rollout supplement 中使用有界 timeline window。系统 MUST NOT 为了补充 activity、context usage、repair 或分页而默认读取完整 turns 历史或完整 rollout JSONL；rollout supplement MUST 在扫描或解析过程中按当前窗口 turnId 过滤，并在预算耗尽时跳过补充。
 
 #### Scenario: 首屏读取保持最近窗口
 - **WHEN** 用户进入包含大量历史 turns 的会话页
@@ -667,6 +672,12 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **THEN** snapshot repair MUST 读取当前 thread 的最近窗口或目标 turn 相关窗口
 - **AND** MUST NOT 因 repair 默认加载完整会话历史
 
+#### Scenario: Supplement 解析时过滤窗口
+- **WHEN** rollout JSONL 包含大量窗口外 turns
+- **AND** 当前 timeline window 只允许少量 turnId
+- **THEN** supplement MUST 在扫描或解析过程中忽略窗口外 turn
+- **AND** MUST NOT 先完整物化窗口外事件再过滤
+
 ### Requirement: Rollout supplement 不得阻塞主 timeline
 会话聊天页 SHALL 把 rollout JSONL supplement 视为可降级补充信息。系统 MUST 优先保证主 timeline 可渲染和可流式更新；当 supplement 无法在有界预算内完成时，MUST 跳过或延后 supplement，而不是阻塞首屏、分页或 repair。
 
@@ -680,6 +691,11 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **WHEN** 当前 timeline window 只包含最近 N 个 turns
 - **THEN** rollout supplement MUST 只尝试补齐该窗口内可识别 turn 的 activity/context 信息
 - **AND** MUST NOT 为窗口外 turns 生成或合并 timeline entries
+
+#### Scenario: Supplement 预算耗尽时降级
+- **WHEN** supplement 扫描达到文件大小、行数、时间或内存预算
+- **THEN** 系统 MUST 停止该次 supplement 补齐并返回主 timeline
+- **AND** MUST NOT 阻塞首屏、分页或 snapshot repair 完成
 
 ### Requirement: 运行中输出无需手动刷新即可收敛
 会话聊天页 SHALL 通过 timeline event stream 自动显示运行中 turn 的 agent 回复、reasoning、tool、diff 和完成状态。若 live event 缺失或 listener 空窗导致缺口，系统 MUST 自动触发归属明确的有界 repair，不能要求用户手动刷新页面。
@@ -713,4 +729,81 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **WHEN** snapshot repair replace 当前 thread timeline
 - **THEN** 页面 MUST 保留与 timeline 无关的用户输入状态
 - **AND** repair MUST NOT 关闭用户正在操作的模型、权限、目标或上下文面板，除非该面板对应的 thread 已切换
+
+### Requirement: Rollout supplement uses bounded scan budgets
+会话聊天页和后端适配层 SHALL 将 rollout JSONL supplement 作为可跳过的窗口补充源。系统 MUST 不为首屏、分页、snapshot repair、turn item 补齐或 context usage 默认读取、切分或解析完整 rollout 文件；supplement MUST 按当前 timeline window、当前分页或目标 turn 的 `turnId` 过滤，并受文件大小、行数、耗时或内存预算约束。
+
+#### Scenario: Oversized rollout does not block thread detail
+- **WHEN** 用户打开包含大 rollout JSONL 的 thread
+- **AND** 主 `thread/read` 和最近 turns window 已可返回
+- **THEN** 后端 MUST 在 supplement 预算耗尽时跳过或延后 supplement
+- **AND** thread detail MUST 仍返回主 timeline window
+- **AND** 客户端 MUST 不要求用户刷新页面才能看到主 timeline
+
+#### Scenario: Page supplement scans only page turns
+- **WHEN** 用户向上分页加载更早历史
+- **AND** rollout JSONL 中包含大量不属于该 page 的 turns
+- **THEN** supplement MUST 只尝试补齐该 page 的 `turnId`
+- **AND** 窗口外记录 MUST NOT 消耗该 page 的 supplement 记录预算
+
+#### Scenario: Context usage avoids full rollout parse
+- **WHEN** header 或 context sheet 需要展示上下文用量
+- **THEN** 系统 MUST 优先使用 app-server summary、live `token_usage_updated`、本地缓存或有界尾部扫描
+- **AND** MUST NOT 为了计算 context usage 完整解析历史 rollout JSONL
+
+### Requirement: Timeline viewport recycles offscreen rows
+移动端 timeline SHALL 使用可回收的渲染窗口。系统 MUST 只挂载可见区域和上下 buffer 内的 rows；当用户长时间向上或向下浏览时，窗口外 rows MUST 被回收，并用稳定 spacer 或等价布局机制保持滚动位置。
+
+#### Scenario: Long browse does not retain all historical rows
+- **WHEN** thread timeline 包含数百条历史 rows
+- **AND** 用户从尾部连续向上浏览多个窗口
+- **THEN** DOM 中 `[data-timeline-row='true']` 的数量 MUST 保持在有界预算内
+- **AND** 已离开 buffer 的尾部 rows MUST 不继续挂载在主 timeline DOM 中
+
+#### Scenario: Prepending history preserves scroll anchor
+- **WHEN** 用户滚到顶部附近触发更早 turns 分页
+- **AND** 新 rows prepend 到当前 timeline 前方
+- **THEN** viewport MUST 维持用户正在阅读内容的视觉锚点
+- **AND** MUST 不因为 spacer 高度变化跳到最新消息或空白区域
+
+#### Scenario: New live output respects user scroll position
+- **WHEN** 用户不在 timeline 底部
+- **AND** active turn 收到新的 live delta 或 activity event
+- **THEN** viewport MUST 不强制滚到最新
+- **AND** 跳到最新入口 MUST 仍能把用户带回尾部
+
+### Requirement: Timeline updates are isolated from unrelated page state
+会话聊天页 SHALL 将 timeline 高频更新与 header、composer、模型/权限选择器、context sheet、goal editor、rename dialog 和 action sheet 的状态隔离。timeline delta、pagination、repair 或 supplement merge MUST 只更新需要消费 timeline slice 的组件和必要状态。
+
+#### Scenario: Delta does not reset composer state
+- **WHEN** 用户正在输入文本、选择图片或选择 Skill
+- **AND** timeline 收到高频 agent/tool/reasoning delta
+- **THEN** composer 草稿、图片选择和 Skill 选择 MUST 保持不变
+- **AND** composer MUST 不因每个 delta 被重新挂载
+
+#### Scenario: Repair does not close unrelated sheets
+- **WHEN** 用户打开模型、权限、context usage 或 goal 面板
+- **AND** 当前 thread 完成一次 snapshot repair 或 pagination merge
+- **THEN** 面板 MUST 保持打开
+- **AND** 除非用户切换 thread，repair MUST 不重置该面板的本地交互状态
+
+### Requirement: Mobile refresh recovers new thread detail
+手机端刷新会话页时，系统 SHALL 对刚创建、尚未 materialized 或短暂未加载的 thread 提供可恢复读取路径。若 thread 已存在但 timeline 尚为空，页面 MUST 显示可交互的空会话，而不是直接进入不可用错误页。
+
+#### Scenario: Refresh newly created empty thread
+- **WHEN** 用户在手机端创建新会话并立即刷新 `/threads/{threadId}`
+- **AND** app-server 首次读取该 thread 的 turns 时报告未 materialized、未加载或 first user message 前不可用
+- **THEN** 页面 MUST 恢复为空 timeline 的会话详情
+- **AND** 用户 MUST 能继续输入第一条消息
+
+#### Scenario: Transient read failure retries before error
+- **WHEN** 手机端刷新会话页时首次 `readThread` 遇到可恢复的 transient thread read 错误
+- **THEN** 客户端 MUST 执行有限重试或 resume/read fallback
+- **AND** 只有恢复失败后才显示错误页
+
+#### Scenario: Existing cached timeline remains visible on read failure
+- **WHEN** 刷新或修复读取失败
+- **AND** 当前 store 已有该 thread 的 timeline entries
+- **THEN** 页面 MUST 保留可见 timeline
+- **AND** MUST 以非破坏方式展示读取失败反馈
 

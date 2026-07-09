@@ -7,10 +7,15 @@ import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoint
 import { ApiError } from "../../../web/api/client";
 import { createRequestCoordinator, isRequestAbort } from "../../../web/api/requestCoordinator";
 import { useStore } from "../../../web/state/store";
-import { hasVisibleTurnOutput, rollbackTurnsForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
+import { hasVisibleTurnOutput, rollbackMetadataForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
+import {
+  repairReconstructedTimelineEntries,
+  threadDetailEntries,
+  threadDetailEntriesWithTurnItems
+} from "../../../web/state/timeline-adapter";
 import {
   DEFAULT_COLLABORATION_MODEL,
   collaborationModeForChatMode,
@@ -74,13 +79,7 @@ export default function ThreadPage(): JSX.Element {
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
-  const compactCompletionSeen = useStore((s) =>
-    Boolean(
-      s.threads[threadId]?.entries.some(
-        (entry) => entry.body.kind === "system" && entry.body.text === "压缩上下文已完成"
-      )
-    )
-  );
+  const compactCompletionSeen = useStore((s) => threadHasCompactCompletion(s.threads[threadId]));
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const wsState = useStore((s) => s.wsState);
   const webSettings = settingsStore.get();
@@ -331,7 +330,7 @@ export default function ThreadPage(): JSX.Element {
         const td = await requestCoordinatorRef.current.dedupeRequest(
           `thread:${threadId}:detail`,
           () => codex.readThread(threadId)
-        );
+        ).catch((err) => recoverInitialThreadDetail(threadId, err));
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail(td, "replace");
@@ -367,7 +366,7 @@ export default function ThreadPage(): JSX.Element {
           requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
-        const entries = await threadDetailEntriesWithTurnItems(td, threadId);
+        const entries = await threadDetailEntriesWithTurnItems(td, threadId, codex.listTurnItems);
         if (cancelled) return;
         applyThreadDetail(td, "replace", threadId, entries);
         clearRepairRetryTimer();
@@ -393,7 +392,6 @@ export default function ThreadPage(): JSX.Element {
 
   useEffect(() => {
     if (!threadRunning && !compactPending) return;
-    if (!compactPending && !shouldRepairRunningSummaryFromEventStreamState(wsState)) return;
     let cancelled = false;
     let timer: number | null = null;
 
@@ -415,8 +413,10 @@ export default function ThreadPage(): JSX.Element {
         applyThreadSummaryStatus(summary);
         if (summaryRunning) {
           const disconnectedRepairKey = `${currentThread?.activeTurnId ?? "thread"}`;
+          const activeTurnId = currentThread?.activeTurnId ?? null;
+          const hasVisibleOutput = threadHasVisibleOutput(currentThread, activeTurnId);
           if (
-            shouldRepairRunningSummaryFromEventStreamState(wsState) &&
+            (shouldRepairRunningSummaryFromEventStreamState(wsState) || Boolean(activeTurnId && !hasVisibleOutput)) &&
             !currentThread?.repairRequest &&
             !streamDisconnectedRepairKeysRef.current.has(disconnectedRepairKey)
           ) {
@@ -428,9 +428,7 @@ export default function ThreadPage(): JSX.Element {
           }
         } else {
           const activeTurnId = currentThread?.activeTurnId ?? null;
-          const hasVisibleOutput = Boolean(
-            activeTurnId && hasVisibleTurnOutput(currentThread?.entries ?? [], activeTurnId)
-          );
+          const hasVisibleOutput = threadHasVisibleOutput(currentThread, activeTurnId);
           compactActionPendingRef.current = false;
           setCompactPending(false);
           if (
@@ -605,7 +603,7 @@ export default function ThreadPage(): JSX.Element {
           const currentThread = useStore.getState().threads[threadId];
           if (currentThread?.running) {
             setActiveTurnId(threadId, started.turnId);
-          } else if (!hasVisibleTurnOutput(currentThread?.entries ?? [], started.turnId)) {
+          } else if (!threadHasVisibleOutput(currentThread, started.turnId)) {
             requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: started.turnId
@@ -725,8 +723,8 @@ export default function ThreadPage(): JSX.Element {
       if (currentThread?.running || entry.body.kind !== "user-message") return;
       const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
-      const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
-      if (!target || !numTurns) {
+      const rollbackMetadata = target ? rollbackMetadataForEntry(entries, target, { cursor: currentThread?.cursor ?? null }) : null;
+      if (!target || !rollbackMetadata) {
         appendEntries(threadId, [
           {
             id: uniqueTimelineId("rewind-error"),
@@ -739,9 +737,12 @@ export default function ThreadPage(): JSX.Element {
 
       try {
         bumpMutationEpoch();
-        const expectedDeletedTurnIds = tailTurnIdsForRollback(entries, target, numTurns);
-        const rolledBack = await rollbackThreadWithResume(threadId, numTurns, expectedDeletedTurnIds);
-        for (const turnId of expectedDeletedTurnIds) {
+        const rolledBack = await rollbackThreadWithResume(
+          threadId,
+          rollbackMetadata.numTurns,
+          rollbackMetadata.expectedDeletedTurnIds
+        );
+        for (const turnId of rollbackMetadata.expectedDeletedTurnIds) {
           markTurnDeleted(threadId, turnId);
         }
         applyThreadDetail(rolledBack, "replace");
@@ -767,8 +768,8 @@ export default function ThreadPage(): JSX.Element {
       if (currentThread?.running || entry.body.kind !== "user-message") return;
       const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
-      const numTurns = target ? rollbackTurnsForEntry(entries, target) : null;
-      if (!target || !numTurns) {
+      const rollbackMetadata = target ? rollbackMetadataForEntry(entries, target, { cursor: currentThread?.cursor ?? null }) : null;
+      if (!target || !rollbackMetadata) {
         appendEntries(threadId, [
           {
             id: uniqueTimelineId("fork-error"),
@@ -793,8 +794,8 @@ export default function ThreadPage(): JSX.Element {
           ]);
           return;
         }
-        const forkNumTurns = rollbackTurnsForEntry(forkEntries, forkTarget);
-        if (!forkNumTurns) {
+        const forkRollbackMetadata = rollbackMetadataForEntry(forkEntries, forkTarget);
+        if (!forkRollbackMetadata) {
           appendEntries(threadId, [
             {
               id: uniqueTimelineId("fork-error"),
@@ -804,10 +805,13 @@ export default function ThreadPage(): JSX.Element {
           ]);
           return;
         }
-        const expectedDeletedTurnIds = tailTurnIdsForRollback(forkEntries, forkTarget, forkNumTurns);
         bumpMutationEpoch();
-        const rolledBack = await rollbackThreadWithResume(forked.id, forkNumTurns, expectedDeletedTurnIds);
-        for (const turnId of expectedDeletedTurnIds) {
+        const rolledBack = await rollbackThreadWithResume(
+          forked.id,
+          forkRollbackMetadata.numTurns,
+          forkRollbackMetadata.expectedDeletedTurnIds
+        );
+        for (const turnId of forkRollbackMetadata.expectedDeletedTurnIds) {
           markTurnDeleted(forked.id, turnId);
         }
         applyThreadDetail(rolledBack, "replace", forked.id);
@@ -2015,6 +2019,43 @@ function isThreadCompactableStatus(status: string): boolean {
   return status === "idle";
 }
 
+function threadHasVisibleOutput(
+  thread:
+    | {
+        entries?: TimelineEntry[];
+        entryIndexes?: { visibleOutputTurnIds?: Set<string> };
+      }
+    | undefined,
+  turnId: string | null
+): boolean {
+  if (!thread || !turnId) {
+    return false;
+  }
+  if (thread.entryIndexes?.visibleOutputTurnIds) {
+    return thread.entryIndexes.visibleOutputTurnIds.has(turnId);
+  }
+  return hasVisibleTurnOutput(thread.entries ?? [], turnId);
+}
+
+function threadHasCompactCompletion(
+  thread:
+    | {
+        entries?: TimelineEntry[];
+        entryIndexes?: { compactCompletionSeen?: boolean };
+      }
+    | undefined
+): boolean {
+  if (!thread) {
+    return false;
+  }
+  if (typeof thread.entryIndexes?.compactCompletionSeen === "boolean") {
+    return thread.entryIndexes.compactCompletionSeen;
+  }
+  return Boolean(
+    thread.entries?.some((entry) => entry.body.kind === "system" && entry.body.text === "压缩上下文已完成")
+  );
+}
+
 function hasEquivalentPendingCompletionRepair(
   repairRequest: { reason?: string; turnId?: string } | null | undefined,
   turnId: string | null
@@ -2082,229 +2123,6 @@ function mergeSentUserContextIntoThreadDetail(
           : { skillReferences: context.skillReferences })
       };
     })
-  };
-}
-
-function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
-  return repairReconstructedTimelineEntries(
-    td.timeline.map((item, idx) =>
-      timelineItemToEntry(
-        {
-          ...item,
-          ...(typeof item.generation !== "number" && typeof td.generation === "number" ? { generation: td.generation } : {}),
-          ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
-            ? { snapshotSequence: td.snapshotSequence }
-            : {})
-        },
-        td.updatedAt - (td.timeline.length - idx)
-      )
-    )
-  );
-}
-
-const TURN_ITEM_DETAIL_PAGE_LIMIT = 100;
-const TURN_ITEM_DETAIL_MAX_PAGES = 5;
-
-async function threadDetailEntriesWithTurnItems(td: ThreadDetail, threadId: string): Promise<TimelineEntry[]> {
-  const baseEntries = threadDetailEntries(td);
-  const turnId = td.lastTurnId ?? lastTurnIdFromEntries(baseEntries);
-  if (!turnId) {
-    return baseEntries;
-  }
-
-  try {
-    const itemEntries: TimelineEntry[] = [];
-    let cursor: string | null | undefined;
-    for (let pageIndex = 0; pageIndex < TURN_ITEM_DETAIL_MAX_PAGES; pageIndex += 1) {
-      const page = await codex.listTurnItems(threadId, turnId, cursor, TURN_ITEM_DETAIL_PAGE_LIMIT);
-      itemEntries.push(
-        ...page.items.map((item, idx) =>
-          timelineItemToEntry(
-            {
-              ...item,
-              turnId: item.turnId ?? turnId,
-              ...(typeof item.generation !== "number" && typeof td.generation === "number"
-                ? { generation: td.generation }
-                : {}),
-              ...(typeof item.snapshotSequence !== "number" && typeof td.snapshotSequence === "number"
-                ? { snapshotSequence: td.snapshotSequence }
-                : {})
-            },
-            td.updatedAt - itemEntries.length - page.items.length + idx
-          )
-        )
-      );
-      cursor = page.nextCursor ?? null;
-      if (!cursor) {
-        break;
-      }
-    }
-
-    return mergeTurnItemDetailsIntoTimeline(baseEntries, itemEntries, turnId);
-  } catch {
-    return baseEntries;
-  }
-}
-
-function lastTurnIdFromEntries(entries: TimelineEntry[]): string | null {
-  for (let idx = entries.length - 1; idx >= 0; idx -= 1) {
-    const turnId = entries[idx]?.turnId;
-    if (turnId) {
-      return turnId;
-    }
-  }
-  return null;
-}
-
-function mergeTurnItemDetailsIntoTimeline(
-  baseEntries: TimelineEntry[],
-  itemEntries: TimelineEntry[],
-  turnId: string
-): TimelineEntry[] {
-  if (!itemEntries.length) {
-    return baseEntries;
-  }
-  const turnItemEntries = itemEntries.filter((entry) => entry.turnId === turnId);
-  if (!turnItemEntries.length) {
-    return baseEntries;
-  }
-
-  const baseEntriesById = new Map(baseEntries.map((entry) => [entry.id, entry]));
-  const turnItemIds = new Set(turnItemEntries.map((entry) => entry.id));
-  const orderedTurnEntries = turnItemEntries.map((entry) =>
-    mergeTurnDetailEntry(baseEntriesById.get(entry.id), entry)
-  );
-  const baseOnlyTurnEntries = baseEntries.filter((entry) => entry.turnId === turnId && !turnItemIds.has(entry.id));
-  const mergedTurnEntries = mergeBaseOnlyTurnEntries(orderedTurnEntries, baseOnlyTurnEntries);
-  const firstTurnIndex = baseEntries.findIndex((entry) => entry.turnId === turnId);
-  if (firstTurnIndex < 0) {
-    return [...baseEntries, ...mergedTurnEntries];
-  }
-
-  const beforeTurn = baseEntries.slice(0, firstTurnIndex);
-  const afterTurn = baseEntries.slice(firstTurnIndex).filter((entry) => entry.turnId !== turnId);
-  return [
-    ...beforeTurn,
-    ...mergedTurnEntries,
-    ...afterTurn
-  ];
-}
-
-function mergeBaseOnlyTurnEntries(
-  orderedTurnEntries: TimelineEntry[],
-  baseOnlyTurnEntries: TimelineEntry[]
-): TimelineEntry[] {
-  if (!baseOnlyTurnEntries.length) {
-    return repairReconstructedTurnEntries(orderedTurnEntries);
-  }
-
-  const detailHasUser = orderedTurnEntries.some((entry) => entry.body.kind === "user-message");
-  const baseOnlyUsers = baseOnlyTurnEntries.filter((entry) => entry.body.kind === "user-message");
-  const baseOnlyOtherEntries = baseOnlyTurnEntries.filter((entry) => entry.body.kind !== "user-message");
-  if (!detailHasUser && baseOnlyUsers.length) {
-    return repairReconstructedTurnEntries([
-      ...baseOnlyUsers,
-      ...orderedTurnEntries,
-      ...baseOnlyOtherEntries
-    ]);
-  }
-
-  return repairReconstructedTurnEntries([...orderedTurnEntries, ...baseOnlyTurnEntries]);
-}
-
-function repairReconstructedTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
-  const repaired: TimelineEntry[] = [];
-  let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index]!;
-    if (!entry.turnId) {
-      repaired.push(entry);
-      index += 1;
-      continue;
-    }
-
-    const turnId = entry.turnId;
-    const turnEntries: TimelineEntry[] = [];
-    while (index < entries.length && entries[index]?.turnId === turnId) {
-      turnEntries.push(entries[index]!);
-      index += 1;
-    }
-    repaired.push(...repairReconstructedTurnEntries(turnEntries));
-  }
-  return repaired;
-}
-
-function repairReconstructedTurnEntries(entries: TimelineEntry[]): TimelineEntry[] {
-  return withCreatedAtFollowingEntryOrder(moveTrailingActivityBeforeFinalAssistant(entries));
-}
-
-function moveTrailingActivityBeforeFinalAssistant(entries: TimelineEntry[]): TimelineEntry[] {
-  const finalAssistantIndex = findLastAgentMessageIndex(entries);
-  if (finalAssistantIndex < 0 || finalAssistantIndex === entries.length - 1) {
-    return entries;
-  }
-
-  const beforeFinalAssistant = entries.slice(0, finalAssistantIndex);
-  const finalAssistant = entries[finalAssistantIndex]!;
-  const afterFinalAssistant = entries.slice(finalAssistantIndex + 1);
-  const trailingActivity = afterFinalAssistant.filter(isInlineActivityEntry);
-  if (!trailingActivity.length) {
-    return entries;
-  }
-  const trailingOtherEntries = afterFinalAssistant.filter((entry) => !isInlineActivityEntry(entry));
-  return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherEntries];
-}
-
-function withCreatedAtFollowingEntryOrder(entries: TimelineEntry[]): TimelineEntry[] {
-  if (entries.length < 2 || hasMonotonicCreatedAt(entries)) {
-    return entries;
-  }
-
-  const baseCreatedAt = Math.min(...entries.map((entry) => entry.createdAt));
-  return entries.map((entry, index) => ({
-    ...entry,
-    createdAt: baseCreatedAt + index * 0.001
-  }));
-}
-
-function hasMonotonicCreatedAt(entries: TimelineEntry[]): boolean {
-  for (let index = 1; index < entries.length; index += 1) {
-    if (entries[index]!.createdAt < entries[index - 1]!.createdAt) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function findLastAgentMessageIndex(entries: TimelineEntry[]): number {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index]?.body.kind === "agent-message") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function isInlineActivityEntry(entry: TimelineEntry): boolean {
-  return (
-    entry.body.kind === "reasoning" ||
-    entry.body.kind === "tool" ||
-    entry.body.kind === "command" ||
-    entry.body.kind === "diff"
-  );
-}
-
-function mergeTurnDetailEntry(baseEntry: TimelineEntry | undefined, detailEntry: TimelineEntry): TimelineEntry {
-  if (!baseEntry) {
-    return detailEntry;
-  }
-  return {
-    ...detailEntry,
-    createdAt: baseEntry.createdAt,
-    turnIndex: detailEntry.turnIndex ?? baseEntry.turnIndex,
-    generation: detailEntry.generation ?? baseEntry.generation,
-    snapshotSequence: detailEntry.snapshotSequence ?? baseEntry.snapshotSequence,
-    clientUserMessageId: detailEntry.clientUserMessageId ?? baseEntry.clientUserMessageId
   };
 }
 
@@ -2393,13 +2211,19 @@ function resolveCurrentUserMessage(entries: TimelineEntry[], candidate: Timeline
     }
   }
 
-  if (!candidateText) {
-    return null;
+  return null;
+}
+
+async function recoverInitialThreadDetail(threadId: string, error: unknown): Promise<ThreadDetail> {
+  if (!isRecoverableThreadReadError(error)) {
+    throw error;
   }
-  const matches = entries.filter(
-    (entry) => entry.body.kind === "user-message" && entry.body.text.trim() === candidateText
-  );
-  return matches.length === 1 ? matches[0] : null;
+  return codex.resumeThread(threadId);
+}
+
+function isRecoverableThreadReadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not loaded|not materialized|before first user message|thread not found/i.test(message);
 }
 
 function resolveEquivalentUserMessage(entries: TimelineEntry[], target: TimelineEntry): TimelineEntry | null {
@@ -2433,26 +2257,6 @@ function resolveEquivalentUserMessage(entries: TimelineEntry[], target: Timeline
     (entry) => entry.body.kind === "user-message" && entry.body.text.trim() === targetText
   );
   return matches.length === 1 ? matches[0] : null;
-}
-
-function tailTurnIdsForRollback(entries: TimelineEntry[], target: TimelineEntry, numTurns: number): string[] {
-  if (!target.turnId) {
-    return [];
-  }
-  const turnIds: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.turnId || seen.has(entry.turnId)) {
-      continue;
-    }
-    seen.add(entry.turnId);
-    turnIds.push(entry.turnId);
-  }
-  const targetIndex = turnIds.indexOf(target.turnId);
-  if (targetIndex < 0) {
-    return [];
-  }
-  return turnIds.slice(targetIndex, targetIndex + numTurns);
 }
 
 function errorMessage(error: unknown): string {

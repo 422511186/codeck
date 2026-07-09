@@ -106,7 +106,11 @@ export class TimelineEventStreamClient {
     if (this.bufferTextDeltaEvent(event)) {
       return;
     }
-    this.flushDeltaBatches();
+    if (isRepairBarrierEvent(event)) {
+      this.dropPendingDeltaBatchesForThread(event.threadId);
+    } else {
+      this.flushDeltaBatches();
+    }
     this.emitEvent(event);
   };
 
@@ -140,7 +144,8 @@ export class TimelineEventStreamClient {
 
     if (!this.eventListeners.size && this.pendingDeltaEventCount() >= this.maxPendingEvents) {
       this.clearPendingDeltaBatches();
-      this.pendingEvents = [timelineGapForBufferedEvent(event)];
+      const gap = timelineGapForBufferedEvent(event);
+      this.pendingEvents = gap ? [gap] : [event];
       return true;
     }
 
@@ -182,6 +187,21 @@ export class TimelineEventStreamClient {
     this.pendingDeltaBatches.clear();
   }
 
+  private dropPendingDeltaBatchesForThread(threadId: string | null | undefined): void {
+    if (!threadId) {
+      return;
+    }
+    for (const [key, batch] of this.pendingDeltaBatches) {
+      if (batch.events.some((event) => event.threadId === threadId)) {
+        this.pendingDeltaBatches.delete(key);
+      }
+    }
+    if (!this.pendingDeltaBatches.size && this.deltaBatchTimer) {
+      clearTimeout(this.deltaBatchTimer);
+      this.deltaBatchTimer = null;
+    }
+  }
+
   private flushDeltaBatches(): void {
     if (this.deltaBatchTimer) {
       clearTimeout(this.deltaBatchTimer);
@@ -208,7 +228,8 @@ export class TimelineEventStreamClient {
       return;
     }
 
-    this.pendingEvents = [timelineGapForBufferedEvent(event)];
+    const gap = timelineGapForBufferedEvent(event);
+    this.pendingEvents = gap ? [gap] : [event];
   }
 
   private flushPendingEvents(): void {
@@ -251,18 +272,25 @@ function deltaBatchKey(event: WsCodexEvent["event"]): string | null {
   return [threadId, turnId, itemId, event.kind, generation].join("\u0001");
 }
 
-function timelineGapForBufferedEvent(event: WsEvent): WsEvent {
+function isRepairBarrierEvent(event: WsEvent): event is Extract<WsEvent, { type: "timeline-gap" }> {
+  return event.type === "timeline-gap";
+}
+
+function timelineGapForBufferedEvent(event: WsEvent): WsEvent | null {
   if (event.type === "codex-event") {
     const threadId = typeof event.event.threadId === "string" ? event.event.threadId : null;
+    if (!threadId) {
+      return null;
+    }
     const lastEventId = typeof event.event.eventId === "string" ? event.event.eventId : undefined;
     return {
       type: "timeline-gap",
-      ...(threadId ? { threadId } : {}),
+      threadId,
       ...(lastEventId ? { lastEventId } : {})
     };
   }
 
-  return { type: "timeline-gap" };
+  return null;
 }
 
 let singleton: TimelineEventStreamClient | null = null;

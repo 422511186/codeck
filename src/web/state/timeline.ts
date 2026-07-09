@@ -1,5 +1,9 @@
 import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
-import { selectOrderedDistinctTurnsForEntries } from "./timeline-engine";
+import {
+  createTimelineEngineState,
+  selectRollbackMetadataForEntry,
+  selectTurnHasVisibleOutput
+} from "./timeline-engine";
 
 export type TimelineEntryKind =
   | "user-message"
@@ -94,23 +98,7 @@ export type TimelineEntry = {
 };
 
 export function hasVisibleTurnOutput(entries: TimelineEntry[], turnId: string): boolean {
-  return entries.some((entry) => entry.turnId === turnId && isVisibleTurnOutputEntry(entry));
-}
-
-function isVisibleTurnOutputEntry(entry: TimelineEntry): boolean {
-  switch (entry.body.kind) {
-    case "agent-message":
-    case "reasoning":
-    case "system":
-    case "error":
-      return entry.body.text.trim().length > 0;
-    case "tool":
-    case "command":
-    case "diff":
-      return true;
-    case "user-message":
-      return false;
-  }
+  return selectTurnHasVisibleOutput(createTimelineEngineState({ entries }), turnId);
 }
 
 const localImagePattern = /[A-Za-z]:[\\/][^\r\n]+?\.(?:png|jpe?g|webp|gif)/gi;
@@ -246,19 +234,15 @@ function timelineEntryMeta(
 }
 
 export function rollbackTurnsForEntry(entries: TimelineEntry[], target: TimelineEntry): number | null {
-  if (!target.turnId) {
-    return null;
-  }
+  return rollbackMetadataForEntry(entries, target)?.numTurns ?? null;
+}
 
-  const turnIds = selectOrderedDistinctTurnsForEntries(entries).map((turn) => turn.turnId);
-
-  const targetIndex = turnIds.indexOf(target.turnId);
-  if (targetIndex < 0) {
-    return null;
-  }
-
-  const numTurns = turnIds.length - targetIndex;
-  return numTurns >= 1 ? numTurns : null;
+export function rollbackMetadataForEntry(
+  entries: TimelineEntry[],
+  target: TimelineEntry,
+  options: { cursor?: string | null } = {}
+): { numTurns: number; expectedDeletedTurnIds: string[] } | null {
+  return selectRollbackMetadataForEntry(createTimelineEngineState({ entries, cursor: options.cursor ?? null }), target);
 }
 
 export function entriesBeforeEntry(entries: TimelineEntry[], target: TimelineEntry): TimelineEntry[] | null {

@@ -44,6 +44,8 @@ export type TimelineEngineDiagnostics = {
   droppedStaleGenerationEvents: number;
   droppedDuplicateEvents: number;
   droppedStaleRevisions: number;
+  normalizationRuns: number;
+  normalizedEntryVisits: number;
 };
 
 export type OrderedDistinctTurn = {
@@ -52,8 +54,22 @@ export type OrderedDistinctTurn = {
   order: number;
 };
 
+export type SnapshotDeltaSuppression = {
+  text: string;
+  offset: number;
+  maxSequence?: number;
+  generation?: number;
+};
+
+export type TimelineEngineIndexes = {
+  byEntryId: Map<string, number>;
+  byTurnId: Map<string, number[]>;
+  byIdentity: Map<string, number>;
+};
+
 export type TimelineEngineState = {
   entries: TimelineEntry[];
+  indexes: TimelineEngineIndexes;
   cursor: string | null;
   reachedBeginning: boolean;
   generation: number;
@@ -64,11 +80,14 @@ export type TimelineEngineState = {
 };
 
 export function createTimelineEngineState(init?: Partial<TimelineEngineState>): TimelineEngineState {
+  const generation = init?.generation ?? 0;
+  const entries = init?.entries ? normalizeEntries(init.entries) : [];
   return {
-    entries: init?.entries ? normalizeEntries(init.entries) : [],
+    entries,
+    indexes: init?.indexes ?? buildTimelineIndexes(entries, generation),
     cursor: init?.cursor ?? null,
     reachedBeginning: init?.reachedBeginning ?? false,
-    generation: init?.generation ?? 0,
+    generation,
     deletedTurnIds: new Set(init?.deletedTurnIds ?? []),
     processedEventIds: new Set(init?.processedEventIds ?? []),
     itemRevisions: new Map(init?.itemRevisions ?? []),
@@ -80,6 +99,8 @@ export function createTimelineEngineState(init?: Partial<TimelineEngineState>): 
       droppedStaleGenerationEvents: 0,
       droppedDuplicateEvents: 0,
       droppedStaleRevisions: 0,
+      normalizationRuns: 0,
+      normalizedEntryVisits: 0,
       ...init?.diagnostics
     }
   };
@@ -112,7 +133,9 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
       );
     }
     case "live-event-batch":
-      return input.inputs.reduce(applyTimelineInput, state);
+      return input.inputs.every(isTimelineEntryInput)
+        ? applyEntryInputBatch(state, input.inputs)
+        : input.inputs.reduce(applyTimelineInput, state);
     case "rollback-fork-replace": {
       const generation = Math.max(state.generation, input.generation ?? state.generation);
       return withEntries(
@@ -136,9 +159,13 @@ export function selectTimelineEntries(state: TimelineEngineState): TimelineEntry
 }
 
 export function selectOrderedDistinctTurns(state: TimelineEngineState): OrderedDistinctTurn[] {
+  return selectOrderedDistinctTurnsForNormalizedEntries(state.entries);
+}
+
+export function selectOrderedDistinctTurnsForNormalizedEntries(entries: TimelineEntry[]): OrderedDistinctTurn[] {
   const turns: OrderedDistinctTurn[] = [];
   const seen = new Set<string>();
-  for (const entry of state.entries) {
+  for (const entry of entries) {
     if (!entry.turnId || seen.has(entry.turnId)) {
       continue;
     }
@@ -150,6 +177,138 @@ export function selectOrderedDistinctTurns(state: TimelineEngineState): OrderedD
 
 export function selectOrderedDistinctTurnsForEntries(entries: TimelineEntry[]): OrderedDistinctTurn[] {
   return selectOrderedDistinctTurns(createTimelineEngineState({ entries }));
+}
+
+export function selectTurnHasVisibleOutput(state: TimelineEngineState, turnId: string): boolean {
+  const turnIndexes = state.indexes.byTurnId.get(turnId) ?? [];
+  return turnIndexes.some((index) => {
+    const entry = state.entries[index];
+    return entry ? isVisibleTurnOutputEntry(entry) : false;
+  });
+}
+
+export function selectHasContextCompactionCompletion(state: TimelineEngineState): boolean {
+  for (const identity of state.indexes.byIdentity.keys()) {
+    if (identity.startsWith("system:compact:")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function selectRollbackMetadataForEntry(
+  state: TimelineEngineState,
+  target: TimelineEntry
+): { numTurns: number; expectedDeletedTurnIds: string[] } | null {
+  if (!target.turnId) {
+    return null;
+  }
+
+  const turnIds = selectOrderedDistinctTurns(state).map((turn) => turn.turnId);
+  const targetIndex = turnIds.indexOf(target.turnId);
+  if (targetIndex < 0) {
+    return null;
+  }
+  if (targetIndex === 0 && state.cursor) {
+    return null;
+  }
+
+  const expectedDeletedTurnIds = turnIds.slice(targetIndex);
+  return expectedDeletedTurnIds.length
+    ? { numTurns: expectedDeletedTurnIds.length, expectedDeletedTurnIds }
+    : null;
+}
+
+export function isVisibleTurnOutputEntry(entry: TimelineEntry): boolean {
+  switch (entry.body.kind) {
+    case "agent-message":
+    case "reasoning":
+    case "system":
+    case "error":
+      return entry.body.text.trim().length > 0;
+    case "tool":
+    case "command":
+    case "diff":
+      return true;
+    case "user-message":
+      return false;
+  }
+}
+
+export function isContextCompactionCompletionEntry(entry: TimelineEntry): boolean {
+  return isContextCompactionEntry(entry);
+}
+
+export function createSnapshotDeltaSuppressions(entries: TimelineEntry[]): Map<string, SnapshotDeltaSuppression> {
+  const suppressions = new Map<string, SnapshotDeltaSuppression>();
+  for (const entry of entries) {
+    const text = snapshotDeltaComparableText(entry);
+    if (text) {
+      suppressions.set(entry.id, {
+        text,
+        offset: 0,
+        ...(typeof entry.snapshotSequence === "number" ? { maxSequence: entry.snapshotSequence } : {}),
+        ...(typeof entry.generation === "number" ? { generation: entry.generation } : {})
+      });
+    }
+  }
+  return suppressions;
+}
+
+export function shouldSuppressSnapshotDeltaReplay(
+  suppressions: Map<string, SnapshotDeltaSuppression>,
+  itemId: string,
+  delta: string,
+  sequence: unknown,
+  generation: number | null
+): boolean {
+  const suppression = suppressions.get(itemId);
+  if (!suppression) {
+    return false;
+  }
+
+  if (
+    typeof suppression.generation === "number" &&
+    generation !== null &&
+    generation !== suppression.generation
+  ) {
+    suppressions.delete(itemId);
+    return false;
+  }
+
+  const eventSequence = typeof sequence === "number" ? sequence : null;
+  if (
+    typeof suppression.maxSequence === "number" &&
+    eventSequence !== null &&
+    eventSequence > suppression.maxSequence
+  ) {
+    suppressions.delete(itemId);
+    return false;
+  }
+
+  const remaining = suppression.text.slice(suppression.offset);
+  const coveredIndex =
+    typeof suppression.maxSequence === "number" && eventSequence !== null
+      ? suppression.text.indexOf(delta, suppression.offset)
+      : remaining.startsWith(delta)
+        ? suppression.offset
+        : -1;
+  if (coveredIndex < 0) {
+    suppressions.delete(itemId);
+    return false;
+  }
+
+  const nextOffset = coveredIndex + delta.length;
+  if (nextOffset >= suppression.text.length) {
+    suppressions.delete(itemId);
+  } else {
+    suppressions.set(itemId, { ...suppression, offset: nextOffset });
+  }
+  return true;
+}
+
+export function timelineItemRevisionKey(itemId: string, generation: number | null): string {
+  return `${generation ?? "legacy"}\u0000${itemId}`;
 }
 
 function applyEntryInput(state: TimelineEngineState, input: TimelineEntryInput): TimelineEngineState {
@@ -201,10 +360,89 @@ function applyEntryInput(state: TimelineEngineState, input: TimelineEntryInput):
   );
 }
 
+function isTimelineEntryInput(input: TimelineInput): input is TimelineEntryInput {
+  return (
+    input.kind === "live-event" ||
+    input.kind === "overlay-item" ||
+    input.kind === "turn-item-detail" ||
+    input.kind === "rollout-supplement-item" ||
+    input.kind === "optimistic-user"
+  );
+}
+
+function applyEntryInputBatch(state: TimelineEngineState, inputs: TimelineEntryInput[]): TimelineEngineState {
+  let entries = state.entries;
+  let generation = state.generation;
+  let diagnostics = state.diagnostics;
+  const processedEventIds = new Set(state.processedEventIds);
+  const itemRevisions = new Map(state.itemRevisions);
+
+  for (const input of inputs) {
+    const entryGeneration = typeof input.entry.generation === "number" ? input.entry.generation : generation;
+    if (entryGeneration < generation && isVisibleEntry(input.entry)) {
+      diagnostics = incrementDiagnostic(diagnostics, "droppedStaleGenerationEvents");
+      continue;
+    }
+    if (input.entry.turnId && state.deletedTurnIds.has(input.entry.turnId)) {
+      diagnostics = incrementDiagnostic(diagnostics, "droppedStaleGenerationEvents");
+      continue;
+    }
+
+    const eventKey = input.eventId ? eventLedgerKey(entryGeneration, input.eventId) : null;
+    if (eventKey && processedEventIds.has(eventKey)) {
+      diagnostics = incrementDiagnostic(diagnostics, "droppedDuplicateEvents");
+      continue;
+    }
+
+    const identity = identityKey(input.entry, generation);
+    if (!identity) {
+      diagnostics = incrementDiagnostic(diagnostics, "missingIdentityInputs");
+      continue;
+    }
+
+    const revisionKey = revisionLedgerKey(entryGeneration, identity);
+    if (typeof input.revision === "number") {
+      const currentRevision = itemRevisions.get(revisionKey);
+      if (typeof currentRevision === "number" && input.revision <= currentRevision) {
+        diagnostics = incrementDiagnostic(diagnostics, "droppedStaleRevisions");
+        continue;
+      }
+    }
+
+    entries = upsertEntryByIdentity(entries, input.entry, identity, generation);
+    if (eventKey) {
+      processedEventIds.add(eventKey);
+      trimStringSetInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS);
+    }
+    if (typeof input.revision === "number") {
+      itemRevisions.set(revisionKey, Math.max(itemRevisions.get(revisionKey) ?? 0, input.revision));
+    }
+    generation = Math.max(generation, entryGeneration);
+  }
+
+  return withEntries(
+    {
+      ...state,
+      generation,
+      diagnostics,
+      processedEventIds,
+      itemRevisions
+    },
+    entries
+  );
+}
+
 function withEntries(state: TimelineEngineState, entries: TimelineEntry[]): TimelineEngineState {
+  const normalizedEntries = normalizeEntries(entries);
   return {
     ...state,
-    entries: normalizeEntries(entries)
+    entries: normalizedEntries,
+    indexes: buildTimelineIndexes(normalizedEntries, state.generation),
+    diagnostics: {
+      ...state.diagnostics,
+      normalizationRuns: state.diagnostics.normalizationRuns + 1,
+      normalizedEntryVisits: state.diagnostics.normalizedEntryVisits + entries.length
+    }
   };
 }
 
@@ -214,10 +452,17 @@ function withDiagnostic(
 ): TimelineEngineState {
   return {
     ...state,
-    diagnostics: {
-      ...state.diagnostics,
-      [key]: state.diagnostics[key] + 1
-    }
+    diagnostics: incrementDiagnostic(state.diagnostics, key)
+  };
+}
+
+function incrementDiagnostic(
+  diagnostics: TimelineEngineDiagnostics,
+  key: keyof TimelineEngineDiagnostics
+): TimelineEngineDiagnostics {
+  return {
+    ...diagnostics,
+    [key]: diagnostics[key] + 1
   };
 }
 
@@ -241,6 +486,27 @@ function normalizeEntries(entries: TimelineEntry[]): TimelineEntry[] {
     merged.splice(0, merged.length, ...upsertEntryByIdentity(merged, entry, identity, maxEntryGeneration(merged)));
   }
   return orderEntries(merged);
+}
+
+function buildTimelineIndexes(entries: TimelineEntry[], generation: number): TimelineEngineIndexes {
+  const byEntryId = new Map<string, number>();
+  const byTurnId = new Map<string, number[]>();
+  const byIdentity = new Map<string, number>();
+
+  entries.forEach((entry, index) => {
+    byEntryId.set(entry.id, index);
+    if (entry.turnId) {
+      const turnIndexes = byTurnId.get(entry.turnId) ?? [];
+      turnIndexes.push(index);
+      byTurnId.set(entry.turnId, turnIndexes);
+    }
+    const identity = identityKey(entry, generation);
+    if (identity) {
+      byIdentity.set(identity, index);
+    }
+  });
+
+  return { byEntryId, byTurnId, byIdentity };
 }
 
 function upsertEntryByIdentity(
@@ -268,19 +534,28 @@ function upsertEntryByIdentity(
 
 function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry {
   if (current.body.kind === "user-message" && next.body.kind === "user-message") {
+    const keepCurrentLocal =
+      isLocalUserEntry(current) &&
+      isLocalUserEntry(next) &&
+      !current.turnId &&
+      !next.turnId;
+    const base = keepCurrentLocal ? current : next;
+    const other = keepCurrentLocal ? next : current;
+    const baseBody = keepCurrentLocal ? current.body : next.body;
+    const otherBody = keepCurrentLocal ? next.body : current.body;
     return {
-      ...next,
+      ...base,
       createdAt: Math.min(current.createdAt, next.createdAt),
-      turnId: next.turnId ?? current.turnId,
-      turnIndex: next.turnIndex ?? current.turnIndex,
-      clientUserMessageId: next.clientUserMessageId ?? current.clientUserMessageId ?? current.id,
-      generation: next.generation ?? current.generation,
-      snapshotSequence: next.snapshotSequence ?? current.snapshotSequence,
+      turnId: base.turnId ?? other.turnId,
+      turnIndex: base.turnIndex ?? other.turnIndex,
+      clientUserMessageId: base.clientUserMessageId ?? other.clientUserMessageId ?? current.id,
+      generation: base.generation ?? other.generation,
+      snapshotSequence: base.snapshotSequence ?? other.snapshotSequence,
       body: {
-        ...next.body,
-        imagePaths: next.body.imagePaths ?? current.body.imagePaths,
-        skillReferences: next.body.skillReferences ?? current.body.skillReferences,
-        status: next.body.status ?? current.body.status ?? "sent"
+        ...baseBody,
+        imagePaths: baseBody.imagePaths ?? otherBody.imagePaths,
+        skillReferences: baseBody.skillReferences ?? otherBody.skillReferences,
+        status: baseBody.status ?? otherBody.status ?? "sent"
       }
     };
   }
@@ -290,11 +565,12 @@ function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry 
   }
 
   if (current.body.kind === "reasoning" && next.body.kind === "reasoning") {
+    const text = next.body.done ? next.body.text || current.body.text : longerText(current.body.text, next.body.text);
     return {
-      ...mergeTextEntry(current, next, longerText(current.body.text, next.body.text)),
+      ...mergeTextEntry(current, next, text),
       body: {
         ...next.body,
-        text: longerText(current.body.text, next.body.text),
+        text,
         done: current.body.done || next.body.done
       }
     };
@@ -400,9 +676,15 @@ function fallbackEquivalent(left: TimelineEntry, right: TimelineEntry): boolean 
   if (left.body.kind !== right.body.kind) {
     return false;
   }
+  if (left.id === right.id) {
+    return true;
+  }
   if (left.body.kind === "user-message" && right.body.kind === "user-message") {
     if (left.clientUserMessageId && right.clientUserMessageId) {
       return left.clientUserMessageId === right.clientUserMessageId;
+    }
+    if (isLocalUserEntry(left) && isLocalUserEntry(right) && !left.turnId && !right.turnId) {
+      return left.body.text.trim() === right.body.text.trim();
     }
     const oneLocal = isLocalUserEntry(left) !== isLocalUserEntry(right);
     return oneLocal && left.body.text.trim() === right.body.text.trim();
@@ -505,12 +787,26 @@ function equivalentText(left: string, right: string): boolean {
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
+function snapshotDeltaComparableText(entry: TimelineEntry): string {
+  if (entry.body.kind === "agent-message" || entry.body.kind === "reasoning" || entry.body.kind === "system") {
+    return entry.body.text;
+  }
+  if (entry.body.kind === "tool") {
+    return entry.body.result ?? "";
+  }
+  return "";
+}
+
 function longerText(left: string, right: string): string {
   return right.length > left.length ? right : left;
 }
 
 function eventLedgerKey(generation: number, eventId: string): string {
   return `${generation}\u0000${eventId}`;
+}
+
+export function timelineEventLedgerKey(generation: number, eventId: string): string {
+  return eventLedgerKey(generation, eventId);
 }
 
 function revisionLedgerKey(generation: number, identity: string): string {

@@ -6,7 +6,7 @@ import { ImagePreviewDialog, ImageThumb } from "../ImagePreview";
 import { BaseCard } from "./BaseCard";
 import { LongTextPreview } from "./LongTextPreview";
 
-export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
+export function ToolCard({ entry, cacheKey }: { entry: ToolEntry; cacheKey?: string }): JSX.Element {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const accent =
     entry.status === "failed" ? "var(--cw-danger)" : entry.status === "running" ? "var(--cw-accent)" : undefined;
@@ -52,7 +52,12 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
         ) : null}
         {entry.arguments ? (
           <div style={previewBoxStyle}>
-            <LongTextPreview text={entry.arguments} copyLabel="复制完整参数" maxLines={80} />
+            <LongTextPreview
+              text={entry.arguments}
+              copyLabel="复制完整参数"
+              maxLines={80}
+              cacheKey={cacheKey ? `${cacheKey}:arguments` : undefined}
+            />
           </div>
         ) : null}
         {entry.imagePaths?.length ? (
@@ -64,7 +69,7 @@ export function ToolCard({ entry }: { entry: ToolEntry }): JSX.Element {
         ) : null}
         {entry.result ? (
           <div style={{ ...previewBoxStyle, marginTop: 8 }}>
-            <LongTextPreview text={entry.result} copyLabel="复制完整结果" />
+            <LongTextPreview text={entry.result} copyLabel="复制完整结果" cacheKey={cacheKey ? `${cacheKey}:result` : undefined} />
           </div>
         ) : null}
       </BaseCard>

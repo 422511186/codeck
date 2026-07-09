@@ -160,6 +160,32 @@ describe("TimelineEventStreamClient", () => {
     expect(received).toEqual([{ type: "timeline-gap", threadId: "thread-1" }]);
   });
 
+  it("does not emit an ownerless repair gap when no-listener overflow cannot identify a thread", () => {
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      maxPendingEvents: 1,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    client.connect();
+
+    FakeEventSource.instances[0]!.emit("message", {
+      type: "health",
+      appServer: "ready",
+      detail: "first"
+    });
+    FakeEventSource.instances[0]!.emit("message", {
+      type: "health",
+      appServer: "ready",
+      detail: "second"
+    });
+
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+
+    expect(received).toEqual([{ type: "health", appServer: "ready", detail: "second" }]);
+  });
+
   it("batches same item text deltas before notifying listeners and drops duplicate event ids inside the batch", () => {
     vi.useFakeTimers();
     const client = new TimelineEventStreamClient({
@@ -308,11 +334,48 @@ describe("TimelineEventStreamClient", () => {
         delta: "one"
       }
     });
-    source.emit("message", { type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" });
+    source.emit("message", {
+      type: "server-request",
+      request: { requestId: "approval-1", kind: "approval", threadId: "thread-1" }
+    });
 
     expect(received).toEqual([
       { type: "codex-event", event: expect.objectContaining({ eventId: "delta-1" }) },
-      { type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" }
+      {
+        type: "server-request",
+        request: { requestId: "approval-1", kind: "approval", threadId: "thread-1" }
+      }
     ]);
+  });
+
+  it("drops pending text deltas for a thread when a repair barrier arrives before flush", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+
+    const source = FakeEventSource.instances[0]!;
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        eventId: "stale-delta",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "stale"
+      }
+    });
+    source.emit("message", { type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" });
+
+    vi.advanceTimersByTime(10);
+
+    expect(received).toEqual([{ type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" }]);
   });
 });

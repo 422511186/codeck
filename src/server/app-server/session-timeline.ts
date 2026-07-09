@@ -1,6 +1,6 @@
 import type { MobileThreadContextUsage, MobileTimelineItem } from "../../shared/codex";
 
-type SessionTimelineRecord =
+export type SessionTimelineRecord =
   | {
       kind: "message";
       turnId: string;
@@ -430,16 +430,22 @@ export type LatestSessionContextUsageOptions = {
   maxTailLines?: number;
 };
 
-export function latestSessionContextUsage(
-  jsonl: string,
+export function latestSessionContextUsageFromLines(
+  lines: Iterable<string>,
   options: LatestSessionContextUsageOptions = {}
 ): MobileThreadContextUsage | null {
   let latest: MobileThreadContextUsage | null = null;
-  const lines = jsonl.split(/\r?\n/);
-  const tailLines =
+  const maxTailLines =
     typeof options.maxTailLines === "number" && Number.isFinite(options.maxTailLines) && options.maxTailLines > 0
-      ? lines.slice(-Math.floor(options.maxTailLines))
-      : lines;
+      ? Math.floor(options.maxTailLines)
+      : Number.POSITIVE_INFINITY;
+  const tailLines: string[] = [];
+  for (const line of lines) {
+    tailLines.push(line);
+    while (tailLines.length > maxTailLines) {
+      tailLines.shift();
+    }
+  }
   for (const line of tailLines) {
     if (!line.trim()) {
       continue;
@@ -463,26 +469,91 @@ export function latestSessionContextUsage(
   return latest;
 }
 
+export function latestSessionContextUsage(
+  jsonl: string,
+  options: LatestSessionContextUsageOptions = {}
+): MobileThreadContextUsage | null {
+  return latestSessionContextUsageFromLines(jsonlLines(jsonl), options);
+}
+
 type SessionTimelineRecordsOptions = {
   allowedTurnIds?: ReadonlySet<string>;
   maxSupplementRecords?: number;
 };
 
-function sessionTimelineRecords(
-  jsonl: string,
-  options: SessionTimelineRecordsOptions = {}
-): SessionTimelineRecord[] {
+export type ScanSessionTimelineSupplementOptions = SessionTimelineRecordsOptions & {
+  maxScanLines?: number;
+  maxScanBytes?: number;
+  maxElapsedMs?: number;
+  nowMs?: () => number;
+};
+
+export type ScanSessionTimelineSupplementResult = {
+  records: SessionTimelineRecord[];
+  diagnostics: {
+    scannedLines: number;
+    scannedBytes: number;
+    parsedRecords: number;
+    budgetExhausted: boolean;
+  };
+};
+
+function positiveIntegerLimit(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : Number.POSITIVE_INFINITY;
+}
+
+function* jsonlLines(jsonl: string): Iterable<string> {
+  let start = 0;
+  while (start <= jsonl.length) {
+    const nextNewline = jsonl.indexOf("\n", start);
+    const end = nextNewline === -1 ? jsonl.length : nextNewline;
+    yield jsonl.slice(start, end).replace(/\r$/, "");
+    if (nextNewline === -1) {
+      break;
+    }
+    start = nextNewline + 1;
+  }
+}
+
+export function scanSessionTimelineSupplement(
+  lines: Iterable<string>,
+  options: ScanSessionTimelineSupplementOptions = {}
+): ScanSessionTimelineSupplementResult {
   const records: SessionTimelineRecord[] = [];
   const byCallId = new Map<string, SessionToolRecord>();
-  const maxSupplementRecords =
-    typeof options.maxSupplementRecords === "number" &&
-    Number.isFinite(options.maxSupplementRecords) &&
-    options.maxSupplementRecords > 0
-      ? Math.floor(options.maxSupplementRecords)
-      : Number.POSITIVE_INFINITY;
+  const maxSupplementRecords = positiveIntegerLimit(options.maxSupplementRecords);
+  const maxScanLines = positiveIntegerLimit(options.maxScanLines);
+  const maxScanBytes = positiveIntegerLimit(options.maxScanBytes);
+  const maxElapsedMs = positiveIntegerLimit(options.maxElapsedMs);
+  const nowMs = options.nowMs ?? Date.now;
+  const deadlineMs = Number.isFinite(maxElapsedMs) ? nowMs() + maxElapsedMs : Number.POSITIVE_INFINITY;
   let sequence = 0;
+  let scannedLines = 0;
+  let scannedBytes = 0;
+  let budgetExhausted = false;
+  const iterator = lines[Symbol.iterator]();
 
-  for (const line of jsonl.split(/\r?\n/)) {
+  while (scannedLines < maxScanLines) {
+    if (nowMs() > deadlineMs) {
+      budgetExhausted = true;
+      break;
+    }
+
+    const next = iterator.next();
+    if (next.done) {
+      break;
+    }
+
+    const line = next.value;
+    scannedLines += 1;
+    scannedBytes += line.length + 1;
+    if (scannedBytes > maxScanBytes) {
+      budgetExhausted = true;
+      break;
+    }
+
     if (!line.trim()) {
       continue;
     }
@@ -511,14 +582,19 @@ function sessionTimelineRecords(
 
     if (type === "message" || type === "agent_message") {
       const text = rawMessageText(payload).trim();
-      if (text && records.length < maxSupplementRecords) {
-        records.push({ kind: "message", turnId, text, sequence });
+      if (text) {
+        if (records.length < maxSupplementRecords) {
+          records.push({ kind: "message", turnId, text, sequence });
+        } else {
+          budgetExhausted = true;
+        }
       }
       continue;
     }
 
     if (type === "function_call" || type === "custom_tool_call" || type === "tool_search_call") {
       if (records.length >= maxSupplementRecords) {
+        budgetExhausted = true;
         continue;
       }
       const record = toolItemFromFunctionCall(payload, turnId, sequence);
@@ -544,7 +620,26 @@ function sessionTimelineRecords(
     }
   }
 
-  return records;
+  if (scannedLines >= maxScanLines && Number.isFinite(maxScanLines)) {
+    budgetExhausted = true;
+  }
+
+  return {
+    records,
+    diagnostics: {
+      scannedLines,
+      scannedBytes,
+      parsedRecords: records.length,
+      budgetExhausted
+    }
+  };
+}
+
+function sessionTimelineRecords(
+  jsonl: string,
+  options: SessionTimelineRecordsOptions = {}
+): SessionTimelineRecord[] {
+  return scanSessionTimelineSupplement(jsonlLines(jsonl), options).records;
 }
 
 function textEquivalent(left: string, right: string): boolean {
@@ -676,6 +771,13 @@ export function mergeSessionTimelineItems(
     allowedTurnIds: options.allowedTurnIds,
     maxSupplementRecords: options.maxSupplementRecords ?? DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT
   });
+  return mergeSessionTimelineRecords(baseItems, records);
+}
+
+export function mergeSessionTimelineRecords(
+  baseItems: MobileTimelineItem[],
+  records: SessionTimelineRecord[]
+): MobileTimelineItem[] {
   if (!records.length || !baseItems.length) {
     return baseItems;
   }

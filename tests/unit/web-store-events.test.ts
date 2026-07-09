@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getContextUsage } from "../../src/web/storage/contextUsage";
 import { useStore } from "../../src/web/state/store";
 
@@ -709,6 +711,47 @@ describe("web store codex events", () => {
         id: "tool-1",
         turnId: "turn-new",
         body: expect.objectContaining({ kind: "tool", result: "新工具输出\n" })
+      })
+    ]);
+  });
+
+  it("does not dedupe reused event ids across newer generations", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "reused-event-id",
+        generation: 0,
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-old",
+        itemId: "agent-1",
+        delta: "旧 generation"
+      }
+    });
+    useStore.getState().setTimelineGeneration("thread-1", 1);
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "reused-event-id",
+        generation: 1,
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-new",
+        itemId: "agent-1",
+        delta: "新 generation"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-old",
+        body: { kind: "agent-message", text: "旧 generation" }
+      }),
+      expect.objectContaining({
+        id: "agent-1",
+        turnId: "turn-new",
+        body: { kind: "agent-message", text: "新 generation" }
       })
     ]);
   });
@@ -2750,5 +2793,131 @@ describe("web store codex events", () => {
         body: { kind: "agent-message", text: `回复 1199${"x".repeat(200)}` }
       })
     );
+  });
+
+  it("routes thread entry actions through timeline engine inputs", () => {
+    useStore.getState().__resetTimelineDiagnostics?.();
+
+    useStore.getState().setThreadEntries(
+      "thread-engine",
+      [
+        {
+          id: "snapshot-user",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "user-message", text: "snapshot", status: "sent" }
+        }
+      ],
+      "older"
+    );
+    useStore.getState().mergeThreadEntries(
+      "thread-engine",
+      [
+        {
+          id: "snapshot-agent",
+          turnId: "turn-1",
+          createdAt: 2,
+          body: { kind: "agent-message", text: "agent" }
+        }
+      ],
+      null
+    );
+    useStore.getState().prependEntries(
+      "thread-engine",
+      [
+        {
+          id: "older-user",
+          turnId: "turn-0",
+          createdAt: 0,
+          body: { kind: "user-message", text: "older", status: "sent" }
+        }
+      ],
+      null,
+      true
+    );
+    useStore.getState().appendEntries("thread-engine", [
+      {
+        id: "local-user-next",
+        createdAt: 3,
+        body: { kind: "user-message", text: "next", status: "sending" }
+      }
+    ]);
+    useStore.getState().replaceOrAddEntry("thread-engine", {
+      id: "server-user-next",
+      createdAt: 4,
+      body: { kind: "user-message", text: "next", status: "sent" }
+    });
+    useStore.getState().appendTextToEntry("thread-engine", {
+      id: "agent-new",
+      turnId: "turn-2",
+      createdAt: 5,
+      body: { kind: "agent-message", text: "delta" }
+    });
+
+    expect(useStore.getState().__getTimelineDiagnostics?.().engineInputCommits).toBeGreaterThanOrEqual(6);
+  });
+
+  it("caches visible output compact completion and ordered turns in timeline indexes", () => {
+    useStore.getState().setThreadEntries(
+      "thread-indexes",
+      [
+        {
+          id: "user-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "user-message", text: "first", status: "sent" }
+        },
+        {
+          id: "agent-1",
+          turnId: "turn-1",
+          createdAt: 2,
+          body: { kind: "agent-message", text: "reply" }
+        },
+        {
+          id: "user-2",
+          turnId: "turn-2",
+          createdAt: 3,
+          body: { kind: "user-message", text: "compact", status: "sent" }
+        },
+        {
+          id: "compact-1",
+          turnId: "turn-2",
+          createdAt: 4,
+          body: { kind: "system", text: "压缩上下文已完成" }
+        }
+      ],
+      null
+    );
+
+    const indexes = useStore.getState().threads["thread-indexes"]?.entryIndexes;
+    expect(indexes?.byTurnId.get("turn-1")).toEqual([0, 1]);
+    expect(indexes?.visibleOutputTurnIds.has("turn-1")).toBe(true);
+    expect(indexes?.visibleOutputTurnIds.has("turn-2")).toBe(true);
+    expect(indexes?.compactCompletionSeen).toBe(true);
+    expect(indexes?.orderedDistinctTurns.map((turn) => turn.turnId)).toEqual(["turn-1", "turn-2"]);
+  });
+
+  it("does not retain obsolete store-level bulk normalization helpers", async () => {
+    const source = await readFile(join(process.cwd(), "src/web/state/store.ts"), "utf8");
+
+    expect(source).not.toMatch(/\bfunction normalizeTimelineEntries\b/);
+    expect(source).not.toMatch(/\bfunction mergeEquivalentOutputEntries\b/);
+    expect(source).not.toMatch(/\bfunction orderTimelineEntries\b/);
+    expect(source).not.toMatch(/\bfunction replaceConfirmedLocalUserMessagesInPlace\b/);
+    expect(source).not.toMatch(/\bfunction removeDuplicateConfirmedUserMessages\b/);
+    expect(source).not.toMatch(/\bfunction removeConfirmedLocalUserMessages\b/);
+    expect(source).not.toMatch(/\bfunction removeDuplicateLocalUserMessages\b/);
+    expect(source).not.toMatch(/\bfunction removeAdjacentDuplicateUserMessages\b/);
+  });
+
+  it("keeps timeline ledger and snapshot suppression helpers in the engine", async () => {
+    const storeSource = await readFile(join(process.cwd(), "src/web/state/store.ts"), "utf8");
+    const engineSource = await readFile(join(process.cwd(), "src/web/state/timeline-engine.ts"), "utf8");
+
+    expect(storeSource).not.toMatch(/\bfunction snapshotDeltaSuppressions\b/);
+    expect(storeSource).not.toMatch(/\bfunction itemRevisionKey\b/);
+    expect(engineSource).toMatch(/\bexport function createSnapshotDeltaSuppressions\b/);
+    expect(engineSource).toMatch(/\bexport function shouldSuppressSnapshotDeltaReplay\b/);
+    expect(engineSource).toMatch(/\bexport function timelineItemRevisionKey\b/);
   });
 });

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyTimelineInput,
   createTimelineEngineState,
+  selectHasContextCompactionCompletion,
   selectOrderedDistinctTurns,
+  selectRollbackMetadataForEntry,
   selectTimelineEntries,
+  selectTurnHasVisibleOutput,
   type TimelineInput
 } from "../../src/web/state/timeline-engine";
 import type { TimelineEntry } from "../../src/web/state/timeline";
@@ -79,6 +82,121 @@ describe("timeline engine", () => {
 
     expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["after-rollback"]);
     expect(state.generation).toBe(1);
+  });
+
+  it("keeps multi-source batch merging within a bounded normalization budget", () => {
+    let state = createTimelineEngineState();
+    state = applyTimelineInput(state, {
+      kind: "snapshot-window",
+      entries: Array.from({ length: 1200 }, (_value, index) =>
+        agentEntry(`snapshot-agent-${index}`, `turn-${index}`, `reply ${index}`, index)
+      ),
+      cursor: "older"
+    });
+
+    state = applyTimelineInput(state, {
+      kind: "live-event-batch",
+      inputs: [
+        {
+          kind: "live-event",
+          entry: agentEntry("snapshot-agent-1199", "turn-1199", "reply 1199 live", 2000),
+          eventId: "event-live"
+        },
+        {
+          kind: "turn-item-detail",
+          entry: agentEntry("snapshot-agent-1199", "turn-1199", "reply 1199 live final", 2001)
+        },
+        {
+          kind: "overlay-item",
+          entry: toolEntry("tool-overlay", "turn-1199", "npm test", 2002)
+        },
+        {
+          kind: "rollout-supplement-item",
+          entry: systemEntry("rollout-compact", "turn-1199", "压缩上下文已完成", 2003)
+        },
+        {
+          kind: "optimistic-user",
+          entry: {
+            id: "local-user-next",
+            clientUserMessageId: "local-user-next",
+            createdAt: 2004,
+            body: { kind: "user-message", text: "next prompt", status: "sending" }
+          }
+        }
+      ]
+    });
+
+    expect(selectTimelineEntries(state)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "snapshot-agent-1199",
+          body: { kind: "agent-message", text: "reply 1199 live final" }
+        }),
+        expect.objectContaining({ id: "tool-overlay" }),
+        expect.objectContaining({ id: "rollout-compact" }),
+        expect.objectContaining({ id: "local-user-next" })
+      ])
+    );
+    expect(state.diagnostics.normalizationRuns).toBeLessThanOrEqual(2);
+    expect(state.diagnostics.normalizedEntryVisits).toBeLessThanOrEqual(2500);
+  });
+
+  it("builds indexes for entry id turn id and stable identity after reduction", () => {
+    let state = createTimelineEngineState();
+    state = applyTimelineInput(state, {
+      kind: "snapshot-window",
+      entries: [
+        userEntry("user-1", "turn-1", "hello", 1),
+        agentEntry("agent-1", "turn-1", "partial", 2),
+        toolEntry("tool-1", "turn-1", "running", 3)
+      ]
+    });
+    state = applyTimelineInput(state, {
+      kind: "turn-item-detail",
+      entry: agentEntry("agent-1", "turn-1", "partial final", 4)
+    });
+
+    expect(state.indexes.byEntryId.get("agent-1")).toBe(1);
+    expect(state.indexes.byTurnId.get("turn-1")).toEqual([0, 1, 2]);
+    expect(state.indexes.byIdentity.get("agent-message:0:turn-1:agent-1")).toBe(1);
+  });
+
+  it("derives visible output compact completion and rollback metadata from indexes", () => {
+    const state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        userEntry("user-1", "turn-1", "first", 1),
+        agentEntry("agent-1", "turn-1", "reply", 2),
+        userEntry("user-2", "turn-2", "compact", 3),
+        systemEntry("compact-1", "turn-2", "压缩上下文已完成", 4),
+        userEntry("user-3", "turn-3", "tail", 5)
+      ]
+    });
+
+    expect(selectTurnHasVisibleOutput(state, "turn-1")).toBe(true);
+    expect(selectTurnHasVisibleOutput(state, "turn-3")).toBe(false);
+    expect(selectHasContextCompactionCompletion(state)).toBe(true);
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "compact", 3))).toEqual({
+      numTurns: 2,
+      expectedDeletedTurnIds: ["turn-2", "turn-3"]
+    });
+  });
+
+  it("does not derive rollback metadata when target is the first known turn of an incomplete window", () => {
+    const state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        userEntry("user-2", "turn-2", "window head", 2),
+        userEntry("user-3", "turn-3", "tail", 3)
+      ],
+      cursor: "older-turns"
+    });
+
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "window head", 2))).toBeNull();
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-3", "turn-3", "tail", 3))).toEqual({
+      numTurns: 1,
+      expectedDeletedTurnIds: ["turn-3"]
+    });
   });
 
   it("confirms optimistic user messages in place and keeps repeated prompts distinct", () => {

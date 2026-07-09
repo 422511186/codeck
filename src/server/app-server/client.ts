@@ -947,7 +947,7 @@ function threadDetail(
 function isUnmaterializedThreadReadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
-    /not materialized yet/i.test(message) &&
+    /not materialized yet|not loaded/i.test(message) &&
     (/includeTurns/i.test(message) || /thread\/turns\/list/i.test(message) || /before first user message/i.test(message))
   );
 }
@@ -1482,6 +1482,10 @@ export class CodexAppServerClient {
         sortDirection: "desc",
         itemsView: "full"
       } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+      const fallbackTurns = threadWithTurns(metadataThread).turns;
+      if (!response.data.length && fallbackTurns.length) {
+        return { turns: fallbackTurns, nextCursor: null };
+      }
       return { turns: chronologicalTurnsFromDescPage(response.data), nextCursor: response.nextCursor };
     } catch (error) {
       const fallbackTurns = threadWithTurns(metadataThread).turns;
@@ -1580,7 +1584,8 @@ export class CodexAppServerClient {
       numTurns
     };
     const response = (await this.peer.request("thread/rollback", params)) as ThreadRollbackResponse;
-    return threadDetail(response.thread);
+    const page = await this.readInitialThreadTurns(threadId, response.thread);
+    return threadDetail(threadWithRecentTurns(response.thread, page.turns), { nextCursor: page.nextCursor });
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {

@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AppServerGateway, createAppServerGateway } from "../../src/server/app-server/runtime";
 import type { AppServerNotificationMessage } from "../../src/server/app-server/events";
@@ -245,6 +248,7 @@ class RejectingServerRequestPeer implements ManagedAppServerPeer {
 class NotificationOverlayPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+  private rolledBack = false;
 
   async connect(): Promise<void> {
     this.status = { state: "ready" };
@@ -340,7 +344,35 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
       return { goal: null };
     }
 
+    if (method === "thread/turns/list") {
+      return {
+        data: this.rolledBack
+          ? []
+          : [
+              {
+                id: "turn-1",
+                itemsView: "full",
+                status: "completed",
+                error: null,
+                startedAt: 1,
+                completedAt: 2,
+                durationMs: 1,
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "user-1",
+                    clientId: "client-user-1",
+                    content: [{ type: "text", text: "触发工具", text_elements: [] }]
+                  }
+                ]
+              }
+            ],
+        nextCursor: null
+      };
+    }
+
     if (method === "thread/rollback") {
+      this.rolledBack = true;
       return {
         thread: {
           id: "thread-1",
@@ -373,6 +405,38 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
 
 class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   override async request(method: string): Promise<unknown> {
+    if (method === "thread/turns/list") {
+      return {
+        data: [
+          {
+            id: "turn-1",
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: [
+              {
+                type: "userMessage",
+                id: "user-1",
+                clientId: "client-user-1",
+                content: [{ type: "text", text: "触发工具", text_elements: [] }]
+              },
+              {
+                type: "agentMessage",
+                id: "agent-final",
+                text: "最终答复",
+                phase: "final_answer",
+                memoryCitation: null
+              }
+            ]
+          }
+        ],
+        nextCursor: null
+      };
+    }
+
     if (method !== "thread/read") {
       return super.request(method);
     }
@@ -626,6 +690,8 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   readonly calls: Array<{ method: string; params?: unknown }> = [];
 
+  constructor(protected readonly rolloutPath = "/tmp/codex-session.jsonl") {}
+
   async connect(): Promise<void> {
     this.status = { state: "ready" };
   }
@@ -683,7 +749,7 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
       return {
         summary: {
           conversationId: "thread-1",
-          path: "/tmp/codex-session.jsonl",
+          path: this.rolloutPath,
           preview: "session supplement",
           timestamp: "2026-07-04T19:00:00.000Z",
           updatedAt: "2026-07-04T19:01:00.000Z",
@@ -701,6 +767,64 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
       };
     }
     throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class OversizedSessionSupplementPeer extends SessionResponseItemsPeer {
+  constructor(rolloutPath: string) {
+    super(rolloutPath);
+  }
+
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "getConversationSummary") {
+      this.calls.push({ method, params });
+      return {
+        summary: {
+          conversationId: "thread-1",
+          path: this.rolloutPath,
+          preview: "oversize session supplement",
+          timestamp: "2026-07-04T19:00:00.000Z",
+          updatedAt: "2026-07-04T19:01:00.000Z",
+          modelProvider: "openai",
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          gitInfo: null
+        }
+      };
+    }
+    if (method === "fs/readFile") {
+      this.calls.push({ method, params });
+      throw new Error("oversize rollout supplement should not be read fully");
+    }
+    return super.request(method, params);
+  }
+}
+
+class UnsupportedSessionSupplementPathPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "getConversationSummary") {
+      this.calls.push({ method, params });
+      return {
+        summary: {
+          conversationId: "thread-1",
+          path: "app-server://session.jsonl",
+          preview: "unsupported session supplement",
+          timestamp: "2026-07-04T19:00:00.000Z",
+          updatedAt: "2026-07-04T19:01:00.000Z",
+          modelProvider: "openai",
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          gitInfo: null
+        }
+      };
+    }
+    if (method === "fs/readFile") {
+      this.calls.push({ method, params });
+      throw new Error("unsupported rollout path should not be read fully");
+    }
+    return super.request(method, params);
   }
 }
 
@@ -734,7 +858,7 @@ class SessionResponseItemsWithNativePatchPeer extends SessionResponseItemsPeer {
       return {
         summary: {
           conversationId: "thread-1",
-          path: "/tmp/codex-session.jsonl",
+          path: this.rolloutPath,
           preview: "session supplement",
           timestamp: "2026-07-04T19:00:00.000Z",
           updatedAt: "2026-07-04T19:01:00.000Z",
@@ -1038,6 +1162,21 @@ function sessionJsonl(): string {
       "2026-07-04T19:00:07.000Z"
     )
   ].join("\n");
+}
+
+async function withRolloutText<T>(text: string, run: (rolloutPath: string) => Promise<T>): Promise<T> {
+  const tempDir = await mkdtemp(join(tmpdir(), "codex-web-session-rollout-"));
+  try {
+    const rolloutPath = join(tempDir, "session.jsonl");
+    await writeFile(rolloutPath, text, "utf8");
+    return await run(rolloutPath);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function withSessionRolloutPath<T>(run: (rolloutPath: string) => Promise<T>): Promise<T> {
+  return withRolloutText(sessionJsonl(), run);
 }
 
 describe("createAppServerGateway", () => {
@@ -1415,7 +1554,8 @@ describe("createAppServerGateway", () => {
   });
 
   it("读取会话详情时从 rollout JSONL 补齐 app-server 历史缺失的工具活动", async () => {
-    const peer = new SessionResponseItemsPeer();
+    await withSessionRolloutPath(async (rolloutPath) => {
+    const peer = new SessionResponseItemsPeer(rolloutPath);
     const gateway = new AppServerGateway(peer);
 
     const detail = await gateway.readThread("thread-1");
@@ -1492,10 +1632,40 @@ describe("createAppServerGateway", () => {
       modelContextWindow: 200000,
       updatedAt: Date.parse("2026-07-04T19:00:06.800Z")
     });
+    });
+  });
+
+  it("读取会话详情时跳过 oversize rollout supplement 且不读取完整 JSONL", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "codex-web-oversize-rollout-"));
+    try {
+      const rolloutPath = join(tempDir, "session.jsonl");
+      await writeFile(rolloutPath, "x".repeat(1_000_001), "utf8");
+      const peer = new OversizedSessionSupplementPeer(rolloutPath);
+      const gateway = new AppServerGateway(peer);
+
+      const detail = await gateway.readThread("thread-1");
+
+      expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "agent-1", "agent-2"]);
+      expect(detail.timeline.map((item) => item.id)).not.toContain("fc-read");
+      expect(peer.calls.some((call) => call.method === "fs/readFile")).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("读取会话详情时跳过无法本地扫描的 rollout supplement 且不读取完整 JSONL", async () => {
+    const peer = new UnsupportedSessionSupplementPathPeer();
+    const gateway = new AppServerGateway(peer);
+
+    const detail = await gateway.readThread("thread-1");
+
+    expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "agent-1", "agent-2"]);
+    expect(peer.calls.some((call) => call.method === "fs/readFile")).toBe(false);
   });
 
   it("读取单个 turn items 时也从 rollout JSONL 补齐缺失工具活动", async () => {
-    const peer = new SessionResponseItemsPeer();
+    await withSessionRolloutPath(async (rolloutPath) => {
+    const peer = new SessionResponseItemsPeer(rolloutPath);
     const gateway = new AppServerGateway(peer);
 
     const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
@@ -1510,10 +1680,49 @@ describe("createAppServerGateway", () => {
       ])
     );
     expect(page.items.map((item) => item.id)).not.toContain("fc-plan");
+    });
+  });
+
+  it("分页 supplement 只补当前 page 内的 turns", async () => {
+    const line = (turnId: string, payload: Record<string, unknown>) =>
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          ...payload,
+          internal_chat_message_metadata_passthrough: { turn_id: turnId }
+        }
+      });
+    const rolloutText = [
+      line("turn-1", {
+        type: "function_call",
+        id: "tool-current-page",
+        call_id: "call-current-page",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg current", workdir: "/repo" })
+      }),
+      line("turn-outside", {
+        type: "function_call",
+        id: "tool-outside-page",
+        call_id: "call-outside-page",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg outside", workdir: "/repo" })
+      })
+    ].join("\n");
+
+    await withRolloutText(rolloutText, async (rolloutPath) => {
+      const peer = new SessionResponseItemsPeer(rolloutPath);
+      const gateway = new AppServerGateway(peer);
+
+      const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
+
+      expect(page.items.map((item) => item.id)).toContain("tool-current-page");
+      expect(page.items.map((item) => item.id)).not.toContain("tool-outside-page");
+    });
   });
 
   it("app-server 已有 fileChange 时不会把 JSONL apply_patch 补成重复文件活动", async () => {
-    const peer = new SessionResponseItemsWithNativePatchPeer();
+    await withSessionRolloutPath(async (rolloutPath) => {
+    const peer = new SessionResponseItemsWithNativePatchPeer(rolloutPath);
     const gateway = new AppServerGateway(peer);
 
     const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
@@ -1525,6 +1734,7 @@ describe("createAppServerGateway", () => {
       tool: "/tmp/workspace/src/web/components/Timeline.tsx"
     });
     expect(page.items.map((item) => item.id)).not.toContain("ctc-patch");
+    });
   });
 
   it("rollback 后旧 generation 的 backlog 可见事件不会重新进入 timeline", async () => {

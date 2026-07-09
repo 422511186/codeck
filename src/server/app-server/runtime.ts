@@ -1,3 +1,6 @@
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import type { AppServerConfig } from "../../config/env";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type {
@@ -112,7 +115,12 @@ import {
   type BrowserServerRequestEvent,
   type PendingServerRequestView
 } from "./pending-requests";
-import { latestSessionContextUsage, mergeSessionTimelineItems } from "./session-timeline";
+import {
+  latestSessionContextUsageFromLines,
+  mergeSessionTimelineRecords,
+  scanSessionTimelineSupplement,
+  type SessionTimelineRecord
+} from "./session-timeline";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
@@ -167,6 +175,9 @@ const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
 const MAX_BROWSER_EVENT_BACKLOG = 500;
 const SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT = 1_000_000;
 const SESSION_CONTEXT_USAGE_TAIL_LINES = 500;
+const SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT = 20_000;
+const SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT = 120;
+const SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS = 75;
 const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
 
 function pendingReasoningItemId(threadId: string, turnId: string | null): string {
@@ -181,6 +192,43 @@ function timelineTurnIdSet(items: MobileTimelineItem[]): Set<string> {
     }
   }
   return turnIds;
+}
+
+type BoundedJsonlRead = {
+  lines: string[];
+  budgetExhausted: boolean;
+};
+
+async function readBoundedJsonlLines(
+  filePath: string,
+  options: { maxLines: number; maxBytes: number; maxElapsedMs: number }
+): Promise<BoundedJsonlRead> {
+  const lines: string[] = [];
+  let bytes = 0;
+  let budgetExhausted = false;
+  const deadline = Date.now() + options.maxElapsedMs;
+  const stream = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+
+  try {
+    for await (const line of reader) {
+      if (lines.length >= options.maxLines || Date.now() > deadline) {
+        budgetExhausted = true;
+        break;
+      }
+      bytes += line.length + 1;
+      if (bytes > options.maxBytes) {
+        budgetExhausted = true;
+        break;
+      }
+      lines.push(line);
+    }
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  return { lines, budgetExhausted };
 }
 
 function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem): MobileTimelineItem {
@@ -3227,14 +3275,42 @@ export class AppServerGateway {
     return this.withTimelineSummaryVersion(threadId, await this.client.readThreadSummary(threadId));
   }
 
-  private async readSessionJsonl(threadId: string): Promise<string | null> {
+  private async readSessionTimelineSupplement(
+    threadId: string,
+    allowedTurnIds: ReadonlySet<string>,
+    options: { includeContextUsage?: boolean } = {}
+  ): Promise<{ records: SessionTimelineRecord[]; contextUsage?: MobileThreadDetail["contextUsage"] } | null> {
     try {
       const rolloutPath = await this.client.getConversationRolloutPath(threadId);
       if (!rolloutPath) {
         return null;
       }
-      const jsonl = (await this.client.readFile(rolloutPath)).text;
-      return jsonl.length <= SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT ? jsonl : null;
+      const metadata = await stat(rolloutPath);
+      if (!metadata.isFile() || metadata.size > SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT) {
+        return null;
+      }
+      const { lines, budgetExhausted } = await readBoundedJsonlLines(rolloutPath, {
+        maxLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
+        maxBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
+        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS
+      });
+      if (budgetExhausted && !lines.length) {
+        return null;
+      }
+      const supplement = scanSessionTimelineSupplement(lines, {
+        allowedTurnIds,
+        maxScanLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
+        maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
+        maxSupplementRecords: SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT,
+        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS
+      });
+      const contextUsage = options.includeContextUsage
+        ? latestSessionContextUsageFromLines(lines, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES })
+        : null;
+      return {
+        records: supplement.records,
+        ...(contextUsage ? { contextUsage } : {})
+      };
     } catch {
       return null;
     }
@@ -3245,15 +3321,16 @@ export class AppServerGateway {
     if (!allowedTurnIds.size) {
       return detail;
     }
-    const jsonl = await this.readSessionJsonl(detail.id);
-    if (!jsonl) {
+    const supplement = await this.readSessionTimelineSupplement(detail.id, allowedTurnIds, {
+      includeContextUsage: true
+    });
+    if (!supplement) {
       return detail;
     }
-    const contextUsage = latestSessionContextUsage(jsonl, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES });
     return {
       ...detail,
-      ...(contextUsage ? { contextUsage } : {}),
-      timeline: mergeSessionTimelineItems(detail.timeline, jsonl, { allowedTurnIds })
+      ...(supplement.contextUsage ? { contextUsage: supplement.contextUsage } : {}),
+      timeline: mergeSessionTimelineRecords(detail.timeline, supplement.records)
     };
   }
 
@@ -3265,13 +3342,13 @@ export class AppServerGateway {
     if (!allowedTurnIds.size) {
       return page;
     }
-    const jsonl = await this.readSessionJsonl(threadId);
-    if (!jsonl) {
+    const supplement = await this.readSessionTimelineSupplement(threadId, allowedTurnIds);
+    if (!supplement) {
       return page;
     }
     return {
       ...page,
-      items: mergeSessionTimelineItems(page.items, jsonl, { allowedTurnIds })
+      items: mergeSessionTimelineRecords(page.items, supplement.records)
     };
   }
 

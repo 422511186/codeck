@@ -1,10 +1,30 @@
 "use client";
 
+import { useMemo } from "react";
 import type { DiffEntry } from "../../state/timeline";
 import { BaseCard } from "./BaseCard";
-import { createTextPreview, TruncationFooter } from "./LongTextPreview";
+import { createTextPreview, textDerivationSignature, TruncationFooter } from "./LongTextPreview";
 
-export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
+const DIFF_ROWS_CACHE_LIMIT = 120;
+
+type DiffViewDiagnostics = {
+  parseRuns: number;
+};
+
+const diffViewDiagnostics: DiffViewDiagnostics = {
+  parseRuns: 0
+};
+const diffRowsCache = new Map<string, DiffRow[]>();
+
+export function __getDiffViewDiagnostics(): DiffViewDiagnostics {
+  return { ...diffViewDiagnostics };
+}
+
+export function __resetDiffViewDiagnostics(): void {
+  diffViewDiagnostics.parseRuns = 0;
+}
+
+export function DiffCard({ entry, cacheKey }: { entry: DiffEntry; cacheKey?: string }): JSX.Element {
   return (
     <BaseCard
       icon="±"
@@ -17,7 +37,7 @@ export function DiffCard({ entry }: { entry: DiffEntry }): JSX.Element {
       }
       maxBodyHeight={520}
     >
-      <DiffView diff={entry.diff || ""} />
+      <DiffView diff={entry.diff || ""} cacheKey={cacheKey} />
     </BaseCard>
   );
 }
@@ -26,15 +46,23 @@ export function DiffView({
   diff,
   copyLabel = "复制完整 diff",
   maxLines = 120,
-  maxChars = 20_000
+  maxChars = 20_000,
+  cacheKey
 }: {
   diff: string;
   copyLabel?: string;
   maxLines?: number;
   maxChars?: number;
+  cacheKey?: string;
 }): JSX.Element {
-  const preview = createTextPreview(diff, { maxLines, maxChars });
-  const rows = parseUnifiedDiff(preview.preview);
+  const preview = useMemo(
+    () => createTextPreview(diff, { maxLines, maxChars, cacheKey: cacheKey ? `${cacheKey}:preview` : undefined }),
+    [cacheKey, diff, maxChars, maxLines]
+  );
+  const rows = useMemo(
+    () => parseUnifiedDiffCached(preview.preview, cacheKey),
+    [cacheKey, preview.preview]
+  );
   const gutterWidth = lineNumberGutterWidth(rows);
   const gridTemplateColumns = `${gutterWidth}px 16px minmax(0, 1fr)`;
 
@@ -118,6 +146,7 @@ function lineNumberGutterWidth(rows: DiffRow[]): number {
 }
 
 function parseUnifiedDiff(diff: string): DiffRow[] {
+  diffViewDiagnostics.parseRuns += 1;
   const rows: DiffRow[] = [];
   let oldLine: number | null = null;
   let newLine: number | null = null;
@@ -159,6 +188,23 @@ function parseUnifiedDiff(diff: string): DiffRow[] {
   }
 
   return rows.length ? rows : [{ kind: "file", text: "" }];
+}
+
+function parseUnifiedDiffCached(diff: string, cacheKey?: string): DiffRow[] {
+  const key = `${cacheKey ?? "diff"}\u0000${textDerivationSignature(diff)}`;
+  const cached = diffRowsCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const rows = parseUnifiedDiff(diff);
+  diffRowsCache.set(key, rows);
+  if (diffRowsCache.size > DIFF_ROWS_CACHE_LIMIT) {
+    const oldestKey = diffRowsCache.keys().next().value;
+    if (oldestKey) {
+      diffRowsCache.delete(oldestKey);
+    }
+  }
+  return rows;
 }
 
 const gutterStyle: React.CSSProperties = {
