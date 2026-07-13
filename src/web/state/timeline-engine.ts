@@ -231,14 +231,14 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
     }
     case "snapshot-merge": {
       const generation = nextGeneration(state, input.generation, input.entries);
-      return withEntries(
+      return applyEntryInputBatch(
         {
           ...state,
           generation,
           cursor: input.cursor ?? state.cursor,
           reachedBeginning: input.cursor === null
         },
-        [...state.entries, ...input.entries]
+        input.entries.map((entry) => ({ kind: "overlay-item", entry }))
       );
     }
     case "live-event-batch":

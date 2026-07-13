@@ -495,13 +495,6 @@ export default function ThreadPage(): JSX.Element {
     setCompactPending(false);
   }, [compactPending, compactCompletionSeen]);
 
-  useEffect(() => {
-    if (loading || !scrollerRef.current) return;
-    if (atBottomRef.current) {
-      scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
-    }
-  }, [loading, lastEntry]);
-
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     const anchor = pendingPrependAnchorRef.current;
@@ -1027,6 +1020,7 @@ export default function ThreadPage(): JSX.Element {
       <ThreadTimelineViewport
         threadId={threadId}
         scrollerRef={scrollerRef}
+        followTail={atBottomRef.current}
         onScroll={onScroll}
         onSend={onSend}
         onRewindToMessage={rewindToMessage}
@@ -1346,6 +1340,7 @@ function ThreadPlanBar({ threadId }: { threadId: string }): JSX.Element | null {
 function ThreadTimelineViewport({
   threadId,
   scrollerRef,
+  followTail,
   onScroll,
   onSend,
   onRewindToMessage,
@@ -1357,6 +1352,7 @@ function ThreadTimelineViewport({
 }: {
   threadId: string;
   scrollerRef: RefObject<HTMLDivElement | null>;
+  followTail: boolean;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void | Promise<void>;
   onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
   onRewindToMessage: (entry: TimelineEntry) => void | Promise<void>;
@@ -1386,6 +1382,7 @@ function ThreadTimelineViewport({
       <Timeline
         threadId={threadId}
         entries={entries}
+        followTail={followTail}
         approvals={approvals}
         running={running}
         activeTurnId={activeTurnId}

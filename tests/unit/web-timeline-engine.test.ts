@@ -649,6 +649,100 @@ describe("timeline engine", () => {
     ]);
   });
 
+  it("merges a live file placeholder with its completed snapshot at the original position", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        { ...agentEntry("agent-before", "turn-1", "before", 1), sourceOrder: { sourceKind: "snapshot", ordinal: 0 } },
+        { ...agentEntry("agent-after", "turn-1", "after", 3), sourceOrder: { sourceKind: "snapshot", ordinal: 2 } }
+      ]
+    });
+    state = applyTimelineInput(state, {
+      kind: "live-event",
+      entry: {
+        id: "file-1",
+        turnId: "turn-1",
+        createdAt: 2,
+        sourceOrder: { sourceKind: "live", ordinal: 1, beforeEntryId: "agent-after", afterEntryId: "agent-before" },
+        body: { kind: "tool", toolKind: "file", server: "file", tool: "file", status: "running", result: "patching" }
+      }
+    });
+    state = applyTimelineInput(state, {
+      kind: "turn-item-detail",
+      entry: {
+        id: "file-1",
+        turnId: "turn-1",
+        createdAt: 4,
+        sourceOrder: { sourceKind: "snapshot", ordinal: 1, beforeEntryId: "agent-after", afterEntryId: "agent-before" },
+        body: {
+          kind: "tool",
+          toolKind: "file",
+          server: "file",
+          tool: "src/app.ts",
+          diffPath: "src/app.ts",
+          added: 7,
+          removed: 3,
+          status: "success",
+          result: "+fixed"
+        }
+      }
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual([
+      "agent-before",
+      "file-1",
+      "agent-after"
+    ]);
+    expect(selectTimelineEntries(state).filter((entry) => entry.id === "file-1")).toHaveLength(1);
+    expect(selectTimelineEntries(state)[1]?.body).toEqual(
+      expect.objectContaining({ kind: "tool", tool: "src/app.ts", status: "success" })
+    );
+  });
+
+  it("inserts a repair-only file change between its anchored agent messages", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        agentEntry("agent-before", "turn-1", "before", 1),
+        agentEntry("agent-after", "turn-1", "after", 3)
+      ]
+    });
+    state = applyTimelineInput(state, {
+      kind: "snapshot-merge",
+      cursor: null,
+      entries: [
+        {
+          id: "file-repaired",
+          turnId: "turn-1",
+          createdAt: 2,
+          sourceOrder: {
+            sourceKind: "snapshot",
+            ordinal: 1,
+            beforeEntryId: "agent-after",
+            afterEntryId: "agent-before"
+          },
+          body: {
+            kind: "tool",
+            toolKind: "file",
+            server: "file",
+            tool: "src/app.ts",
+            diffPath: "src/app.ts",
+            added: 7,
+            removed: 3,
+            status: "success",
+            result: "+fixed"
+          }
+        }
+      ]
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual([
+      "agent-before",
+      "file-repaired",
+      "agent-after"
+    ]);
+  });
+
   it("isolates event ids revisions and reused item ids by generation", () => {
     let state = createTimelineEngineState();
     state = applyTimelineInput(state, {

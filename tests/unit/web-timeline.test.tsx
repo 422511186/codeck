@@ -486,6 +486,53 @@ describe("Timeline", () => {
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThan(entries.length);
   });
 
+  it("长列表重新启用 follow tail 后先切换尾部窗口再滚到底部", () => {
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `agent-follow-${index}`,
+      turnId: `turn-follow-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} followTail={false} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 7_000;
+    let scrollHeight = 18_000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 600 });
+    fireEvent.scroll(scroller);
+
+    const optimistic = {
+      id: "local-user-follow",
+      clientUserMessageId: "local-user-follow",
+      createdAt: 241,
+      body: { kind: "user-message" as const, text: "新发送消息", status: "sending" as const }
+    };
+    scrollHeight = 18_072;
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline entries={[...entries, optimistic]} followTail />
+      </div>
+    );
+
+    expect(screen.getByText("新发送消息")).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeGreaterThan(0);
+    expect(scrollTop).toBe(18_072);
+  });
+
   it("长时间上下滚动后回收 viewport 外的 timeline rows", () => {
     const entries = Array.from({ length: 360 }, (_value, index) => ({
       id: `agent-${index}`,

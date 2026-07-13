@@ -66,6 +66,7 @@ const timelineDerivationDiagnostics: TimelineDerivationDiagnostics = {
 type Props = {
   threadId?: string;
   entries: TimelineEntry[];
+  followTail?: boolean;
   approvals?: PendingServerRequest[];
   running?: boolean;
   activeTurnId?: string | null;
@@ -78,6 +79,7 @@ type Props = {
 export function Timeline({
   threadId,
   entries,
+  followTail = false,
   approvals,
   running = false,
   activeTurnId = null,
@@ -128,9 +130,18 @@ export function Timeline({
     const root = rootRef.current;
     const scroller = root ? findTimelineScrollContainer(root) : null;
     const previous = previousLayoutRef.current;
+    if (scroller && followTail) {
+      const tailRange = initialTimelineWindowRange(allBlocks.length);
+      if (windowRange.start !== tailRange.start || windowRange.end !== tailRange.end) {
+        setWindowRange(tailRange);
+        return;
+      }
+      scroller.scrollTop = scroller.scrollHeight;
+    }
     if (
       scroller &&
       scrollAnchorRef.current &&
+      !followTail &&
       !scrollAnchorRef.current.followTail &&
       (previous.blocks !== allBlocks || previous.layoutIndex !== layoutIndex)
     ) {
@@ -148,7 +159,7 @@ export function Timeline({
         scroller.clientHeight
       );
     }
-  }, [allBlocks, layoutIndex]);
+  }, [allBlocks, layoutIndex, followTail, windowRange.start, windowRange.end]);
 
   useEffect(() => {
     const previous = previousBlocksRef.current;
@@ -168,6 +179,9 @@ export function Timeline({
       nextLastId !== previous.lastId;
 
     setWindowRange((current) => {
+      if (followTail) {
+        return initialTimelineWindowRange(allBlocks.length);
+      }
       if (allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS) {
         return { start: 0, end: allBlocks.length };
       }
@@ -195,7 +209,7 @@ export function Timeline({
       firstId: nextFirstId,
       lastId: nextLastId
     };
-  }, [allBlocks.length, allBlocks[0]?.id, allBlocks[allBlocks.length - 1]?.id]);
+  }, [allBlocks.length, allBlocks[0]?.id, allBlocks[allBlocks.length - 1]?.id, followTail]);
 
   useEffect(() => {
     const visibleIds = new Set(allBlocks.map(timelineBlockHeightCacheKey));
