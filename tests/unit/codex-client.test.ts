@@ -3308,6 +3308,8 @@ describe("CodexAppServerClient", () => {
     expect(second.items).toHaveLength(30);
     expect(first.nextCursor).toContain("legacy-thread-items");
     expect(second.nextCursor).toContain("legacy-thread-items");
+    const turnPageCalls = peer.calls.filter((call) => call.method === "thread/turns/list");
+    expect(turnPageCalls[1]?.params).toEqual(expect.objectContaining({ cursor: null }));
   });
 
   it("分页读取 turns 时显式请求 desc 并返回页内正序 timeline", async () => {

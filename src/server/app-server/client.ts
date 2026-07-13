@@ -2587,7 +2587,7 @@ export class CodexAppServerClient {
       }
       const legacyResponse = (await this.peer.request("thread/turns/list", {
         threadId: input.threadId,
-        cursor: legacyCursor?.turnCursor ?? input.cursor,
+        cursor: legacyCursor ? legacyCursor.turnCursor : input.cursor,
         limit: Math.min(timelinePageLimit(input.limit), LEGACY_THREAD_TURN_PAGE_LIMIT),
         sortDirection: "desc",
         itemsView: "full"
@@ -2600,7 +2600,7 @@ export class CodexAppServerClient {
       return {
         items,
         nextCursor: nextOffset < legacyItems.length
-          ? legacyItemCursor(legacyCursor?.turnCursor ?? input.cursor ?? null, nextOffset)
+          ? legacyItemCursor(legacyCursor ? legacyCursor.turnCursor : (input.cursor ?? null), nextOffset)
           : (legacyResponse.nextCursor ?? null)
       };
     }
