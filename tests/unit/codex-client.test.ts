@@ -3242,6 +3242,32 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("legacy 会话仅回退到固定三个 turn 的游标页", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        throw new Error("thread/items/list is not supported yet");
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await client.listThreadTurns({ threadId: "thread-1", cursor: "legacy-cursor", limit: 100 });
+
+    expect(peer.calls).toContainEqual({
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        cursor: "legacy-cursor",
+        limit: 3,
+        sortDirection: "desc",
+        itemsView: "full"
+      }
+    });
+  });
+
   it("分页读取 turns 时显式请求 desc 并返回页内正序 timeline", async () => {
     const peer = new FakePeer();
     peer.request = async (method, params) => {

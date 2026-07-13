@@ -302,6 +302,7 @@ import { createTurnUserInput } from "./user-input";
 
 const DEFAULT_TIMELINE_PAGE_LIMIT = 30;
 const MAX_TIMELINE_PAGE_LIMIT = 100;
+const LEGACY_THREAD_TURN_PAGE_LIMIT = 3;
 
 function timelinePageLimit(limit: number | null | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
@@ -950,6 +951,11 @@ function isUnmaterializedThreadReadError(error: unknown): boolean {
     /not materialized yet|not loaded/i.test(message) &&
     (/includeTurns/i.test(message) || /thread\/turns\/list/i.test(message) || /before first user message/i.test(message))
   );
+}
+
+function isUnsupportedThreadItemsListError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /thread\/items\/list/i.test(message) && (/not supported/i.test(message) || /unknown variant/i.test(message));
 }
 
 function threadWithTurns(thread: Thread): Thread {
@@ -2538,7 +2544,25 @@ export class CodexAppServerClient {
       limit: timelinePageLimit(input.limit),
       sortDirection: "desc"
     };
-    const response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
+    let response: ThreadItemsListResponse;
+    try {
+      response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
+    } catch (error) {
+      if (!isUnsupportedThreadItemsListError(error)) {
+        throw error;
+      }
+      const legacyResponse = (await this.peer.request("thread/turns/list", {
+        threadId: input.threadId,
+        cursor: input.cursor,
+        limit: Math.min(timelinePageLimit(input.limit), LEGACY_THREAD_TURN_PAGE_LIMIT),
+        sortDirection: "desc",
+        itemsView: "full"
+      } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+      return {
+        items: chronologicalTurnsFromDescPage(legacyResponse.data).flatMap((turn) => timelineItemsForTurn(turn)),
+        nextCursor: legacyResponse.nextCursor ?? null
+      };
+    }
 
     return {
       items: response.data.flatMap((item) => {

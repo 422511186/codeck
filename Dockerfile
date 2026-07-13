@@ -1,18 +1,22 @@
 ARG NODE_IMAGE=node:22-bookworm-slim
 
 FROM ${NODE_IMAGE} AS deps
+USER root
+ENV NODE_ENV=development
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM deps AS builder
+USER root
 WORKDIR /app
 
 COPY . .
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runner
+USER root
 ENV NODE_ENV=production \
     CODEX_WEB_BIND_HOST=0.0.0.0 \
     CODEX_WEB_BIND_PORT=3000
