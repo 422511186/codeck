@@ -803,10 +803,8 @@ const retryBtnStyle: React.CSSProperties = {
 };
 
 const barStyle: React.CSSProperties = {
-  position: "fixed",
-  left: 0,
-  right: 0,
-  bottom: 0,
+  position: "relative",
+  flex: "0 0 auto",
   padding: "8px 10px calc(10px + var(--safe-bottom))",
   background: "var(--cw-bg)",
   borderTop: "1px solid var(--cw-border)",

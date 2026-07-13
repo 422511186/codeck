@@ -349,13 +349,13 @@ class FakePeer implements AppServerPeer {
       };
     }
 
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       return {
         data: [
           {
             type: "agentMessage",
-            id: "item-page-agent-2",
-            text: "分页 item",
+            id: (params as { turnId?: string }).turnId ? "item-page-agent-2" : "item-page-agent-1",
+            text: (params as { turnId?: string }).turnId ? "分页 item" : "分页 turn",
             phase: "final",
             memoryCitation: null
           }
@@ -1456,30 +1456,19 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
-  it("能把 thread/read 结果整理成移动端 timeline", async () => {
-    const client = new CodexAppServerClient(new FakePeer());
+  it("thread/read 只返回元数据且不加载消息", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
 
-    const detail = await client.readThread("thread-1");
+    const detail = await client.readThreadMetadata("thread-1");
 
     expect(detail.id).toBe("thread-1");
-    expect(detail.lastTurnId).toBe("turn-1");
-    expect(detail.timeline).toEqual([
-      {
-        id: "item-user-1",
-        clientUserMessageId: "client-user-1",
-        turnId: "turn-1",
-        turnIndex: 0,
-        role: "user",
-        text: "请检查登录逻辑"
-      },
-      {
-        id: "item-agent-1",
-        turnId: "turn-1",
-        turnIndex: 0,
-        role: "agent",
-        text: "我会先阅读认证相关代码。"
-      }
+    expect(detail.lastTurnId).toBeNull();
+    expect(detail.timeline).toEqual([]);
+    expect(peer.calls.filter((call) => call.method === "thread/read")).toEqual([
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } }
     ]);
+    expect(peer.calls.some((call) => call.method === "thread/turns/list")).toBe(false);
     expect(detail.goal).toEqual({
       threadId: "thread-1",
       objective: "完成移动端 Codex Web",
@@ -1534,7 +1523,7 @@ describe("CodexAppServerClient", () => {
     };
     const client = new CodexAppServerClient(peer);
 
-    await expect(client.readThread("empty-thread")).resolves.toMatchObject({
+    await expect(client.readThreadMetadata("empty-thread")).resolves.toMatchObject({
       id: "empty-thread",
       title: "新会话",
       timeline: [],
@@ -1546,15 +1535,7 @@ describe("CodexAppServerClient", () => {
         params: { threadId: "empty-thread", includeTurns: false }
       }
     ]);
-    expect(peer.calls).toContainEqual({
-      method: "thread/turns/list",
-      params: {
-        threadId: "empty-thread",
-        limit: 30,
-        sortDirection: "desc",
-        itemsView: "full"
-      }
-    });
+    expect(peer.calls.some((call) => call.method === "thread/turns/list")).toBe(false);
   });
 
   it("读取刚创建未加载空会话时返回空 timeline", async () => {
@@ -1602,7 +1583,7 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("读取普通会话时使用 metadata 加最近 turns 窗口，不请求 includeTurns 全量历史", async () => {
+  it("内部读取普通会话时使用 metadata 加固定 turns 窗口，不请求 includeTurns 全量历史", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
@@ -1616,16 +1597,11 @@ describe("CodexAppServerClient", () => {
     ]);
     expect(peer.calls).toContainEqual({
       method: "thread/turns/list",
-      params: {
-        threadId: "thread-1",
-        limit: 30,
-        sortDirection: "desc",
-        itemsView: "full"
-      }
+      params: { threadId: "thread-1", limit: 30, sortDirection: "desc", itemsView: "full" }
     });
   });
 
-  it("读取普通会话时返回继续加载更早 turns 的 cursor", async () => {
+  it("内部读取普通会话时携带固定窗口的继续 cursor", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
@@ -1645,7 +1621,7 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
-  it("能把 userMessage 里的 localImage 保留为缩略图路径", async () => {
+  it("metadata 读取不会附带 userMessage 图片内容", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
     const turns = [
@@ -1704,19 +1680,10 @@ describe("CodexAppServerClient", () => {
     };
     const client = new CodexAppServerClient(peer);
 
-    await expect(client.readThread("thread-1")).resolves.toMatchObject({
-      timeline: [
-        {
-          id: "item-user-image",
-          role: "user",
-          text: "请看这张图",
-          imagePaths: ["C:\\Users\\huang\\AppData\\Local\\Temp\\shot.png"]
-        }
-      ]
-    });
+    await expect(client.readThreadMetadata("thread-1")).resolves.toMatchObject({ timeline: [] });
   });
 
-  it("能把 MCP 工具调用转换成 timeline 工具项", async () => {
+  it("metadata 读取不会附带 MCP 工具内容", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
     const turns = [
@@ -1778,22 +1745,10 @@ describe("CodexAppServerClient", () => {
     };
     const client = new CodexAppServerClient(peer);
 
-    await expect(client.readThread("thread-1")).resolves.toMatchObject({
-      timeline: [
-        {
-          id: "tool-1",
-          role: "tool",
-          toolKind: "mcp",
-          server: "filesystem",
-          tool: "read_file",
-          arguments: '{\n  "path": "README.md"\n}',
-          text: expect.stringContaining("README content")
-        }
-      ]
-    });
+    await expect(client.readThreadMetadata("thread-1")).resolves.toMatchObject({ timeline: [] });
   });
 
-  it("能把失败 turn 的错误转换成 timeline 错误项", async () => {
+  it("metadata 读取不会附带失败 turn 错误内容", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
     const turns = [
@@ -1846,15 +1801,7 @@ describe("CodexAppServerClient", () => {
     };
     const client = new CodexAppServerClient(peer);
 
-    await expect(client.readThread("thread-1")).resolves.toMatchObject({
-      timeline: [
-        {
-          id: "turn-failed-error",
-          role: "error",
-          text: "API 调用失败：502 Bad Gateway"
-        }
-      ]
-    });
+    await expect(client.readThreadMetadata("thread-1")).resolves.toMatchObject({ timeline: [] });
   });
 
   it("能通过 thread/resume 恢复会话并使用初始 turns 页", async () => {
@@ -2258,7 +2205,7 @@ describe("CodexAppServerClient", () => {
     expect(thread.id).toBe("fork-thread-1");
     expect(peer.calls.at(-1)).toEqual({
       method: "thread/fork",
-      params: { threadId: "thread-1", excludeTurns: false }
+      params: { threadId: "thread-1", excludeTurns: true }
     });
   });
 
@@ -3259,22 +3206,21 @@ describe("CodexAppServerClient", () => {
     );
   });
 
-  it("能分页读取 turns 和 turn items", async () => {
+  it("统一通过 thread/items/list 分页读取整个会话或指定 turn", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
-      items: [{ id: "item-page-agent-1", turnId: "turn-page-1", role: "agent", text: "分页 turn" }],
-      nextCursor: "turn-next"
+      items: [{ id: "item-page-agent-1", role: "agent", text: "分页 turn" }],
+      nextCursor: "item-next"
     });
     expect(peer.calls.at(-1)).toEqual({
-      method: "thread/turns/list",
+      method: "thread/items/list",
       params: {
         threadId: "thread-1",
         cursor: "cursor-1",
         limit: 10,
-        sortDirection: "desc",
-        itemsView: "full"
+        sortDirection: "desc"
       }
     });
 
@@ -3285,12 +3231,13 @@ describe("CodexAppServerClient", () => {
       nextCursor: "item-next"
     });
     expect(peer.calls.at(-1)).toEqual({
-      method: "thread/turns/items/list",
+      method: "thread/items/list",
       params: {
         threadId: "thread-1",
         turnId: "turn-page-1",
         cursor: "cursor-2",
-        limit: 20
+        limit: 20,
+        sortDirection: "desc"
       }
     });
   });
@@ -3299,35 +3246,17 @@ describe("CodexAppServerClient", () => {
     const peer = new FakePeer();
     peer.request = async (method, params) => {
       peer.calls.push({ method, params });
-      if (method === "thread/turns/list") {
+      if (method === "thread/items/list") {
         return {
           data: [
             {
-              id: "turn-new",
-              itemsView: { type: "complete" },
-              status: { type: "completed" },
-              error: null,
-              startedAt: 201,
-              completedAt: 299,
-              durationMs: 98000,
-              items: [{ type: "agentMessage", id: "item-new", text: "新回复", phase: "final", memoryCitation: null }]
+              type: "agentMessage", id: "item-new", text: "新回复", phase: "final", memoryCitation: null
             },
             {
-              id: "turn-old",
-              itemsView: { type: "complete" },
-              status: { type: "completed" },
-              error: null,
-              startedAt: 101,
-              completedAt: 199,
-              durationMs: 98000,
-              items: [
-                {
-                  type: "userMessage",
-                  id: "item-old",
-                  clientId: "client-old",
-                  content: [{ type: "text", text: "旧请求", text_elements: [] }]
-                }
-              ]
+              type: "userMessage",
+              id: "item-old",
+              clientId: "client-old",
+              content: [{ type: "text", text: "旧请求", text_elements: [] }]
             }
           ],
           nextCursor: "older",
@@ -3341,19 +3270,18 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
       items: [
-        { id: "item-old", turnId: "turn-old", role: "user", text: "旧请求", clientUserMessageId: "client-old" },
-        { id: "item-new", turnId: "turn-new", role: "agent", text: "新回复" }
+        { id: "item-old", role: "user", text: "旧请求", clientUserMessageId: "client-old" },
+        { id: "item-new", role: "agent", text: "新回复" }
       ],
       nextCursor: "older"
     });
     expect(peer.calls.at(-1)).toEqual({
-      method: "thread/turns/list",
+      method: "thread/items/list",
       params: {
         threadId: "thread-1",
         cursor: "cursor-1",
         limit: 10,
-        sortDirection: "desc",
-        itemsView: "full"
+        sortDirection: "desc"
       }
     });
   });
@@ -3632,7 +3560,6 @@ describe("CodexAppServerClient", () => {
           threadId: "thread-1",
           outputModality: "text",
           voice: "alloy",
-          architecture: null,
           codexResponsesAsItems: null,
           codexResponseItemPrefix: null,
           model: null,

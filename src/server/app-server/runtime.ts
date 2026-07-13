@@ -174,7 +174,6 @@ import type { ProcessKillParams } from "../../../docs/generated/app-server-ts/v2
 import type { ProcessResizePtyParams } from "../../../docs/generated/app-server-ts/v2/ProcessResizePtyParams";
 import type { ProcessSpawnParams } from "../../../docs/generated/app-server-ts/v2/ProcessSpawnParams";
 import type { ProcessWriteStdinParams } from "../../../docs/generated/app-server-ts/v2/ProcessWriteStdinParams";
-import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/ThreadListParams";
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
@@ -615,11 +614,14 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       sessionId: "mock-session-1",
       forkedFromId: null,
       parentThreadId: null,
+      extra: null,
       preview: "这是用于移动端联调的示例会话",
       ephemeral: false,
+      historyMode: "paginated",
       modelProvider: "openai",
       createdAt: 1_767_000_000,
       updatedAt: 1_767_000_600,
+      recencyAt: 1_767_000_600,
       status: { type: "idle" as const },
       path: null,
       cwd: "C:\\Users\\huang\\workspace",
@@ -807,11 +809,13 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       };
     }
 
-    if (method === "thread/turns/items/list") {
-      const listParams = params as ThreadTurnsItemsListParams;
-      const turn = this.thread.turns.find((threadTurn) => threadTurn.id === listParams.turnId);
+    if (method === "thread/items/list") {
+      const listParams = params as { turnId?: string | null; limit?: number | null };
+      const turns = listParams.turnId
+        ? this.thread.turns.filter((threadTurn) => threadTurn.id === listParams.turnId)
+        : this.thread.turns;
       return {
-        data: (turn?.items || []).slice(0, listParams.limit || undefined),
+        data: turns.flatMap((turn) => turn.items).slice(0, listParams.limit || undefined),
         nextCursor: null,
         backwardsCursor: null
       };
@@ -3335,6 +3339,11 @@ export class AppServerGateway {
     );
   }
 
+  async readThreadMetadata(threadId: string): Promise<MobileThreadDetail> {
+    await this.ensureReady();
+    return this.withTimelineGeneration(await this.client.readThreadMetadata(threadId));
+  }
+
   private timelineThreadWithinBudget(detail: MobileThreadDetail): MobileThreadDetail {
     if (!detail.timeline.length) {
       return timelineThreadWithCompleteness(detail);
@@ -4085,15 +4094,7 @@ export class AppServerGateway {
 
   async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
-    let page: MobileTimelinePage;
-    try {
-      page = await this.client.listThreadTurnItems(input);
-    } catch (error) {
-      if (!isUnsupportedTurnItemsListError(error)) {
-        throw error;
-      }
-      page = await this.listThreadTurnItemsFromTurns(input);
-    }
+    const page = await this.client.listThreadTurnItems(input);
     return this.timelinePageWithinBudget(
       input.threadId,
       await this.applySessionTimelinePageSupplement(input.threadId, page)

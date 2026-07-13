@@ -12,7 +12,7 @@ export async function GET(
 
   try {
     const { threadId } = await context.params;
-    const thread = await getAppServerGateway().readThread(threadId);
+    const thread = await getAppServerGateway().readThreadMetadata(threadId);
     return NextResponse.json({ ok: true, thread });
   } catch (error) {
     return NextResponse.json(

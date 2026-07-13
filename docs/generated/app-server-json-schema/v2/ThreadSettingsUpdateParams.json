@@ -64,6 +64,17 @@
         "null"
       ]
     },
+    "multiAgentMode": {
+      "description": "@deprecated Ignored. Use `effort: \"ultra\"` for proactive multi-agent behavior.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MultiAgentMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "permissions": {
       "description": "Select a named permissions profile id for subsequent turns. Cannot be combined with `sandboxPolicy`.",
       "type": [
@@ -135,7 +146,6 @@
           "type": "string",
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ]
@@ -201,6 +211,31 @@
       "enum": [
         "plan",
         "default"
+      ]
+    },
+    "MultiAgentMode": {
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "custom"
+          ],
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "title": "CustomMultiAgentMode"
+        }
       ]
     },
     "NetworkAccess": {

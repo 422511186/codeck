@@ -153,6 +153,8 @@ import type { ThreadGoalGetResponse } from "../../../docs/generated/app-server-t
 import type { ThreadGoalSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetParams";
 import type { ThreadGoalSetResponse } from "../../../docs/generated/app-server-ts/v2/ThreadGoalSetResponse";
 import type { ThreadItem } from "../../../docs/generated/app-server-ts/v2/ThreadItem";
+import type { ThreadItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadItemsListParams";
+import type { ThreadItemsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadItemsListResponse";
 import type { ThreadReadResponse } from "../../../docs/generated/app-server-ts/v2/ThreadReadResponse";
 import type { ThreadRealtimeAppendAudioParams } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendAudioParams";
 import type { ThreadRealtimeAppendAudioResponse } from "../../../docs/generated/app-server-ts/v2/ThreadRealtimeAppendAudioResponse";
@@ -187,8 +189,6 @@ import type { ThreadShellCommandParams } from "../../../docs/generated/app-serve
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { ThreadStartResponse } from "../../../docs/generated/app-server-ts/v2/ThreadStartResponse";
 import type { ThreadStatus } from "../../../docs/generated/app-server-ts/v2/ThreadStatus";
-import type { ThreadTurnsItemsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListParams";
-import type { ThreadTurnsItemsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsItemsListResponse";
 import type { ThreadTurnsListParams } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListParams";
 import type { ThreadTurnsListResponse } from "../../../docs/generated/app-server-ts/v2/ThreadTurnsListResponse";
 import type { ThreadUnarchiveParams } from "../../../docs/generated/app-server-ts/v2/ThreadUnarchiveParams";
@@ -1384,7 +1384,7 @@ export class CodexAppServerClient {
 
     return {
       threads: response.data.map(threadSummary),
-      nextCursor: response.nextCursor
+      nextCursor: response.nextCursor ?? null
     };
   }
 
@@ -1404,7 +1404,7 @@ export class CodexAppServerClient {
         ...threadSummary(result.thread),
         preview: result.snippet || result.thread.preview
       })),
-      nextCursor: response.nextCursor
+      nextCursor: response.nextCursor ?? null
     };
   }
 
@@ -1448,27 +1448,23 @@ export class CodexAppServerClient {
     };
   }
 
+  async readThreadMetadata(threadId: string): Promise<MobileThreadDetail> {
+    const [response, goal] = await Promise.all([
+      this.peer.request("thread/read", { threadId, includeTurns: false }) as Promise<ThreadReadResponse>,
+      this.readThreadGoal(threadId)
+    ]);
+    return {
+      ...threadDetail({ ...response.thread, turns: [] }, { nextCursor: null }),
+      goal
+    };
+  }
+
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     const response = (await this.peer.request("thread/read", {
       threadId,
       includeTurns: false
     })) as ThreadReadResponse;
     return threadSummary(response.thread);
-  }
-
-  private async readThreadWithTurnsFallback(threadId: string): Promise<ThreadReadResponse> {
-    try {
-      return (await this.peer.request("thread/read", {
-        threadId,
-        includeTurns: true
-      })) as ThreadReadResponse;
-    } catch (error) {
-      if (!isUnmaterializedThreadReadError(error)) {
-        throw error;
-      }
-
-      return (await this.peer.request("thread/read", { threadId })) as ThreadReadResponse;
-    }
   }
 
   private async readInitialThreadTurns(
@@ -1567,10 +1563,10 @@ export class CodexAppServerClient {
   async forkThread(threadId: string): Promise<MobileThreadDetail> {
     const params: ThreadForkParams = {
       threadId,
-      excludeTurns: false
+      excludeTurns: true
     };
     const response = (await this.peer.request("thread/fork", params)) as ThreadForkResponse;
-    return threadDetail(response.thread, {
+    return threadDetail({ ...response.thread, turns: [] }, {
       model: response.model,
       reasoningEffort: response.reasoningEffort,
       activePermissionProfile: response.activePermissionProfile,
@@ -1601,7 +1597,7 @@ export class CodexAppServerClient {
   async unarchiveThread(threadId: string): Promise<MobileThreadDetail> {
     const params: ThreadUnarchiveParams = { threadId };
     const response = (await this.peer.request("thread/unarchive", params)) as ThreadUnarchiveResponse;
-    return threadDetail(response.thread);
+    return threadDetail({ ...response.thread, turns: [] });
   }
 
   async unsubscribeThread(threadId: string): Promise<MobileThreadUnsubscribeResult> {
@@ -1894,7 +1890,6 @@ export class CodexAppServerClient {
   async startThreadRealtime(input: StartThreadRealtimeInput): Promise<MobileThreadRealtimeStatusResult> {
     const params: ThreadRealtimeStartParams = {
       threadId: input.threadId,
-      architecture: input.architecture ?? null,
       codexResponsesAsItems: input.codexResponsesAsItems ?? null,
       codexResponseItemPrefix: input.codexResponseItemPrefix ?? null,
       model: input.model ?? null,
@@ -2028,7 +2023,7 @@ export class CodexAppServerClient {
     const response = (await this.peer.request("app/list", params)) as AppsListResponse;
     return {
       apps: response.data.map(appView),
-      nextCursor: response.nextCursor
+      nextCursor: response.nextCursor ?? null
     };
   }
 
@@ -2537,29 +2532,32 @@ export class CodexAppServerClient {
   }
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
-    const params: ThreadTurnsListParams = {
+    const params: ThreadItemsListParams = {
       threadId: input.threadId,
       cursor: input.cursor,
       limit: timelinePageLimit(input.limit),
-      sortDirection: "desc",
-      itemsView: "full"
+      sortDirection: "desc"
     };
-    const response = (await this.peer.request("thread/turns/list", params)) as ThreadTurnsListResponse;
+    const response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
 
     return {
-      items: chronologicalTurnsFromDescPage(response.data).flatMap((turn) => timelineItemsForTurn(turn)),
-      nextCursor: response.nextCursor
+      items: response.data.flatMap((item) => {
+        const mapped = timelineItem(item);
+        return mapped ? [mapped] : [];
+      }).reverse(),
+      nextCursor: response.nextCursor ?? null
     };
   }
 
   async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
-    const params: ThreadTurnsItemsListParams = {
+    const params: ThreadItemsListParams = {
       threadId: input.threadId,
       turnId: input.turnId,
       cursor: input.cursor,
-      limit: timelinePageLimit(input.limit)
+      limit: timelinePageLimit(input.limit),
+      sortDirection: "desc"
     };
-    const response = (await this.peer.request("thread/turns/items/list", params)) as ThreadTurnsItemsListResponse;
+    const response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
 
     return {
       items: response.data.flatMap((item) => {

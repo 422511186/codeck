@@ -339,13 +339,23 @@ export default function ThreadPage(): JSX.Element {
     setLoading(true);
     (async () => {
       try {
-        const td = await requestCoordinatorRef.current.dedupeRequest(
-          `thread:${threadId}:detail`,
-          () => codex.readThread(threadId)
-        ).catch((err) => recoverInitialThreadDetail(threadId, err));
+        const [td, initialPage] = await Promise.all([
+          requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:detail`,
+            () => codex.readThread(threadId)
+          ).catch((err) => recoverInitialThreadDetail(threadId, err)),
+          requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:turns:initial`,
+            () => codex.listTurnsBefore(threadId, null)
+          )
+        ]);
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
-        applyThreadDetail(td, "replace");
+        applyThreadDetail({
+          ...td,
+          timeline: initialPage.items.length ? initialPage.items : td.timeline,
+          nextCursor: initialPage.items.length ? (initialPage.nextCursor ?? null) : td.nextCursor
+        }, "replace");
       } catch (err) {
         if (isRequestAbort(err)) return;
         if (!cancelled) {
@@ -374,27 +384,23 @@ export default function ThreadPage(): JSX.Element {
     const requestEpoch = mutationEpochRef.current;
     (async () => {
       try {
-        const td = await requestCoordinatorRef.current.dedupeRequest(
-          `thread:${threadId}:repair`,
-          () => codex.readThread(threadId)
-        );
+        const [td, page] = await Promise.all([
+          requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:repair:metadata`,
+            () => codex.readThread(threadId)
+          ),
+          requestCoordinatorRef.current.dedupeRequest(
+            `thread:${threadId}:repair:items`,
+            () => codex.listTurnsBefore(threadId, null)
+          )
+        ]);
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) {
           requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
-        const sources = await threadDetailEntriesWithTurnItems(
-          td,
-          threadId,
-          codex.listTurnItems
-        );
-        if (cancelled) return;
-        if (sources.detailCompleteness.status === "repair-required") {
-          throw new Error(sources.detailCompleteness.reason ?? "turn detail repair required");
-        }
-        const detailCursor = sources.detailCompleteness.nextCursor;
-        detailContinuationRef.current = detailCursor ? { detail: td, cursor: detailCursor } : null;
-        applyThreadDetail(td, "replace", threadId, sources.snapshotEntries, sources.detailEntries);
+        detailContinuationRef.current = null;
+        applyThreadDetail({ ...td, timeline: page.items, nextCursor: page.nextCursor ?? null }, "replace");
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -1039,7 +1045,6 @@ export default function ThreadPage(): JSX.Element {
 
       <ThreadTimelineViewport
         threadId={threadId}
-        composerHeight={composerHeight}
         scrollerRef={scrollerRef}
         onScroll={onScroll}
         onSend={onSend}
@@ -1070,7 +1075,7 @@ export default function ThreadPage(): JSX.Element {
               scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
             }
           }}
-          style={{ ...jumpBtn, bottom: composerBottomOffset(composerHeight) }}
+          style={jumpBtn}
         >
           ↓ 跳到最新
         </button>
@@ -1359,7 +1364,6 @@ function ThreadPlanBar({ threadId }: { threadId: string }): JSX.Element | null {
 
 function ThreadTimelineViewport({
   threadId,
-  composerHeight,
   scrollerRef,
   onScroll,
   onSend,
@@ -1371,7 +1375,6 @@ function ThreadTimelineViewport({
   processingLabel
 }: {
   threadId: string;
-  composerHeight: number;
   scrollerRef: RefObject<HTMLDivElement | null>;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void | Promise<void>;
   onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
@@ -1394,7 +1397,7 @@ function ThreadTimelineViewport({
       ref={scrollerRef}
       className="cw-thread-scroller"
       onScroll={onScroll}
-      style={{ ...scrollStyle, paddingBottom: composerBottomOffset(composerHeight) }}
+      style={scrollStyle}
     >
       {reachedBeginning ? (
         <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
@@ -2236,10 +2239,6 @@ function uniqueTimelineId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
-function composerBottomOffset(height: number): string {
-  return `calc(${Math.max(DEFAULT_COMPOSER_HEIGHT, Math.ceil(height))}px + var(--safe-bottom))`;
-}
-
 async function rollbackThreadWithResume(
   threadId: string,
   numTurns: number,
@@ -2446,9 +2445,9 @@ const iconBtn: React.CSSProperties = {
 
 const scrollStyle: React.CSSProperties = {
   flex: 1,
+  minHeight: 0,
   overflowY: "auto",
   padding: "12px",
-  paddingBottom: "calc(144px + var(--safe-bottom))",
   display: "flex",
   flexDirection: "column",
   gap: 10

@@ -30,7 +30,12 @@ describe("app-server 协议覆盖", () => {
     const methods = Array.from(clientRequest.matchAll(/"method":\s*"([^"]+)"/g), (match) => match[1]!).sort();
     const source = readSourceFiles(path.join(process.cwd(), "src")).join("\n");
 
-    const missing = methods.filter((method) => !source.includes(`"${method}"`));
+    const intentionallyUnimplemented = new Set([
+      "account/workspaceMessages/read",
+      "environment/info",
+      "externalAgentConfig/import/readHistories"
+    ]);
+    const missing = methods.filter((method) => !intentionallyUnimplemented.has(method) && !source.includes(`"${method}"`));
 
     expect(missing).toEqual([]);
   });

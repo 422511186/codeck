@@ -148,8 +148,8 @@ class UnsupportedTurnItemsPeer implements ManagedAppServerPeer {
         platformOs: "linux"
       };
     }
-    if (method === "thread/turns/items/list") {
-      throw new Error("thread/turns/items/list is not supported yet");
+    if (method === "thread/items/list") {
+      throw new Error("thread/items/list is not supported yet");
     }
     if (method === "thread/turns/list") {
       return {
@@ -202,8 +202,8 @@ class LoopingUnsupportedTurnItemsPeer extends UnsupportedTurnItemsPeer {
         platformOs: "linux"
       };
     }
-    if (method === "thread/turns/items/list") {
-      throw new Error("thread/turns/items/list is not supported yet");
+    if (method === "thread/items/list") {
+      throw new Error("thread/items/list is not supported yet");
     }
     if (method === "thread/turns/list") {
       return { data: [], nextCursor: "same-cursor", backwardsCursor: null };
@@ -520,7 +520,7 @@ class OversizeItemContentPeer extends NotificationOverlayPeer {
   }
 
   override async request(method: string): Promise<unknown> {
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       return {
         data: [
           {
@@ -781,7 +781,7 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
     if (method === "thread/turns/list") {
       return { data: sessionThread().turns, nextCursor: null, backwardsCursor: null };
     }
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       return {
         data: sessionThread().turns[0]!.items,
         nextCursor: null
@@ -817,7 +817,7 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
 
 class OversizeTimelinePagePeer extends SessionResponseItemsPeer {
   override async request(method: string, params?: unknown): Promise<unknown> {
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       this.calls.push({ method, params });
       return {
         data: Array.from({ length: 20 }, (_value, index) => ({
@@ -875,7 +875,7 @@ class OversizeTimelineArgumentsPeer extends SessionResponseItemsPeer {
         error: null,
         durationMs: 1
       }));
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       this.calls.push({ method, params });
       return { data: longItems(), nextCursor: null };
     }
@@ -897,7 +897,7 @@ class OversizeTimelineArgumentsPeer extends SessionResponseItemsPeer {
 
 class PreTruncatedOversizeMetadataPeer extends SessionResponseItemsPeer {
   override async request(method: string, params?: unknown): Promise<unknown> {
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       this.calls.push({ method, params });
       return {
         data: Array.from({ length: 4 }, (_value, index) => ({
@@ -994,7 +994,7 @@ class SessionResponseItemsWithNativePatchPeer extends SessionResponseItemsPeer {
     if (method === "thread/turns/list") {
       return { data: sessionThreadWithNativePatch().turns, nextCursor: null, backwardsCursor: null };
     }
-    if (method === "thread/turns/items/list") {
+    if (method === "thread/items/list") {
       return {
         data: sessionThreadWithNativePatch().turns[0]!.items,
         nextCursor: null
@@ -2810,7 +2810,7 @@ describe("createAppServerGateway", () => {
     await gateway.ensureReady();
 
     await expect(gateway.listThreadTurns({ threadId: "mock-thread-1", limit: 1 })).resolves.toMatchObject({
-      items: expect.arrayContaining([expect.objectContaining({ role: "agent", text: expect.stringContaining("Codex app-server") })]),
+      items: expect.arrayContaining([expect.objectContaining({ role: "user", text: "帮我看看当前项目" })]),
       nextCursor: null
     });
     await expect(gateway.listThreadTurnItems({ threadId: "mock-thread-1", turnId: "mock-turn-1", limit: 2 })).resolves.toMatchObject({
@@ -2819,59 +2819,25 @@ describe("createAppServerGateway", () => {
     });
   });
 
-  it("app-server 不支持 turn items 分页时回退到 turns/list 读取目标 turn", async () => {
+  it("app-server 不支持 thread items 分页时不回退到 turns/list", async () => {
     const peer = new UnsupportedTurnItemsPeer();
     const gateway = new AppServerGateway(peer);
 
     await expect(
       gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-target", limit: 100 })
-    ).resolves.toEqual({
-      items: [
-        {
-          id: "item-target-agent",
-          turnId: "turn-target",
-          role: "agent",
-          text: "fallback item"
-        }
-      ],
-      nextCursor: null,
-      includedBytes: expect.any(Number),
-      completeness: {
-        status: "complete",
-        nextCursor: null,
-        includedBytes: expect.any(Number)
-      }
-    });
-    expect(peer.calls.map((call) => call.method)).toContain("thread/turns/items/list");
-    expect(peer.calls).toContainEqual({
-      method: "thread/turns/list",
-      params: {
-        threadId: "thread-1",
-        limit: 100,
-        sortDirection: "desc",
-        itemsView: "full"
-      }
-    });
+    ).rejects.toThrow("thread/items/list is not supported yet");
+    expect(peer.calls.map((call) => call.method)).toContain("thread/items/list");
+    expect(peer.calls.some((call) => call.method === "thread/turns/list")).toBe(false);
   });
 
-  it("fallback turns/list cursor loop 返回 repair-required 而不是 100 页后伪完整", async () => {
+  it("thread items 不支持时不会启动 turns/list cursor fallback", async () => {
     const peer = new LoopingUnsupportedTurnItemsPeer();
     const gateway = new AppServerGateway(peer);
 
     await expect(
       gateway.listThreadTurnItems({ threadId: "thread-loop", turnId: "turn-missing", limit: 100 })
-    ).resolves.toEqual({
-      items: [],
-      nextCursor: "same-cursor",
-      includedBytes: expect.any(Number),
-      completeness: {
-        status: "repair-required",
-        reason: "cursor-loop",
-        nextCursor: "same-cursor",
-        includedBytes: expect.any(Number)
-      }
-    });
-    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toHaveLength(2);
+    ).rejects.toThrow("thread/items/list is not supported yet");
+    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toHaveLength(0);
   });
 
   it("turn timeline pagination applies default and maximum limits before app-server requests", async () => {
@@ -2886,19 +2852,19 @@ describe("createAppServerGateway", () => {
     expect(peer.calls).toEqual(
       expect.arrayContaining([
         {
-          method: "thread/turns/list",
+          method: "thread/items/list",
           params: expect.objectContaining({ threadId: "thread-1", limit: 30 })
         },
         {
-          method: "thread/turns/list",
+          method: "thread/items/list",
           params: expect.objectContaining({ threadId: "thread-1", limit: 100 })
         },
         {
-          method: "thread/turns/items/list",
+          method: "thread/items/list",
           params: expect.objectContaining({ threadId: "thread-1", turnId: "turn-1", limit: 30 })
         },
         {
-          method: "thread/turns/items/list",
+          method: "thread/items/list",
           params: expect.objectContaining({ threadId: "thread-1", turnId: "turn-1", limit: 100 })
         }
       ])
