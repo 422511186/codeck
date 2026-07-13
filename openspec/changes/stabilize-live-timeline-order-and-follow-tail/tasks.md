@@ -13,5 +13,5 @@
 ## 3. 验证与部署
 
 - [x] 3.1 运行相关 Vitest、`npm run verify` 和 `npm run release:verify`
-- [ ] 3.2 提交 change 与实现代码，使用 `codex-web:local` 构建新 Docker 镜像
-- [ ] 3.3 替换 `codex-web-19899` 并验证长会话、Files changed 顺序、发送后可见窗口和连续四页 cursor 分页
+- [x] 3.2 提交 change 与实现代码，使用 `codex-web:local` 构建新 Docker 镜像
+- [x] 3.3 替换 `codex-web-19899` 并验证长会话、Files changed 顺序、发送后可见窗口和连续四页 cursor 分页
