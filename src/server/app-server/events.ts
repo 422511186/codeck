@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { MobileTimelineItem } from "../../shared/codex";
+import type { TimelineCompleteness } from "../../shared/timeline-content";
 import { timelineItem } from "./client";
 
 export type AppServerNotificationMessage = {
@@ -117,6 +118,21 @@ export type BrowserCodexEvent =
       turnId: string;
       completedAtMs: number;
       item: MobileTimelineItem;
+    }
+  | {
+      kind: "timeline_content_reference";
+      threadId: string;
+      turnId?: string;
+      itemId?: string;
+      originalKind: string;
+      itemRole?: MobileTimelineItem["role"];
+      toolKind?: MobileTimelineItem["toolKind"];
+      server?: string;
+      tool?: string;
+      status?: MobileTimelineItem["status"];
+      preview: string;
+      contentRef?: string;
+      completeness: TimelineCompleteness;
     }
   | {
       kind: "turn_diff_updated";

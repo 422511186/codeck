@@ -34,6 +34,8 @@ const mockMarkTurnDeleted = vi.fn();
 const mockSetActiveThread = vi.fn();
 const mockRequestSnapshotRepair = vi.fn();
 const mockClearSnapshotRepair = vi.fn();
+const mockInvalidateTimelineDelivery = vi.fn();
+const mockInvalidateTimelineEventThread = vi.fn();
 const mockSetPendingRequests = vi.fn();
 const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
@@ -44,6 +46,10 @@ vi.mock("../../src/web/state/store", () => ({
     (selector: (state: unknown) => unknown) => selector(mockStoreState()),
     { getState: () => mockStoreState() }
   )
+}));
+
+vi.mock("../../src/web/events/client", () => ({
+  invalidateTimelineEventThread: (...args: unknown[]) => mockInvalidateTimelineEventThread(...args)
 }));
 
 function mockStoreState(): unknown {
@@ -68,6 +74,7 @@ function mockStoreState(): unknown {
       setActiveThread: mockSetActiveThread,
       requestSnapshotRepair: mockRequestSnapshotRepair,
       clearSnapshotRepair: mockClearSnapshotRepair,
+      invalidateTimelineDelivery: mockInvalidateTimelineDelivery,
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
       wsState: mockWsState(),
@@ -177,6 +184,9 @@ describe("ThreadPage", () => {
     mockSetActiveThread.mockClear();
     mockRequestSnapshotRepair.mockClear();
     mockClearSnapshotRepair.mockClear();
+    mockInvalidateTimelineDelivery.mockClear();
+    mockInvalidateTimelineEventThread.mockReset();
+    mockInvalidateTimelineEventThread.mockReturnValue(7);
     mockSetPendingRequests.mockClear();
     mockResolvePendingRequest.mockClear();
     mockWsState.mockReset();
@@ -375,7 +385,7 @@ describe("ThreadPage", () => {
     });
   });
 
-  it("should place trailing snapshot activity before the final assistant message with stable timestamps", async () => {
+  it("should preserve trailing snapshot activity source order and timestamps", async () => {
     mockReadThread.mockResolvedValue({
       id: "thread-1",
       cwd: "C:/test",
@@ -409,14 +419,14 @@ describe("ThreadPage", () => {
         "thread-1",
         [
           expect.objectContaining({ id: "user-1" }),
-          expect.objectContaining({ id: "cmd-1" }),
-          expect.objectContaining({ id: "agent-final" })
+          expect.objectContaining({ id: "agent-final" }),
+          expect.objectContaining({ id: "cmd-1" })
         ],
         null
       );
     });
     const entries = mockSetThreadEntries.mock.calls.at(-1)?.[1] as Array<{ id: string; createdAt: number }>;
-    expect(entries.map((entry) => entry.id)).toEqual(["user-1", "cmd-1", "agent-final"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["user-1", "agent-final", "cmd-1"]);
     expect(entries[1]!.createdAt).toBeLessThan(entries[2]!.createdAt);
   });
 
@@ -924,6 +934,11 @@ describe("ThreadPage", () => {
       expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
         "thread-1",
         [
+          expect.objectContaining({ id: "agent-1" })
+        ],
+        null,
+        [
+          expect.objectContaining({ id: "agent-1" }),
           expect.objectContaining({
             id: "cmd-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "command", tool: "npm test" })
@@ -931,16 +946,92 @@ describe("ThreadPage", () => {
           expect.objectContaining({
             id: "read-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "read" })
-          }),
-          expect.objectContaining({ id: "agent-1" })
-        ],
-        null
+          })
+        ]
       );
     });
+    expect(mockInvalidateTimelineEventThread).toHaveBeenCalledWith("thread-1");
+    expect(mockInvalidateTimelineDelivery).toHaveBeenCalledWith("thread-1", 7);
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 
-  it("should place repaired turn item activity before the final assistant message", async () => {
+  it("should save partial turn detail continuation and resume it on the next top scroll", async () => {
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      nextCursor: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      ...initialDetail,
+      title: "Repaired",
+      lastTurnId: "turn-new",
+      timeline: [{ id: "agent-1", turnId: "turn-new", role: "agent", text: "preview" }]
+    };
+    let readCount = 0;
+    mockReadThread.mockImplementation(() => {
+      readCount += 1;
+      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    let itemPageCall = 0;
+    mockListTurnItems.mockImplementation(async (_threadId, turnId, cursor) => {
+      itemPageCall += 1;
+      if (itemPageCall === 1) {
+        return {
+          items: [{ id: "agent-1", turnId, role: "agent", text: "preview" }],
+          nextCursor: "detail-next",
+          includedBytes: 1_500_000
+        };
+      }
+      if (itemPageCall === 2) {
+        return {
+          items: [{ id: "tool-deferred", turnId, role: "tool", text: "deferred" }],
+          nextCursor: "detail-end",
+          includedBytes: 1_000_000
+        };
+      }
+      expect(cursor).toBe("detail-next");
+      return {
+        items: [{ id: "tool-deferred", turnId, role: "tool", text: "deferred" }],
+        nextCursor: null,
+        includedBytes: 1_000_000
+      };
+    });
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => expect(mockListTurnItems).toHaveBeenCalledTimes(2));
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, value: 0, writable: true });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
+    fireEvent.scroll(scroller);
+
+    await waitFor(() => expect(mockListTurnItems).toHaveBeenCalledTimes(3));
+    expect(mockMergeThreadEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ id: "tool-deferred" })],
+      null
+    );
+  });
+
+  it("should preserve repaired turn item detail source order", async () => {
     const initialDetail = {
       id: "thread-1",
       cwd: "C:/test",
@@ -1006,18 +1097,21 @@ describe("ThreadPage", () => {
         "thread-1",
         [
           expect.objectContaining({ id: "user-1" }),
+          expect.objectContaining({ id: "agent-1" })
+        ],
+        null,
+        [
+          expect.objectContaining({ id: "agent-1" }),
           expect.objectContaining({
             id: "cmd-1",
             body: expect.objectContaining({ kind: "tool", toolKind: "command", tool: "npm test" })
-          }),
-          expect.objectContaining({ id: "agent-1" })
-        ],
-        null
+          })
+        ]
       );
     });
   });
 
-  it("should place repaired turn item activity before the final assistant message when item details include the user", async () => {
+  it("should preserve repaired detail order when item details include the user", async () => {
     const initialDetail = {
       id: "thread-1",
       cwd: "C:/test",
@@ -1095,11 +1189,15 @@ describe("ThreadPage", () => {
         "thread-1",
         [
           expect.objectContaining({ id: "user-1" }),
-          expect.objectContaining({ id: "cmd-1" }),
-          expect.objectContaining({ id: "cmd-2" }),
           expect.objectContaining({ id: "agent-1" })
         ],
-        null
+        null,
+        [
+          expect.objectContaining({ id: "user-1" }),
+          expect.objectContaining({ id: "agent-1" }),
+          expect.objectContaining({ id: "cmd-1" }),
+          expect.objectContaining({ id: "cmd-2" })
+        ]
       );
     });
   });
@@ -2647,6 +2745,64 @@ describe("ThreadPage", () => {
 
     expect(scroller.scrollTop).toBe(320);
     expect(screen.getByRole("button", { name: /跳到最新/ })).toBeInTheDocument();
+  });
+
+  it("should keep following timeline tail when live delta arrives at bottom", async () => {
+    const baseThread = {
+      entries: Array.from({ length: 120 }, (_value, index) => ({
+        id: `entry-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `Message ${index}` }
+      })),
+      pendingApprovals: [],
+      mode: "build",
+      running: true,
+      activeTurnId: "turn-active",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    };
+    let threadState = baseThread;
+    mockThreadState.mockImplementation(() => threadState);
+
+    const { container, rerender } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 8_140;
+    let scrollHeight = 8_640;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 500 });
+
+    fireEvent.scroll(scroller);
+    threadState = {
+      ...baseThread,
+      entries: [
+        ...baseThread.entries,
+        {
+          id: "agent-live-delta",
+          turnId: "turn-active",
+          createdAt: 121,
+          body: { kind: "agent-message" as const, text: "live delta" }
+        }
+      ]
+    };
+    scrollHeight = 8_712;
+    rerender(<ThreadPage />);
+
+    expect(scroller.scrollTop).toBe(8_712);
+    expect(screen.queryByRole("button", { name: /跳到最新/ })).not.toBeInTheDocument();
   });
 
   it("should scroll to timeline tail from jump-to-latest button", async () => {

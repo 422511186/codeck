@@ -44,6 +44,7 @@ export type TimelineItem = {
   diffPath?: string;
   added?: number;
   removed?: number;
+  completeness?: TimelineCompleteness;
 };
 
 export type ThreadDetail = ThreadSummary & {
@@ -58,6 +59,8 @@ export type ThreadDetail = ThreadSummary & {
   approvalsReviewer?: ApprovalsReviewer | null;
   contextUsage?: ThreadContextUsage | null;
   goal?: ThreadGoal | null;
+  completeness?: TimelineCompleteness;
+  includedBytes?: number;
 };
 
 export type ThreadGoal = {
@@ -83,6 +86,17 @@ export type ThreadContextUsage = {
 export type TimelinePage = {
   items: TimelineItem[];
   nextCursor: string | null;
+  completeness?: TimelineCompleteness;
+  includedBytes?: number;
+};
+
+export type TimelineContentChunk = {
+  text: string;
+  startOffset: number;
+  endOffset: number;
+  nextCursor: string | null;
+  includedBytes: number;
+  completeness: TimelineCompleteness;
 };
 
 export type ModelOption = {
@@ -243,3 +257,4 @@ function selectCollaborationPreset(
   const protocolMode: GeneratedCollaborationMode = mode === "plan" ? "plan" : "default";
   return presets.find((preset): preset is SupportedCollaborationModePreset => preset.mode === protocolMode) ?? null;
 }
+import type { TimelineCompleteness } from "../../shared/timeline-content";

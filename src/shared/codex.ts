@@ -638,6 +638,7 @@ export type MobileTimelineItem = {
   diffPath?: string;
   added?: number;
   removed?: number;
+  completeness?: TimelineCompleteness;
 };
 
 export type MobileThreadGoalView = {
@@ -673,11 +674,24 @@ export type MobileThreadDetail = MobileThreadSummary & {
   tokenUsageTotal?: number;
   contextUsage?: MobileThreadContextUsage | null;
   goal?: MobileThreadGoalView | null;
+  completeness?: TimelineCompleteness;
+  includedBytes?: number;
 };
 
 export type MobileTimelinePage = {
   items: MobileTimelineItem[];
   nextCursor: string | null;
+  completeness?: TimelineCompleteness;
+  includedBytes?: number;
+};
+
+export type MobileTimelineContentChunk = {
+  text: string;
+  startOffset: number;
+  endOffset: number;
+  nextCursor: string | null;
+  includedBytes: number;
+  completeness: TimelineCompleteness;
 };
 
 export type MobileFileEntry = {
@@ -791,3 +805,4 @@ export type MobileSettingsView = {
   plugins: MobilePluginView[];
   pluginMarketplaceErrors: MobilePluginMarketplaceErrorView[];
 };
+import type { TimelineCompleteness } from "./timeline-content";

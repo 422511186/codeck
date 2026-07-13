@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
@@ -13,6 +13,8 @@ import { ErrorCard } from "./cards/ErrorCard";
 import { ApprovalCard } from "./cards/ApprovalCard";
 import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 import { LongTextPreview } from "./cards/LongTextPreview";
+import { codex } from "../api/endpoints";
+import { useStore } from "../state/store";
 
 const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
@@ -22,12 +24,15 @@ const TIMELINE_WINDOW_BUFFER_ROWS = 20;
 const EAGER_MARKDOWN_TAIL_ROWS = 2;
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 72;
 const MIN_MEASURED_TIMELINE_ROW_HEIGHT = 24;
+const TIMELINE_BLOCK_GAP = 10;
 const MIN_REAL_TIMELINE_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
 type TimelineDerivationDiagnostics = {
   derivationRuns: number;
   rowEntryScans: number;
   inlineActivitySectionRuns: number;
+  timelineRowRenderRuns: number;
+  inlineActivityRenderRuns: number;
 };
 
 type TimelineWindowRange = {
@@ -35,13 +40,31 @@ type TimelineWindowRange = {
   end: number;
 };
 
+type TimelineLayoutIndex = {
+  offsets: number[];
+  totalHeight: number;
+};
+
+type TimelineScrollAnchor = {
+  blockId: string;
+  entryId: string;
+  beforeEntryId: string | null;
+  afterEntryId: string | null;
+  intraBlockOffset: number;
+  absoluteOffset: number;
+  followTail: boolean;
+};
+
 const timelineDerivationDiagnostics: TimelineDerivationDiagnostics = {
   derivationRuns: 0,
   rowEntryScans: 0,
-  inlineActivitySectionRuns: 0
+  inlineActivitySectionRuns: 0,
+  timelineRowRenderRuns: 0,
+  inlineActivityRenderRuns: 0
 };
 
 type Props = {
+  threadId?: string;
   entries: TimelineEntry[];
   approvals?: PendingServerRequest[];
   running?: boolean;
@@ -53,6 +76,7 @@ type Props = {
 };
 
 export function Timeline({
+  threadId,
   entries,
   approvals,
   running = false,
@@ -66,77 +90,115 @@ export function Timeline({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowHeightCacheRef = useRef<Map<string, number>>(new Map());
   const [rowHeightVersion, setRowHeightVersion] = useState(0);
-  const [windowRange, setWindowRange] = useState<TimelineWindowRange>(() => initialTimelineWindowRange(entries.length));
-  const previousEntriesRef = useRef<{ length: number; firstId: string | null; lastId: string | null }>({
-    length: entries.length,
-    firstId: entries[0]?.id ?? null,
-    lastId: entries[entries.length - 1]?.id ?? null
+  const allBlocks = useMemo(() => deriveTimelineRenderBlocks(entries), [entries]);
+  const layoutIndex = useMemo(
+    () => createTimelineLayoutIndex(allBlocks, rowHeightCacheRef.current),
+    [allBlocks, rowHeightVersion]
+  );
+  const previousLayoutRef = useRef<{ blocks: TimelineRenderBlock[]; layoutIndex: TimelineLayoutIndex }>({
+    blocks: allBlocks,
+    layoutIndex
   });
-  const visibleEntries = entries.slice(windowRange.start, windowRange.end);
-  const visibleBlocks = useMemo(() => deriveTimelineRenderBlocks(visibleEntries), [visibleEntries]);
-  const topSpacerHeight = useMemo(
-    () => timelineSpacerHeight(entries, 0, windowRange.start, rowHeightCacheRef.current),
-    [entries, windowRange.start, rowHeightVersion]
+  const scrollAnchorRef = useRef<TimelineScrollAnchor | null>(null);
+  const [windowRange, setWindowRange] = useState<TimelineWindowRange>(() =>
+    initialTimelineWindowRange(allBlocks.length)
   );
-  const bottomSpacerHeight = useMemo(
-    () => timelineSpacerHeight(entries, windowRange.end, entries.length, rowHeightCacheRef.current),
-    [entries, windowRange.end, rowHeightVersion]
+  const previousBlocksRef = useRef<{ length: number; firstId: string | null; lastId: string | null }>({
+    length: allBlocks.length,
+    firstId: allBlocks[0]?.id ?? null,
+    lastId: allBlocks[allBlocks.length - 1]?.id ?? null
+  });
+  const visibleBlocks = useMemo(
+    () => allBlocks.slice(windowRange.start, windowRange.end),
+    [allBlocks, windowRange.start, windowRange.end]
   );
-  const longTimeline = entries.length > MAX_INITIAL_TIMELINE_ROWS;
+  const visibleEntries = useMemo(() => timelineRenderBlockEntries(visibleBlocks), [visibleBlocks]);
+  const topSpacerHeight = layoutIndex.offsets[windowRange.start] ?? 0;
+  const bottomSpacerHeight = Math.max(
+    0,
+    layoutIndex.totalHeight - (layoutIndex.offsets[windowRange.end] ?? layoutIndex.totalHeight)
+  );
+  const longTimeline = allBlocks.length > MAX_INITIAL_TIMELINE_ROWS;
   const rowState = useMemo(
-    () => deriveTimelineRowState(entries, running, activeTurnId),
-    [entries, running, activeTurnId]
+    () => deriveTimelineRowState(visibleEntries, running, activeTurnId),
+    [visibleEntries, running, activeTurnId]
   );
 
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const scroller = root ? findTimelineScrollContainer(root) : null;
+    const previous = previousLayoutRef.current;
+    if (
+      scroller &&
+      scrollAnchorRef.current &&
+      !scrollAnchorRef.current.followTail &&
+      (previous.blocks !== allBlocks || previous.layoutIndex !== layoutIndex)
+    ) {
+      const restoredOffset = timelineScrollOffsetForAnchor(scrollAnchorRef.current, allBlocks, layoutIndex);
+      if (restoredOffset !== null && Math.abs(scroller.scrollTop - restoredOffset) >= 1) {
+        scroller.scrollTop = restoredOffset;
+      }
+    }
+    previousLayoutRef.current = { blocks: allBlocks, layoutIndex };
+    if (scroller) {
+      scrollAnchorRef.current = captureTimelineScrollAnchor(
+        allBlocks,
+        layoutIndex,
+        scroller.scrollTop,
+        scroller.clientHeight
+      );
+    }
+  }, [allBlocks, layoutIndex]);
+
   useEffect(() => {
-    const previous = previousEntriesRef.current;
-    const nextFirstId = entries[0]?.id ?? null;
-    const nextLastId = entries[entries.length - 1]?.id ?? null;
+    const previous = previousBlocksRef.current;
+    const nextFirstId = allBlocks[0]?.id ?? null;
+    const nextLastId = allBlocks[allBlocks.length - 1]?.id ?? null;
     const prependedAtHead =
       previous.length > 0 &&
-      entries.length > previous.length &&
+      allBlocks.length > previous.length &&
       previous.lastId !== null &&
       nextLastId === previous.lastId &&
       nextFirstId !== previous.firstId;
     const appendedAtTail =
       previous.length > 0 &&
-      entries.length > previous.length &&
+      allBlocks.length > previous.length &&
       previous.firstId !== null &&
       nextFirstId === previous.firstId &&
       nextLastId !== previous.lastId;
 
     setWindowRange((current) => {
-      if (entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
-        return { start: 0, end: entries.length };
+      if (allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS) {
+        return { start: 0, end: allBlocks.length };
       }
-      if (previous.length === 0 || entries.length < previous.length) {
-        return initialTimelineWindowRange(entries.length);
+      if (previous.length === 0 || allBlocks.length < previous.length) {
+        return initialTimelineWindowRange(allBlocks.length);
       }
       if (prependedAtHead) {
         if (current.start === 0) {
-          return clampTimelineWindowRange({ start: 0, end: current.end }, entries.length);
+          return clampTimelineWindowRange({ start: 0, end: current.end }, allBlocks.length);
         }
-        const offset = entries.length - previous.length;
+        const offset = allBlocks.length - previous.length;
         return clampTimelineWindowRange(
           { start: current.start + offset, end: current.end + offset },
-          entries.length
+          allBlocks.length
         );
       }
       if (appendedAtTail && current.end >= previous.length) {
-        return initialTimelineWindowRange(entries.length);
+        return initialTimelineWindowRange(allBlocks.length);
       }
-      return clampTimelineWindowRange(current, entries.length);
+      return clampTimelineWindowRange(current, allBlocks.length);
     });
 
-    previousEntriesRef.current = {
-      length: entries.length,
+    previousBlocksRef.current = {
+      length: allBlocks.length,
       firstId: nextFirstId,
       lastId: nextLastId
     };
-  }, [entries]);
+  }, [allBlocks.length, allBlocks[0]?.id, allBlocks[allBlocks.length - 1]?.id]);
 
   useEffect(() => {
-    const visibleIds = new Set(entries.map((entry) => entry.id));
+    const visibleIds = new Set(allBlocks.map(timelineBlockHeightCacheKey));
     let changed = false;
     for (const key of rowHeightCacheRef.current.keys()) {
       if (!visibleIds.has(key)) {
@@ -147,38 +209,50 @@ export function Timeline({
     if (changed) {
       setRowHeightVersion((version) => version + 1);
     }
-  }, [entries]);
+  }, [allBlocks]);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root || entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
+    if (!root || allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS) {
       return;
     }
-    let changed = false;
-    const rows = root.querySelectorAll<HTMLElement>("[data-timeline-row='true']");
-    rows.forEach((row) => {
-      const entryId = row.dataset.timelineEntryId;
-      if (!entryId) {
-        return;
-      }
-      const measuredHeight = measureTimelineRowHeight(row);
-      if (measuredHeight === null) {
-        return;
-      }
-      const previousHeight = rowHeightCacheRef.current.get(entryId);
-      if (previousHeight === undefined || Math.abs(previousHeight - measuredHeight) >= 1) {
-        rowHeightCacheRef.current.set(entryId, measuredHeight);
-        changed = true;
-      }
-    });
-    if (changed) {
+    if (measureVisibleTimelineRows(root, rowHeightCacheRef.current)) {
       setRowHeightVersion((version) => version + 1);
     }
-  }, [entries, visibleBlocks]);
+  }, [allBlocks, visibleBlocks]);
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || entries.length <= MAX_INITIAL_TIMELINE_ROWS) {
+    if (
+      !root ||
+      allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS ||
+      typeof ResizeObserver === "undefined"
+    ) {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      const scroller = findTimelineScrollContainer(root);
+      if (scroller) {
+        scrollAnchorRef.current = captureTimelineScrollAnchor(
+          allBlocks,
+          layoutIndex,
+          scroller.scrollTop,
+          scroller.clientHeight
+        );
+      }
+      if (measureVisibleTimelineRows(root, rowHeightCacheRef.current)) {
+        setRowHeightVersion((version) => version + 1);
+      }
+    });
+    root.querySelectorAll<HTMLElement>("[data-timeline-row='true']").forEach((row) => observer.observe(row));
+    return () => {
+      observer.disconnect();
+    };
+  }, [allBlocks, layoutIndex, visibleBlocks]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
       return;
     }
 
@@ -187,19 +261,35 @@ export function Timeline({
       return;
     }
 
+    const virtualized = allBlocks.length > MAX_INITIAL_TIMELINE_ROWS;
+    if (virtualized) {
+      scroller.dataset.timelineAnchorManaged = "true";
+    }
+
     const updateVisibleWindow = () => {
-      setWindowRange(timelineWindowRangeForScroll(scroller.scrollTop, scroller.clientHeight, entries.length));
+      scrollAnchorRef.current = captureTimelineScrollAnchor(
+        allBlocks,
+        layoutIndex,
+        scroller.scrollTop,
+        scroller.clientHeight
+      );
+      if (virtualized) {
+        setWindowRange(timelineWindowRangeForScroll(scroller.scrollTop, scroller.clientHeight, layoutIndex));
+      }
     };
 
     scroller.addEventListener("scroll", updateVisibleWindow, { passive: true });
     return () => {
       scroller.removeEventListener("scroll", updateVisibleWindow);
+      if (virtualized && scroller.dataset.timelineAnchorManaged === "true") {
+        delete scroller.dataset.timelineAnchorManaged;
+      }
     };
-  }, [entries.length]);
+  }, [allBlocks.length, layoutIndex]);
 
   return (
     <>
-      <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div ref={rootRef} style={{ display: "flex", flexDirection: "column" }}>
         {topSpacerHeight > 0 ? (
           <div aria-hidden="true" data-timeline-spacer="top" style={{ minHeight: topSpacerHeight }} />
         ) : null}
@@ -207,6 +297,8 @@ export function Timeline({
           <div
             key={block.id}
             data-timeline-row="true"
+            data-timeline-block-id={block.id}
+            data-timeline-block-version={block.version}
             data-timeline-entry-id={timelineRenderBlockEntryId(block)}
             style={timelineRowStyle}
           >
@@ -215,6 +307,7 @@ export function Timeline({
             ) : (
               <TimelineRow
                 entry={block.entry}
+                threadId={threadId}
                 live={rowState.liveAgentEntryIds.has(block.entry.id)}
                 actionAvailable={rowState.messageActionAvailableById.get(block.entry.id) ?? false}
                 running={running}
@@ -246,8 +339,8 @@ export function Timeline({
 }
 
 export type TimelineRenderBlock =
-  | { kind: "entry"; id: string; entry: TimelineEntry }
-  | { kind: "inline-activity-log"; id: string; turnId?: string; entries: TimelineEntry[] };
+  | { kind: "entry"; id: string; version: string; entry: TimelineEntry }
+  | { kind: "inline-activity-log"; id: string; version: string; turnId?: string; entries: TimelineEntry[] };
 
 function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
   return block.kind === "entry" ? block.entry.id : block.entries[0]?.id ?? block.id;
@@ -259,7 +352,7 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
   while (index < entries.length) {
     const entry = entries[index]!;
     if (!isActivityEntry(entry)) {
-      blocks.push({ kind: "entry", id: entry.id, entry });
+      blocks.push({ kind: "entry", id: entry.id, version: timelineEntryDerivationKey(entry), entry });
       index += 1;
       continue;
     }
@@ -278,12 +371,17 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
 
     blocks.push({
       kind: "inline-activity-log",
-      id: `inline-activity-${turnId ?? activityEntries[0]!.id}-${activityEntries.at(-1)!.id}`,
+      id: `inline-activity-${turnId ?? "no-turn"}-${activityEntries[0]!.id}`,
+      version: inlineActivitySectionsCacheKey(activityEntries),
       ...(turnId ? { turnId } : {}),
       entries: activityEntries
     });
   }
   return blocks;
+}
+
+function timelineRenderBlockEntries(blocks: TimelineRenderBlock[]): TimelineEntry[] {
+  return blocks.flatMap((block) => (block.kind === "entry" ? [block.entry] : block.entries));
 }
 
 function isActivityEntry(entry: TimelineEntry): boolean {
@@ -302,21 +400,38 @@ function initialTimelineWindowRange(entryCount: number): TimelineWindowRange {
   };
 }
 
-function timelineSpacerHeight(
-  entries: TimelineEntry[],
-  start: number,
-  end: number,
+function createTimelineLayoutIndex(
+  blocks: TimelineRenderBlock[],
   rowHeightCache: ReadonlyMap<string, number>
-): number {
-  let height = 0;
-  for (let index = start; index < end; index += 1) {
-    const entry = entries[index];
-    if (!entry) {
-      continue;
-    }
-    height += rowHeightCache.get(entry.id) ?? ESTIMATED_TIMELINE_ROW_HEIGHT;
+): TimelineLayoutIndex {
+  const offsets = new Array<number>(blocks.length + 1);
+  offsets[0] = 0;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index]!;
+    const height = rowHeightCache.get(timelineBlockHeightCacheKey(block)) ?? estimatedTimelineBlockHeight(block);
+    offsets[index + 1] = offsets[index]! + height + TIMELINE_BLOCK_GAP;
   }
-  return height;
+  return {
+    offsets,
+    totalHeight: offsets[blocks.length] ?? 0
+  };
+}
+
+function estimatedTimelineBlockHeight(block: TimelineRenderBlock): number {
+  if (block.kind === "inline-activity-log") {
+    return 64;
+  }
+  switch (block.entry.body.kind) {
+    case "user-message":
+      return block.entry.body.imagePaths?.length ? 144 : 88;
+    case "agent-message":
+      return block.entry.body.text.length > LAZY_MARKDOWN_TEXT_LIMIT ? 160 : ESTIMATED_TIMELINE_ROW_HEIGHT;
+    case "system":
+    case "error":
+      return 56;
+    default:
+      return 88;
+  }
 }
 
 function measureTimelineRowHeight(row: HTMLElement): number | null {
@@ -328,19 +443,136 @@ function measureTimelineRowHeight(row: HTMLElement): number | null {
   return Math.ceil(height);
 }
 
+function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<string, number>): boolean {
+  let changed = false;
+  root.querySelectorAll<HTMLElement>("[data-timeline-row='true']").forEach((row) => {
+    const blockId = row.dataset.timelineBlockId;
+    const blockVersion = row.dataset.timelineBlockVersion;
+    if (!blockId || !blockVersion) {
+      return;
+    }
+    const cacheKey = `${blockId}\u0000${blockVersion}`;
+    const measuredHeight = measureTimelineRowHeight(row);
+    if (measuredHeight === null) {
+      return;
+    }
+    const previousHeight = rowHeightCache.get(cacheKey);
+    if (previousHeight === undefined || Math.abs(previousHeight - measuredHeight) >= 1) {
+      rowHeightCache.set(cacheKey, measuredHeight);
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function timelineBlockHeightCacheKey(block: TimelineRenderBlock): string {
+  return `${block.id}\u0000${block.version}`;
+}
+
 function timelineWindowRangeForScroll(
   scrollTop: number,
   clientHeight: number,
-  entryCount: number
+  layoutIndex: TimelineLayoutIndex
 ): TimelineWindowRange {
-  if (entryCount <= MAX_INITIAL_TIMELINE_ROWS) {
-    return { start: 0, end: entryCount };
+  const blockCount = layoutIndex.offsets.length - 1;
+  if (blockCount <= MAX_INITIAL_TIMELINE_ROWS) {
+    return { start: 0, end: blockCount };
   }
-  const viewportRows = Math.max(1, Math.ceil(clientHeight / ESTIMATED_TIMELINE_ROW_HEIGHT));
-  const windowRows = Math.max(MAX_INITIAL_TIMELINE_ROWS, viewportRows + TIMELINE_WINDOW_BUFFER_ROWS * 2);
-  const targetStart = Math.floor(Math.max(0, scrollTop) / ESTIMATED_TIMELINE_ROW_HEIGHT) - TIMELINE_WINDOW_BUFFER_ROWS;
-  const start = Math.max(0, Math.min(targetStart, Math.max(0, entryCount - windowRows)));
-  return clampTimelineWindowRange({ start, end: start + windowRows }, entryCount);
+  const viewportStart = timelineBlockIndexForOffset(layoutIndex, Math.max(0, scrollTop));
+  const viewportEnd = Math.min(
+    blockCount,
+    timelineBlockIndexForOffset(layoutIndex, Math.max(0, scrollTop) + Math.max(1, clientHeight)) + 1
+  );
+  let start = Math.max(0, viewportStart - TIMELINE_WINDOW_BUFFER_ROWS);
+  let end = Math.min(
+    blockCount,
+    Math.max(viewportEnd + TIMELINE_WINDOW_BUFFER_ROWS, start + MAX_INITIAL_TIMELINE_ROWS)
+  );
+  if (end === blockCount && end - start < MAX_INITIAL_TIMELINE_ROWS) {
+    start = Math.max(0, end - MAX_INITIAL_TIMELINE_ROWS);
+  }
+  return { start, end };
+}
+
+function timelineBlockIndexForOffset(layoutIndex: TimelineLayoutIndex, offset: number): number {
+  const blockCount = layoutIndex.offsets.length - 1;
+  if (blockCount <= 1) {
+    return 0;
+  }
+  const target = Math.max(0, Math.min(offset, Math.max(0, layoutIndex.totalHeight - 1)));
+  let low = 0;
+  let high = blockCount - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((layoutIndex.offsets[middle + 1] ?? layoutIndex.totalHeight) <= target) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
+function captureTimelineScrollAnchor(
+  blocks: TimelineRenderBlock[],
+  layoutIndex: TimelineLayoutIndex,
+  scrollTop: number,
+  clientHeight: number
+): TimelineScrollAnchor | null {
+  if (blocks.length === 0) {
+    return null;
+  }
+  const blockIndex = timelineBlockIndexForOffset(layoutIndex, scrollTop);
+  const block = blocks[blockIndex];
+  if (!block) {
+    return null;
+  }
+  return {
+    blockId: block.id,
+    entryId: timelineRenderBlockEntryId(block),
+    beforeEntryId: blockIndex > 0 ? timelineRenderBlockLastEntryId(blocks[blockIndex - 1]!) : null,
+    afterEntryId: blockIndex + 1 < blocks.length ? timelineRenderBlockEntryId(blocks[blockIndex + 1]!) : null,
+    intraBlockOffset: Math.max(0, scrollTop - (layoutIndex.offsets[blockIndex] ?? 0)),
+    absoluteOffset: Math.max(0, scrollTop),
+    followTail: layoutIndex.totalHeight - scrollTop - Math.max(0, clientHeight) < 64
+  };
+}
+
+function timelineScrollOffsetForAnchor(
+  anchor: TimelineScrollAnchor,
+  blocks: TimelineRenderBlock[],
+  layoutIndex: TimelineLayoutIndex
+): number | null {
+  if (blocks.length === 0) {
+    return null;
+  }
+  let blockIndex = blocks.findIndex((block) => block.id === anchor.blockId);
+  let preserveIntraBlockOffset = blockIndex >= 0;
+  if (blockIndex < 0) {
+    blockIndex = blocks.findIndex((block) => timelineRenderBlockContainsEntryId(block, anchor.entryId));
+    preserveIntraBlockOffset = blockIndex >= 0;
+  }
+  if (blockIndex < 0 && anchor.beforeEntryId) {
+    blockIndex = blocks.findIndex((block) => timelineRenderBlockContainsEntryId(block, anchor.beforeEntryId!));
+  }
+  if (blockIndex < 0 && anchor.afterEntryId) {
+    blockIndex = blocks.findIndex((block) => timelineRenderBlockContainsEntryId(block, anchor.afterEntryId!));
+  }
+  if (blockIndex < 0) {
+    blockIndex = timelineBlockIndexForOffset(layoutIndex, anchor.absoluteOffset);
+  }
+  const blockStart = layoutIndex.offsets[blockIndex] ?? 0;
+  const blockEnd = layoutIndex.offsets[blockIndex + 1] ?? blockStart;
+  const maxIntraBlockOffset = Math.max(0, blockEnd - blockStart - 1);
+  return blockStart + (preserveIntraBlockOffset ? Math.min(anchor.intraBlockOffset, maxIntraBlockOffset) : 0);
+}
+
+function timelineRenderBlockContainsEntryId(block: TimelineRenderBlock, entryId: string): boolean {
+  return block.kind === "entry" ? block.entry.id === entryId : block.entries.some((entry) => entry.id === entryId);
+}
+
+function timelineRenderBlockLastEntryId(block: TimelineRenderBlock): string {
+  return block.kind === "entry" ? block.entry.id : block.entries.at(-1)?.id ?? block.id;
 }
 
 function clampTimelineWindowRange(range: TimelineWindowRange, entryCount: number): TimelineWindowRange {
@@ -372,18 +604,9 @@ function findTimelineScrollContainer(root: HTMLElement): HTMLElement | null {
   return null;
 }
 
-function TimelineRow({
-  entry,
-  live,
-  actionAvailable,
-  running,
-  eagerMarkdown,
-  onResendUser,
-  onRewindToMessage,
-  onForkFromMessage,
-  onPreviewImage
-}: {
+type TimelineRowProps = {
   entry: TimelineEntry;
+  threadId?: string;
   live: boolean;
   actionAvailable: boolean;
   running: boolean;
@@ -392,9 +615,69 @@ function TimelineRow({
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onPreviewImage: (src: string) => void;
-}): JSX.Element {
-  const body = entry.body;
-  const derivationKey = timelineEntryDerivationKey(entry);
+};
+
+const TimelineRow = memo(function TimelineRow({
+  entry,
+  threadId,
+  live,
+  actionAvailable,
+  running,
+  eagerMarkdown,
+  onResendUser,
+  onRewindToMessage,
+  onForkFromMessage,
+  onPreviewImage
+}: TimelineRowProps): JSX.Element {
+  timelineDerivationDiagnostics.timelineRowRenderRuns += 1;
+  const [fullContent, setFullContent] = useState<{ contentRef: string; text: string } | null>(null);
+  const [contentLoadState, setContentLoadState] = useState<"idle" | "loading" | "error">("idle");
+  const contentRef = entry.completeness?.contentRef;
+  const renderedEntry =
+    fullContent && fullContent.contentRef === contentRef
+      ? timelineEntryWithFullText(entry, fullContent.text)
+      : entry;
+  const body = renderedEntry.body;
+  const derivationKey = timelineEntryDerivationKey(renderedEntry);
+
+  useEffect(() => {
+    setFullContent((current) => (current?.contentRef === contentRef ? current : null));
+    setContentLoadState("idle");
+  }, [contentRef]);
+
+  const loadFullContent = async () => {
+    if (!threadId || !contentRef || contentLoadState === "loading") {
+      return;
+    }
+    setContentLoadState("loading");
+    try {
+      const chunks: string[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            throw new Error("content cursor loop");
+          }
+          seenCursors.add(cursor);
+        }
+        const chunk = await codex.readTimelineContent(threadId, contentRef, cursor);
+        if (chunk.completeness.status === "repair-required") {
+          throw new Error(chunk.completeness.reason ?? "repair-required");
+        }
+        chunks.push(chunk.text);
+        cursor = chunk.nextCursor;
+      } while (cursor);
+      const text = chunks.join("");
+      setFullContent({ contentRef, text });
+      const store = useStore.getState();
+      store.ensureThread(threadId);
+      store.replaceOrAddEntry(threadId, timelineEntryWithFullText(entry, text));
+      setContentLoadState("idle");
+    } catch {
+      setContentLoadState("error");
+    }
+  };
   const content = (() => {
   switch (body.kind) {
     case "user-message":
@@ -432,11 +715,101 @@ function TimelineRow({
     <>
       <TimelineRelativeTime createdAt={entry.createdAt} />
       {content}
+      {entry.completeness && entry.completeness.status !== "complete" ? (
+        <TimelineCompletenessFooter
+          completeness={entry.completeness}
+          contentLoaded={Boolean(fullContent && fullContent.contentRef === contentRef)}
+          fullText={fullContent?.text ?? null}
+          loadState={contentLoadState}
+          canLoad={Boolean(threadId && contentRef)}
+          onLoad={loadFullContent}
+        />
+      ) : null}
     </>
+  );
+}, timelineRowPropsEqual);
+
+function timelineRowPropsEqual(previous: TimelineRowProps, next: TimelineRowProps): boolean {
+  const userMessage = previous.entry.body.kind === "user-message" || next.entry.body.kind === "user-message";
+  return (
+    previous.entry === next.entry &&
+    previous.threadId === next.threadId &&
+    previous.live === next.live &&
+    previous.actionAvailable === next.actionAvailable &&
+    (!userMessage || previous.running === next.running) &&
+    previous.eagerMarkdown === next.eagerMarkdown &&
+    previous.onResendUser === next.onResendUser &&
+    previous.onRewindToMessage === next.onRewindToMessage &&
+    previous.onForkFromMessage === next.onForkFromMessage &&
+    previous.onPreviewImage === next.onPreviewImage
   );
 }
 
-function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
+function timelineEntryWithFullText(entry: TimelineEntry, text: string): TimelineEntry {
+  switch (entry.body.kind) {
+    case "user-message":
+    case "agent-message":
+    case "reasoning":
+    case "system":
+    case "error":
+      return { ...entry, completeness: { status: "complete" }, body: { ...entry.body, text } };
+    case "tool":
+      return { ...entry, completeness: { status: "complete" }, body: { ...entry.body, result: text } };
+    case "command":
+      return { ...entry, completeness: { status: "complete" }, body: { ...entry.body, output: text } };
+    case "diff":
+      return { ...entry, completeness: { status: "complete" }, body: { ...entry.body, diff: text } };
+  }
+}
+
+function TimelineCompletenessFooter({
+  completeness,
+  contentLoaded,
+  fullText,
+  loadState,
+  canLoad,
+  onLoad
+}: {
+  completeness: NonNullable<TimelineEntry["completeness"]>;
+  contentLoaded: boolean;
+  fullText: string | null;
+  loadState: "idle" | "loading" | "error";
+  canLoad: boolean;
+  onLoad: () => void | Promise<void>;
+}): JSX.Element {
+  const label =
+    completeness.status === "repair-required"
+      ? "内容需要修复"
+      : completeness.status === "partial"
+        ? "内容不完整"
+        : "内容已截断";
+  return (
+    <div style={timelineCompletenessFooterStyle}>
+      <span>{contentLoaded ? "完整内容已加载" : label}</span>
+      {contentLoaded && fullText !== null ? (
+        <button
+          type="button"
+          onClick={() => navigator.clipboard.writeText(fullText)}
+          style={timelineCompletenessButtonStyle}
+        >
+          复制完整内容
+        </button>
+      ) : canLoad ? (
+        <button
+          type="button"
+          disabled={loadState === "loading"}
+          onClick={() => void onLoad()}
+          style={timelineCompletenessButtonStyle}
+        >
+          {loadState === "loading" ? "正在读取" : loadState === "error" ? "重试" : "读取完整内容"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
+  timelineDerivationDiagnostics.inlineActivityRenderRuns += 1;
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const [openActionKeys, setOpenActionKeys] = useState<Set<string>>(() => new Set());
   const sectionsCacheKey = inlineActivitySectionsCacheKey(entries);
@@ -527,7 +900,7 @@ function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Eleme
       })}
     </div>
   );
-}
+}, (previous, next) => inlineActivitySectionsCacheKey(previous.entries) === inlineActivitySectionsCacheKey(next.entries));
 
 function TimelineRelativeTime({
   createdAt,
@@ -612,9 +985,24 @@ function timelineEntryDerivationKey(entry: TimelineEntry): string {
     entry.turnId ?? "",
     entry.generation ?? "",
     entry.snapshotSequence ?? "",
-    body.kind
+    body.kind,
+    entry.completeness?.status ?? "",
+    entry.completeness?.includedBytes ?? "",
+    entry.completeness?.contentRef ?? ""
   ];
   switch (body.kind) {
+    case "user-message":
+      return [
+        ...base,
+        body.status ?? "",
+        textCacheSignature(body.text),
+        ...(body.imagePaths ?? []),
+        ...(body.skillReferences ?? []).map((skill) => `${skill.name}:${skill.path}`)
+      ].join(":");
+    case "agent-message":
+    case "system":
+    case "error":
+      return [...base, textCacheSignature(body.text)].join(":");
     case "reasoning":
       return [...base, body.done ? "done" : "running", textCacheSignature(body.text)].join(":");
     case "tool":
@@ -1340,7 +1728,28 @@ const timelineTimeStyle: React.CSSProperties = {
 const timelineRowStyle: React.CSSProperties = {
   maxWidth: "100%",
   minWidth: 0,
-  overflowX: "hidden"
+  overflowX: "hidden",
+  marginBottom: TIMELINE_BLOCK_GAP
+};
+
+const timelineCompletenessFooterStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  margin: "4px 14px 0",
+  color: "var(--cw-fg-muted)",
+  fontSize: 12
+};
+
+const timelineCompletenessButtonStyle: React.CSSProperties = {
+  border: "1px solid var(--cw-border)",
+  background: "var(--cw-surface)",
+  color: "var(--cw-fg)",
+  padding: "5px 8px",
+  borderRadius: 6,
+  fontSize: 12,
+  cursor: "pointer"
 };
 
 const timelineTimeCompactStyle: React.CSSProperties = {
@@ -1710,4 +2119,6 @@ export function __resetTimelineDerivationDiagnostics(): void {
   timelineDerivationDiagnostics.derivationRuns = 0;
   timelineDerivationDiagnostics.rowEntryScans = 0;
   timelineDerivationDiagnostics.inlineActivitySectionRuns = 0;
+  timelineDerivationDiagnostics.timelineRowRenderRuns = 0;
+  timelineDerivationDiagnostics.inlineActivityRenderRuns = 0;
 }

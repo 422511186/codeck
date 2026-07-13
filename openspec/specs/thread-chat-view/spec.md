@@ -604,7 +604,7 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **AND** 用户点击「跳到最新」后 MUST 滚动到最新输出
 
 ### Requirement: Timeline 派生计算不按每行扫描全量 entries
-会话聊天页 SHALL 在渲染前预计算 live agent entry、用户消息操作可用性、turn order 和分页边界等派生信息。单个 timeline row MUST NOT 为了判断自身状态反复扫描或过滤完整 entries。
+会话聊天页 SHALL 只为当前可见窗口预计算 live agent entry、用户消息操作可用性、turn order、activity blocks 和分页边界等派生信息。单个 timeline row MUST NOT 为了判断自身状态反复扫描或过滤完整 entries；未变化 entry 的引用 MUST 保持稳定，使无关 delta 不触发该 row 的派生和渲染。
 
 #### Scenario: 用户消息操作状态
 - **WHEN** timeline 渲染大量用户消息
@@ -615,6 +615,12 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **WHEN** agent 正在输出且 active turn 已知或尚未到位
 - **THEN** 系统 MUST 使用预计算 live entry id 判断哪条 agent 消息按 live 方式渲染
 - **AND** MUST NOT 在每条 agent 消息渲染期间重新向后扫描完整 entries
+
+#### Scenario: Unrelated delta preserves visible row identity
+- **WHEN** 当前可见窗口包含多个未变化 rows
+- **AND** 其中一个 agent entry 收到文本 delta
+- **THEN** 未变化 rows MUST 保持可复用的 entry 引用和派生结果
+- **AND** activity block、消息操作状态和 Markdown 派生 MUST 只对受影响 row 或 block 失效
 
 ### Requirement: 会话页组件订阅粒度隔离 timeline 更新
 会话页 SHALL 将 header、timeline、输入区、底部抽屉和弹窗拆分为独立订阅边界。timeline entries 的高频更新 MUST NOT 导致输入框本地草稿、图片选择、Skill 选择、模型菜单或重命名弹窗被重置。
@@ -645,12 +651,17 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **AND** MUST NOT 因 `turnIndex` 重复把新旧 turns 排错
 
 ### Requirement: 会话聊天性能指标可观测
-会话聊天页 SHALL 在开发和测试环境中提供可验证的性能指标或测试钩子，覆盖首屏 entries 数量、timeline store 更新时间、可见 row 数量、delta 批处理 flush 次数和 Markdown 懒渲染数量。
+会话聊天页 SHALL 在开发和测试环境中提供可验证的性能指标或测试钩子，覆盖首屏 entries 数量、timeline store 提交次数、engine fast-path 次数、结构性 normalization 次数、index rebuild entries、可见 row 数量、delta 批处理 flush 次数和昂贵输出派生次数。
 
 #### Scenario: 长会话性能回归测试
-- **WHEN** 测试构造大量历史 entries 和高频 delta
-- **THEN** 测试 MUST 能断言可见 store 更新次数、挂载 row 数量或复杂度上限
-- **AND** MUST 能防止重新引入全量同步渲染路径
+- **WHEN** 测试构造至少 1200 个历史 entries 和同一 item 的 200 个高频 delta
+- **THEN** 测试 MUST 能断言可见 store 提交、结构性 normalization 和完整 index rebuild 不随 delta 数量线性重复
+- **AND** MUST 能防止重新引入每个 delta 全量同步归一化或整页渲染路径
+
+#### Scenario: 协议 batch 提交预算
+- **WHEN** store 接收一个包含多个合法 timeline events 的 `codex-event-batch`
+- **THEN** 测试 MUST 能断言同一 thread 的可见 timeline store 提交不超过一次
+- **AND** diagnostics MUST 保留接受、丢弃、batch flush 和 barrier revalidation 的计数
 
 ### Requirement: Timeline 数据读取必须保持有界
 会话聊天页 SHALL 在首屏、分页、snapshot repair、turn item 补齐和 rollout supplement 中使用有界 timeline window。系统 MUST NOT 为了补充 activity、context usage、repair 或分页而默认读取完整 turns 历史或完整 rollout JSONL；rollout supplement MUST 在扫描或解析过程中按当前窗口 turnId 过滤，并在预算耗尽时跳过补充。
@@ -806,4 +817,62 @@ snapshot repair、rollback replace、fork initialization 和本地 send mutation
 - **AND** 当前 store 已有该 thread 的 timeline entries
 - **THEN** 页面 MUST 保留可见 timeline
 - **AND** MUST 以非破坏方式展示读取失败反馈
+
+### Requirement: Timeline virtualization uses final render blocks
+会话聊天页 SHALL 在窗口切片前派生稳定的 final render blocks。连续 reasoning/tool/command/diff activity MUST 先合并为 inline activity block，再参与 spacer、测量和可见范围计算。
+
+#### Scenario: Long consecutive activity run
+- **WHEN** timeline 包含超过 80 个连续 activity entries 且它们渲染为少量 inline activity blocks
+- **THEN** spacer height MUST 按最终 blocks 计算
+- **AND** MUST NOT 按每个原始 activity entry 重复分配固定高度
+
+#### Scenario: Activity group crosses old window boundary
+- **WHEN** 连续 activity 的成员跨越旧 entry window 边界
+- **THEN** 新窗口 MUST 保持一个稳定 activity block
+- **AND** block MUST 不因滚动被拆成不同摘要或产生空白间隙
+
+### Requirement: Dynamic height index maps scroll offsets to blocks
+Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分查找将 scroll offsets 映射到可见 block range。系统 MUST 不仅使用 `scrollTop / fixedRowHeight` 计算窗口。
+
+#### Scenario: Hidden rows have highly variable heights
+- **WHEN** 历史包含短消息、数千像素 Markdown、展开 activity 和图片高度混合
+- **THEN** 任意 scrollTop 对应窗口 MUST 覆盖 viewport 附近真实 blocks
+- **AND** viewport MUST 不只显示 spacer 空白
+
+#### Scenario: Measured height changes
+- **WHEN** Markdown、图片或展开详情使 block 高度发生变化
+- **THEN** layout index MUST 更新该 block 高度
+- **AND** 当前阅读 anchor MUST 保持在相同 block 的相近视觉位置
+
+#### Scenario: Anchor block disappears
+- **WHEN** activity regroup、authoritative replace 或删除使原 anchor block id 消失
+- **THEN** 页面 MUST 依次尝试包含原 entry identity 的新 block、before anchor、after anchor 和相同累计 offset 附近真实 block
+- **AND** 恢复后的 viewport MUST 包含真实 timeline block 或明确 loading marker，不得为空白
+
+### Requirement: Historical scrolling never exposes virtualization blank space
+长会话从尾部持续上滑到历史开头时 SHALL 始终渲染 viewport 附近的 timeline blocks 或明确 loading marker。由窗口估算造成的纯空白区域 MUST 不可见。
+
+#### Scenario: Reproduce last-segment-only history
+- **WHEN** thread 有大量历史 entries、连续 activity 和超长消息，初始只挂载尾部窗口
+- **AND** 用户向上滑动多个 viewport
+- **THEN** 更早的用户、agent 和 activity blocks MUST 逐步出现
+- **AND** MUST 不出现只有空 spacer、历史内容不挂载的 viewport
+
+#### Scenario: Mobile browser verification
+- **WHEN** 在项目支持的手机 viewport 执行自动滚动验证
+- **THEN** 每个采样 viewport MUST 包含非空 timeline row pixels 或 loading marker
+- **AND** scrollTop MUST 能到达最早已加载 block
+
+### Requirement: Prepend and relayout preserve block anchor
+加载更早分页、detail continuation、full-content 展开或 row 重新测量时，会话页 SHALL 使用 block identity 和 intra-block offset 保持阅读 anchor。仅当用户处于贴底状态时才自动跟随尾部。
+
+#### Scenario: Older page prepended
+- **WHEN** 用户在顶部附近触发历史分页并 prepend blocks
+- **THEN** prepend 前位于 viewport 顶部的 block MUST 保持可见
+- **AND** scrollTop 修正 MUST 使用 block layout offset 而不是只比较总 scrollHeight
+
+#### Scenario: Live delta while reading history
+- **WHEN** 用户正在阅读历史且尾部收到 live delta 或 full-content 更新
+- **THEN** 当前阅读 anchor MUST 不跳到尾部
+- **AND** jump-to-latest 控件 MUST 继续可用
 

@@ -413,4 +413,47 @@ describe("app-server session timeline merge", () => {
     expect(merged.map((item) => item.id)).not.toContain("tool-current-2");
     expect(merged.map((item) => item.id)).not.toContain("tool-outside");
   });
+
+  it("adds UTF-8 truncation metadata and contentRef for long tool output", () => {
+    const output = "中文🙂".repeat(30_000);
+    const baseItems: MobileTimelineItem[] = [
+      {
+        id: "agent-final",
+        turnId: "turn-1",
+        role: "agent",
+        text: "完成"
+      }
+    ];
+    const jsonl = [
+      sessionLine({
+        type: "function_call",
+        id: "tool-long",
+        call_id: "call-long",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "generate-long-output", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "function_call_output",
+        call_id: "call-long",
+        output
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+    const tool = merged.find((item) => item.id === "tool-long");
+
+    expect(tool).toEqual(
+      expect.objectContaining({
+        completeness: expect.objectContaining({
+          status: "truncated",
+          reason: "item-budget",
+          originalBytes: Buffer.byteLength(output, "utf8"),
+          includedBytes: expect.any(Number),
+          contentRef: expect.any(String)
+        })
+      })
+    );
+    expect(Buffer.byteLength(tool?.text ?? "", "utf8")).toBeLessThanOrEqual(96 * 1024);
+    expect(tool?.text.endsWith("\uFFFD")).toBe(false);
+  });
 });

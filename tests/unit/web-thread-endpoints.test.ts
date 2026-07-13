@@ -73,6 +73,55 @@ describe("web thread endpoints", () => {
     });
   });
 
+  it("读取 timeline 完整内容时只发送 opaque ref 和 cursor", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      chunk: {
+        text: "下一段",
+        startOffset: 10,
+        endOffset: 19,
+        nextCursor: "tlcc-next",
+        includedBytes: 9,
+        completeness: { status: "partial", nextCursor: "tlcc-next" }
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    expect(typeof (codex as unknown as { readTimelineContent?: unknown }).readTimelineContent).toBe("function");
+    await (codex as unknown as {
+      readTimelineContent(
+        threadId: string,
+        contentRef: string,
+        cursor: string | null,
+        maxBytes: number
+      ): Promise<unknown>;
+    }).readTimelineContent("thread-1", "tlc-ref", "tlcc-current", 65536);
+
+    expect(mockApi).toHaveBeenCalledWith("/api/codex/threads/thread-1/content", {
+      query: { contentRef: "tlc-ref", cursor: "tlcc-current", maxBytes: 65536 }
+    });
+  });
+
+  it("turn item endpoint 保留 page completeness metadata", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      page: {
+        items: [],
+        nextCursor: "turn-next",
+        includedBytes: 128,
+        completeness: { status: "partial", reason: "page-budget", nextCursor: "turn-next" }
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    await expect(codex.listTurnItems("thread-1", "turn-1")).resolves.toEqual({
+      items: [],
+      nextCursor: "turn-next",
+      includedBytes: 128,
+      completeness: { status: "partial", reason: "page-budget", nextCursor: "turn-next" }
+    });
+  });
+
   it("读取会话状态时调用不携带 timeline 的 summary endpoint", async () => {
     mockApi.mockResolvedValue({
       ok: true,

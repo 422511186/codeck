@@ -26,7 +26,11 @@ export class TimelineEventStreamClient {
   private readonly maxPendingEvents: number;
   private readonly batchWindowMs: number;
   private readonly url: string;
-  private readonly pendingDeltaBatches = new Map<string, { events: WsCodexEvent["event"][]; eventIds: Set<string> }>();
+  private readonly pendingDeltaBatches = new Map<
+    string,
+    { events: WsCodexEvent["event"][]; eventIds: Set<string>; deliveryEpoch: number }
+  >();
+  private readonly deliveryEpochs = new Map<string, number>();
   private deltaBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: TimelineEventStreamOptions = {}) {
@@ -84,6 +88,17 @@ export class TimelineEventStreamClient {
     return () => this.stateListeners.delete(listener);
   }
 
+  invalidateThread(threadId: string): number {
+    const nextEpoch = (this.deliveryEpochs.get(threadId) ?? 0) + 1;
+    this.deliveryEpochs.set(threadId, nextEpoch);
+    this.pendingDeltaBatches.delete(threadId);
+    if (!this.pendingDeltaBatches.size && this.deltaBatchTimer) {
+      clearTimeout(this.deltaBatchTimer);
+      this.deltaBatchTimer = null;
+    }
+    return nextEpoch;
+  }
+
   private setState(next: WsConnectionState): void {
     if (this.state === next) return;
     this.state = next;
@@ -137,8 +152,8 @@ export class TimelineEventStreamClient {
       return false;
     }
 
-    const key = deltaBatchKey(event.event);
-    if (!key) {
+    const threadId = typeof event.event.threadId === "string" ? event.event.threadId : null;
+    if (!threadId) {
       return false;
     }
 
@@ -149,17 +164,21 @@ export class TimelineEventStreamClient {
       return true;
     }
 
-    const batch = this.pendingDeltaBatches.get(key) ?? { events: [], eventIds: new Set<string>() };
+    const batch = this.pendingDeltaBatches.get(threadId) ?? {
+      events: [],
+      eventIds: new Set<string>(),
+      deliveryEpoch: this.deliveryEpochs.get(threadId) ?? 0
+    };
     if (typeof event.event.eventId === "string") {
       if (batch.eventIds.has(event.event.eventId)) {
-        this.pendingDeltaBatches.set(key, batch);
+        this.pendingDeltaBatches.set(threadId, batch);
         this.scheduleDeltaBatchFlush();
         return true;
       }
       batch.eventIds.add(event.event.eventId);
     }
     batch.events.push(event.event);
-    this.pendingDeltaBatches.set(key, batch);
+    this.pendingDeltaBatches.set(threadId, batch);
     this.scheduleDeltaBatchFlush();
     return true;
   }
@@ -191,15 +210,7 @@ export class TimelineEventStreamClient {
     if (!threadId) {
       return;
     }
-    for (const [key, batch] of this.pendingDeltaBatches) {
-      if (batch.events.some((event) => event.threadId === threadId)) {
-        this.pendingDeltaBatches.delete(key);
-      }
-    }
-    if (!this.pendingDeltaBatches.size && this.deltaBatchTimer) {
-      clearTimeout(this.deltaBatchTimer);
-      this.deltaBatchTimer = null;
-    }
+    this.invalidateThread(threadId);
   }
 
   private flushDeltaBatches(): void {
@@ -211,13 +222,14 @@ export class TimelineEventStreamClient {
       return;
     }
 
-    const batches = [...this.pendingDeltaBatches.values()];
+    const batches = [...this.pendingDeltaBatches.entries()];
     this.pendingDeltaBatches.clear();
-    for (const batch of batches) {
+    for (const [, batch] of batches) {
+      const epochMeta = batch.deliveryEpoch > 0 ? { deliveryEpoch: batch.deliveryEpoch } : {};
       if (batch.events.length === 1) {
-        this.emitEvent({ type: "codex-event", event: batch.events[0]! });
+        this.emitEvent({ type: "codex-event", event: batch.events[0]!, ...epochMeta });
       } else if (batch.events.length > 1) {
-        this.emitEvent({ type: "codex-event-batch", events: batch.events });
+        this.emitEvent({ type: "codex-event-batch", events: batch.events, ...epochMeta });
       }
     }
   }
@@ -261,17 +273,6 @@ function isBatchableTextDelta(event: WsCodexEvent["event"]): boolean {
   return typeof event.delta === "string" && event.delta.length > 0;
 }
 
-function deltaBatchKey(event: WsCodexEvent["event"]): string | null {
-  const threadId = typeof event.threadId === "string" ? event.threadId : null;
-  const turnId = typeof event.turnId === "string" ? event.turnId : "";
-  const itemId = typeof event.itemId === "string" ? event.itemId : null;
-  const generation = typeof event.generation === "number" ? String(event.generation) : "legacy";
-  if (!threadId || !itemId) {
-    return null;
-  }
-  return [threadId, turnId, itemId, event.kind, generation].join("\u0001");
-}
-
 function isRepairBarrierEvent(event: WsEvent): event is Extract<WsEvent, { type: "timeline-gap" }> {
   return event.type === "timeline-gap";
 }
@@ -307,6 +308,10 @@ export function getTimelineEventStreamClient(): TimelineEventStreamClient {
 export function resetTimelineEventStreamClient(): void {
   if (singleton) singleton.close();
   singleton = null;
+}
+
+export function invalidateTimelineEventThread(threadId: string): number {
+  return singleton?.invalidateThread(threadId) ?? 0;
 }
 
 export type BrowserEventStreamConnectOptions = {

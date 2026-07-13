@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TimelineEventStreamClient } from "../../src/web/events/client";
 import type { WsEvent } from "../../src/web/ws/client";
+import { useStore } from "../../src/web/state/store";
+import { threadDetailEntriesWithTurnItems } from "../../src/web/state/timeline-adapter";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -34,6 +36,8 @@ class FakeEventSource {
 describe("TimelineEventStreamClient", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
+    useStore.getState().reset("thread-live-differential");
+    useStore.getState().reset("thread-refresh-differential");
   });
 
   afterEach(() => {
@@ -251,7 +255,7 @@ describe("TimelineEventStreamClient", () => {
     ]);
   });
 
-  it("keeps different items and generations in separate delta batches", () => {
+  it("keeps different item identities inside one thread delta batch", () => {
     vi.useFakeTimers();
     const client = new TimelineEventStreamClient({
       url: "/events",
@@ -304,9 +308,58 @@ describe("TimelineEventStreamClient", () => {
     vi.advanceTimersByTime(10);
 
     expect(received).toEqual([
-      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-1-g1" }) },
-      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-2-g1" }) },
-      { type: "codex-event", event: expect.objectContaining({ eventId: "agent-1-g2" }) }
+      {
+        type: "codex-event-batch",
+        events: [
+          expect.objectContaining({ eventId: "agent-1-g1", itemId: "agent-1", generation: 1 }),
+          expect.objectContaining({ eventId: "agent-2-g1", itemId: "agent-2", generation: 1 }),
+          expect.objectContaining({ eventId: "agent-1-g2", itemId: "agent-1", generation: 2 })
+        ]
+      }
+    ]);
+  });
+
+  it("preserves interleaved item arrival order inside one thread batch", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+    const source = FakeEventSource.instances[0]!;
+
+    for (const event of [
+      { eventId: "a-1", itemId: "agent-a", delta: "A1" },
+      { eventId: "b-1", itemId: "agent-b", delta: "B1" },
+      { eventId: "a-2", itemId: "agent-a", delta: "A2" }
+    ]) {
+      source.emit("message", {
+        type: "codex-event",
+        event: {
+          ...event,
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          generation: 1
+        }
+      });
+    }
+
+    vi.advanceTimersByTime(10);
+
+    expect(received).toEqual([
+      {
+        type: "codex-event-batch",
+        events: [
+          expect.objectContaining({ eventId: "a-1" }),
+          expect.objectContaining({ eventId: "b-1" }),
+          expect.objectContaining({ eventId: "a-2" })
+        ]
+      }
     ]);
   });
 
@@ -377,5 +430,126 @@ describe("TimelineEventStreamClient", () => {
     vi.advanceTimersByTime(10);
 
     expect(received).toEqual([{ type: "timeline-gap", threadId: "thread-1", lastEventId: "missing" }]);
+  });
+
+  it("converges the real client-store-repair path with a refreshed snapshot fixture", async () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    client.onEvent((event) => useStore.getState().dispatchEvent(event));
+    client.connect();
+
+    useStore.getState().appendEntries("thread-live-differential", [
+      {
+        id: "user-1",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: { kind: "user-message", text: "start", status: "sent" }
+      }
+    ]);
+
+    const source = FakeEventSource.instances[0]!;
+    for (const event of [
+      { kind: "agent_message_delta", itemId: "agent-1", delta: "first draft", eventId: "agent-1-delta" },
+      { kind: "tool_output_delta", itemId: "tool-1", delta: "running", eventId: "tool-1-delta" },
+      { kind: "agent_message_delta", itemId: "agent-2", delta: "final draft", eventId: "agent-2-delta" }
+    ]) {
+      source.emit("message", {
+        type: "codex-event",
+        event: { ...event, threadId: "thread-live-differential", turnId: "turn-1" }
+      });
+    }
+    vi.advanceTimersByTime(10);
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        kind: "turn_diff_updated",
+        threadId: "thread-live-differential",
+        turnId: "turn-1",
+        diff: "+fixed"
+      }
+    });
+
+    const detail = {
+      id: "thread-live-differential",
+      cwd: "/repo",
+      title: "Timeline",
+      preview: "start",
+      modelProvider: "openai",
+      status: "idle",
+      timeline: [
+        { id: "user-1", turnId: "turn-1", role: "user" as const, text: "start" },
+        { id: "agent-1", turnId: "turn-1", role: "agent" as const, text: "first answer" },
+        { id: "agent-2", turnId: "turn-1", role: "agent" as const, text: "final answer" },
+        { id: "turn-1-diff", turnId: "turn-1", role: "diff" as const, text: "+fixed" }
+      ],
+      lastTurnId: "turn-1",
+      nextCursor: null,
+      updatedAt: 100
+    };
+    const detailItems = [
+      { id: "user-1", turnId: "turn-1", role: "user" as const, text: "start" },
+      { id: "agent-1", turnId: "turn-1", role: "agent" as const, text: "first answer" },
+      {
+        id: "tool-1",
+        turnId: "turn-1",
+        role: "tool" as const,
+        text: "tests passed",
+        toolKind: "command" as const,
+        server: "command",
+        tool: "npm test",
+        status: "success" as const
+      },
+      { id: "agent-2", turnId: "turn-1", role: "agent" as const, text: "final answer" },
+      { id: "turn-1-diff", turnId: "turn-1", role: "diff" as const, text: "+fixed" }
+    ];
+    const listTurnItems = async () => ({ items: detailItems, nextCursor: null });
+
+    const liveSources = await threadDetailEntriesWithTurnItems(detail, "thread-live-differential", listTurnItems);
+    useStore.getState().setThreadEntries(
+      "thread-live-differential",
+      liveSources.snapshotEntries,
+      null,
+      liveSources.detailEntries
+    );
+
+    const refreshSources = await threadDetailEntriesWithTurnItems(
+      { ...detail, id: "thread-refresh-differential" },
+      "thread-refresh-differential",
+      listTurnItems
+    );
+    useStore.getState().setThreadEntries(
+      "thread-refresh-differential",
+      refreshSources.snapshotEntries,
+      null,
+      refreshSources.detailEntries
+    );
+
+    const visible = (threadId: string) =>
+      useStore.getState().threads[threadId]!.entries.map((entry) => ({
+        id: entry.id,
+        text:
+          entry.body.kind === "user-message" || entry.body.kind === "agent-message"
+            ? entry.body.text
+            : entry.body.kind === "tool"
+              ? entry.body.result
+              : entry.body.kind === "diff"
+                ? entry.body.diff
+                : undefined
+      }));
+
+    expect(visible("thread-live-differential")).toEqual(visible("thread-refresh-differential"));
+    expect(visible("thread-live-differential")).toEqual([
+      { id: "user-1", text: "start" },
+      { id: "agent-1", text: "first answer" },
+      { id: "tool-1", text: "tests passed" },
+      { id: "agent-2", text: "final answer" },
+      { id: "turn-1-diff", text: "+fixed" }
+    ]);
+    client.close();
   });
 });

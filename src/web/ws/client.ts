@@ -11,10 +11,13 @@ export type WsHealthEvent = { type: "health"; appServer: AppServerHealth; detail
 export type WsCodexEvent = {
   type: "codex-event";
   event: { kind: string; threadId?: string; turnId?: string; eventId?: string; revision?: number; sequence?: number; [k: string]: unknown };
+  deliveryEpoch?: number;
 };
 export type WsCodexEventBatch = {
   type: "codex-event-batch";
   events: WsCodexEvent["event"][];
+  threadId?: string;
+  deliveryEpoch?: number;
 };
 export type WsServerRequestEvent = {
   type: "server-request";

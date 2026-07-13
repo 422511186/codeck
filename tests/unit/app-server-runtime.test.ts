@@ -191,6 +191,27 @@ class UnsupportedTurnItemsPeer implements ManagedAppServerPeer {
   }
 }
 
+class LoopingUnsupportedTurnItemsPeer extends UnsupportedTurnItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+    if (method === "thread/turns/items/list") {
+      throw new Error("thread/turns/items/list is not supported yet");
+    }
+    if (method === "thread/turns/list") {
+      return { data: [], nextCursor: "same-cursor", backwardsCursor: null };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
 class RejectingServerRequestPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "ready" };
   responses: Array<{ id: number; result: unknown }> = [];
@@ -493,6 +514,30 @@ class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   }
 }
 
+class OversizeItemContentPeer extends NotificationOverlayPeer {
+  constructor(readonly fullText: string) {
+    super();
+  }
+
+  override async request(method: string): Promise<unknown> {
+    if (method === "thread/turns/items/list") {
+      return {
+        data: [
+          {
+            type: "agentMessage",
+            id: "agent-oversize",
+            text: this.fullText,
+            phase: "final",
+            memoryCitation: null
+          }
+        ],
+        nextCursor: null
+      };
+    }
+    return super.request(method);
+  }
+}
+
 class SnapshotContextCompactionPeer extends NotificationOverlayPeer {
   override async request(method: string): Promise<unknown> {
     if (method !== "thread/read") {
@@ -767,6 +812,110 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
       };
     }
     throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class OversizeTimelinePagePeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/turns/items/list") {
+      this.calls.push({ method, params });
+      return {
+        data: Array.from({ length: 20 }, (_value, index) => ({
+          type: "agentMessage",
+          id: `agent-large-${index}`,
+          text: `第 ${index} 条`.repeat(30_000),
+          phase: "final",
+          memoryCitation: null
+        })),
+        nextCursor: null
+      };
+    }
+    return super.request(method, params);
+  }
+}
+
+class OversizeThreadDetailPeer extends OversizeTimelinePagePeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    const longItems = () =>
+      Array.from({ length: 20 }, (_value, index) => ({
+        type: "agentMessage",
+        id: `agent-detail-${index}`,
+        text: `详情 ${index}`.repeat(35_000),
+        phase: "final",
+        memoryCitation: null
+      }));
+    if (method === "thread/read") {
+      this.calls.push({ method, params });
+      const thread = sessionThread();
+      thread.turns[0]!.items = longItems();
+      return { thread };
+    }
+    if (method === "thread/turns/list") {
+      this.calls.push({ method, params });
+      const turn = sessionThread().turns[0]!;
+      turn.items = longItems();
+      return { data: [turn], nextCursor: null, backwardsCursor: null };
+    }
+    return super.request(method, params);
+  }
+}
+
+class OversizeTimelineArgumentsPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    const longItems = () =>
+      Array.from({ length: 6 }, (_value, index) => ({
+        type: "mcpToolCall",
+        id: `mcp-arguments-${index}`,
+        server: "filesystem",
+        tool: "read_file",
+        status: "completed",
+        arguments: { payload: "参".repeat(500_000) },
+        pluginId: null,
+        result: { content: [{ type: "text", text: "ok" }], isError: false },
+        error: null,
+        durationMs: 1
+      }));
+    if (method === "thread/turns/items/list") {
+      this.calls.push({ method, params });
+      return { data: longItems(), nextCursor: null };
+    }
+    if (method === "thread/read") {
+      this.calls.push({ method, params });
+      const thread = sessionThread();
+      thread.turns[0]!.items = longItems();
+      return { thread };
+    }
+    if (method === "thread/turns/list") {
+      this.calls.push({ method, params });
+      const turn = sessionThread().turns[0]!;
+      turn.items = longItems();
+      return { data: [turn], nextCursor: null, backwardsCursor: null };
+    }
+    return super.request(method, params);
+  }
+}
+
+class PreTruncatedOversizeMetadataPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/turns/items/list") {
+      this.calls.push({ method, params });
+      return {
+        data: Array.from({ length: 4 }, (_value, index) => ({
+          type: "mcpToolCall",
+          id: `pre-truncated-${index}`,
+          server: "filesystem",
+          tool: "read_file",
+          status: "completed",
+          arguments: { payload: "参".repeat(500_000) },
+          pluginId: null,
+          result: { content: [{ type: "text", text: "preview" }], isError: false },
+          error: null,
+          durationMs: 1
+        })),
+        nextCursor: null
+      };
+    }
+    return super.request(method, params);
   }
 }
 
@@ -1370,6 +1519,147 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("oversize item event 注册 app-server contentRef 并从原生 item source 重读", async () => {
+    const fullText = "完整事件正文🙂".repeat(40_000);
+    const peer = new OversizeItemContentPeer(fullText);
+    const gateway = new AppServerGateway(peer);
+    const events: Array<ReturnType<typeof gateway.listBrowserEventBacklog>["events"][number]> = [];
+    gateway.onBrowserEvent((event) => events.push(event));
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: {
+          type: "agentMessage",
+          id: "agent-oversize",
+          text: fullText,
+          phase: "final",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const reference = events[0] as {
+      type: "codex-event";
+      event: { kind: string; contentRef?: string; completeness?: { status?: string } };
+    };
+    expect(reference.event).toEqual(
+      expect.objectContaining({
+        kind: "timeline_content_reference",
+        contentRef: expect.any(String),
+        completeness: expect.objectContaining({ status: "truncated" })
+      })
+    );
+    expect(Buffer.byteLength(JSON.stringify(reference), "utf8")).toBeLessThanOrEqual(256 * 1024);
+
+    const chunk = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 2 * 1024 * 1024
+    });
+    expect(chunk.text).toBe(fullText);
+    expect(chunk.completeness.status).toBe("complete");
+  });
+
+  it("turn item page 按最终序列化 UTF-8 bytes 收敛到 1 MiB 且保留全部 identity", async () => {
+    const gateway = new AppServerGateway(new OversizeTimelinePagePeer());
+
+    const page = await gateway.listThreadTurnItems({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      limit: 100
+    });
+
+    expect(page.items.every((item) => item.arguments === undefined)).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThanOrEqual(1024 * 1024);
+    expect(page.items).toHaveLength(20);
+    expect(page.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_value, index) => `agent-large-${index}`)
+    );
+    expect(page.items.every((item) => item.completeness?.status === "truncated")).toBe(true);
+    expect(page.items.every((item) => typeof item.completeness?.contentRef === "string")).toBe(true);
+    expect(page.includedBytes).toBe(Buffer.byteLength(JSON.stringify(page), "utf8"));
+  });
+
+  it("thread detail 按最终序列化 UTF-8 bytes 收敛到 2 MiB", async () => {
+    const gateway = new AppServerGateway(new OversizeThreadDetailPeer());
+
+    const detail = await gateway.readThread("thread-1");
+
+    expect(detail.timeline.every((item) => item.arguments === undefined)).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(detail), "utf8")).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(detail.timeline).toHaveLength(20);
+    expect(detail.timeline.every((item) => item.completeness?.status === "truncated")).toBe(true);
+    expect(detail.completeness).toEqual(
+      expect.objectContaining({ status: "complete", nextCursor: null, includedBytes: expect.any(Number) })
+    );
+    expect(detail.includedBytes).toBe(Buffer.byteLength(JSON.stringify(detail), "utf8"));
+  });
+
+  it("超大 arguments 也会让 turn item page 收敛到 1 MiB", async () => {
+    const gateway = new AppServerGateway(new OversizeTimelineArgumentsPeer());
+
+    const page = await gateway.listThreadTurnItems({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      limit: 100
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("超大 arguments 也会让 thread detail 收敛到 2 MiB", async () => {
+    const gateway = new AppServerGateway(new OversizeTimelineArgumentsPeer());
+
+    const detail = await gateway.readThread("thread-1");
+
+    expect(Buffer.byteLength(JSON.stringify(detail), "utf8")).toBeLessThanOrEqual(2 * 1024 * 1024);
+  });
+
+  it("已有 truncated contentRef 的 item 仍会清理超大可选 metadata", async () => {
+    const gateway = new AppServerGateway(new PreTruncatedOversizeMetadataPeer());
+    const page = await gateway.listThreadTurnItems({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      limit: 100
+    });
+
+    page.items.forEach((item) => {
+      item.arguments = "参".repeat(500_000);
+      item.completeness = {
+        status: "truncated",
+        reason: "item-budget",
+        originalBytes: 200_000,
+        includedBytes: 7,
+        contentRef: `tlc-${item.id}`
+      };
+    });
+    const rebudgeted = (gateway as unknown as {
+      timelinePageWithinBudget(threadId: string, value: typeof page): typeof page;
+    }).timelinePageWithinBudget("thread-1", page);
+
+    expect(Buffer.byteLength(JSON.stringify(rebudgeted), "utf8")).toBeLessThanOrEqual(1024 * 1024);
+    expect(rebudgeted.items.every((item) => item.arguments === undefined)).toBe(true);
+  });
+
+  it("session rollout path 必须通过 workspace path validator", async () => {
+    await withSessionRolloutPath(async (rolloutPath) => {
+      const gateway = new AppServerGateway(new SessionResponseItemsPeer(rolloutPath), {
+        assertPathAllowed: () => {
+          throw new Error("路径不在允许的工作区范围内");
+        }
+      });
+
+      const detail = await gateway.readThread("thread-1");
+
+      expect(detail.timeline.map((item) => item.id)).not.toContain("fc-read");
+    });
+  });
+
   it("刷新读取会合并 agent message delta overlay", async () => {
     const peer = new NotificationOverlayPeer();
     const gateway = new AppServerGateway(peer);
@@ -1556,7 +1846,7 @@ describe("createAppServerGateway", () => {
   it("读取会话详情时从 rollout JSONL 补齐 app-server 历史缺失的工具活动", async () => {
     await withSessionRolloutPath(async (rolloutPath) => {
     const peer = new SessionResponseItemsPeer(rolloutPath);
-    const gateway = new AppServerGateway(peer);
+    const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
 
     const detail = await gateway.readThread("thread-1");
 
@@ -1641,7 +1931,7 @@ describe("createAppServerGateway", () => {
       const rolloutPath = join(tempDir, "session.jsonl");
       await writeFile(rolloutPath, "x".repeat(1_000_001), "utf8");
       const peer = new OversizedSessionSupplementPeer(rolloutPath);
-      const gateway = new AppServerGateway(peer);
+      const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
 
       const detail = await gateway.readThread("thread-1");
 
@@ -1655,7 +1945,7 @@ describe("createAppServerGateway", () => {
 
   it("读取会话详情时跳过无法本地扫描的 rollout supplement 且不读取完整 JSONL", async () => {
     const peer = new UnsupportedSessionSupplementPathPeer();
-    const gateway = new AppServerGateway(peer);
+    const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
 
     const detail = await gateway.readThread("thread-1");
 
@@ -1666,7 +1956,7 @@ describe("createAppServerGateway", () => {
   it("读取单个 turn items 时也从 rollout JSONL 补齐缺失工具活动", async () => {
     await withSessionRolloutPath(async (rolloutPath) => {
     const peer = new SessionResponseItemsPeer(rolloutPath);
-    const gateway = new AppServerGateway(peer);
+    const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
 
     const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
 
@@ -1680,6 +1970,82 @@ describe("createAppServerGateway", () => {
       ])
     );
     expect(page.items.map((item) => item.id)).not.toContain("fc-plan");
+    });
+  });
+
+  it("按 opaque contentRef 幂等分块读取 session 长工具输出", async () => {
+    const output = "长输出🙂".repeat(30_000);
+    const rolloutText = [
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          id: "tool-long-content",
+          call_id: "call-long-content",
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: "long-output", workdir: "/repo" }),
+          internal_chat_message_metadata_passthrough: { turn_id: "turn-1" }
+        }
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-long-content",
+          output,
+          internal_chat_message_metadata_passthrough: { turn_id: "turn-1" }
+        }
+      })
+    ].join("\n");
+
+    await withRolloutText(rolloutText, async (rolloutPath) => {
+      const gateway = new AppServerGateway(new SessionResponseItemsPeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+      const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
+      const item = page.items.find((candidate) => candidate.id === "tool-long-content");
+      expect(item?.completeness).toEqual(
+        expect.objectContaining({ status: "truncated", contentRef: expect.any(String) })
+      );
+      expect(typeof (gateway as unknown as { readTimelineContent?: unknown }).readTimelineContent).toBe("function");
+
+      const chunks: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const chunk = await (gateway as unknown as {
+          readTimelineContent(input: {
+            threadId: string;
+            contentRef: string;
+            cursor: string | null;
+            maxBytes: number;
+          }): Promise<{ text: string; nextCursor: string | null }>;
+        }).readTimelineContent({
+          threadId: "thread-1",
+          contentRef: item!.completeness!.contentRef!,
+          cursor,
+          maxBytes: 64 * 1024
+        });
+        if (cursor === null) {
+          const retry = await (gateway as unknown as {
+            readTimelineContent(input: {
+              threadId: string;
+              contentRef: string;
+              cursor: string | null;
+              maxBytes: number;
+            }): Promise<{ text: string; nextCursor: string | null }>;
+          }).readTimelineContent({
+            threadId: "thread-1",
+            contentRef: item!.completeness!.contentRef!,
+            cursor,
+            maxBytes: 64 * 1024
+          });
+          expect(retry).toEqual(chunk);
+        }
+        chunks.push(chunk.text);
+        cursor = chunk.nextCursor;
+      } while (cursor);
+
+      expect(chunks.join("")).toBe(output);
     });
   });
 
@@ -1711,7 +2077,7 @@ describe("createAppServerGateway", () => {
 
     await withRolloutText(rolloutText, async (rolloutPath) => {
       const peer = new SessionResponseItemsPeer(rolloutPath);
-      const gateway = new AppServerGateway(peer);
+      const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
 
       const page = await gateway.listThreadTurnItems({ threadId: "thread-1", turnId: "turn-1", limit: 100 });
 
@@ -2468,7 +2834,13 @@ describe("createAppServerGateway", () => {
           text: "fallback item"
         }
       ],
-      nextCursor: null
+      nextCursor: null,
+      includedBytes: expect.any(Number),
+      completeness: {
+        status: "complete",
+        nextCursor: null,
+        includedBytes: expect.any(Number)
+      }
     });
     expect(peer.calls.map((call) => call.method)).toContain("thread/turns/items/list");
     expect(peer.calls).toContainEqual({
@@ -2480,6 +2852,26 @@ describe("createAppServerGateway", () => {
         itemsView: "full"
       }
     });
+  });
+
+  it("fallback turns/list cursor loop 返回 repair-required 而不是 100 页后伪完整", async () => {
+    const peer = new LoopingUnsupportedTurnItemsPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await expect(
+      gateway.listThreadTurnItems({ threadId: "thread-loop", turnId: "turn-missing", limit: 100 })
+    ).resolves.toEqual({
+      items: [],
+      nextCursor: "same-cursor",
+      includedBytes: expect.any(Number),
+      completeness: {
+        status: "repair-required",
+        reason: "cursor-loop",
+        nextCursor: "same-cursor",
+        includedBytes: expect.any(Number)
+      }
+    });
+    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toHaveLength(2);
   });
 
   it("turn timeline pagination applies default and maximum limits before app-server requests", async () => {

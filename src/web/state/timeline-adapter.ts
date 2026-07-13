@@ -1,15 +1,31 @@
 import type { ThreadDetail, TimelineItem } from "../api/types";
+import {
+  TIMELINE_RESPONSE_BYTE_BUDGET,
+  utf8ByteLength,
+  type TimelineCompleteness
+} from "../../shared/timeline-content";
 import { timelineItemToEntry, type TimelineEntry } from "./timeline";
 
 const TURN_ITEM_DETAIL_PAGE_LIMIT = 100;
-const TURN_ITEM_DETAIL_MAX_PAGES = 5;
 
 export type ListTurnItems = (
   threadId: string,
   turnId: string,
   cursor?: string | null,
   limit?: number
-) => Promise<{ items: TimelineItem[]; nextCursor?: string | null }>;
+) => Promise<{
+  items: TimelineItem[];
+  nextCursor?: string | null;
+  completeness?: TimelineCompleteness;
+  includedBytes?: number;
+}>;
+
+export type ThreadDetailTimelineSources = {
+  snapshotEntries: TimelineEntry[];
+  detailEntries: TimelineEntry[];
+  detailCompleteness: TimelineCompleteness;
+  detailBytes: number;
+};
 
 export function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
   return repairReconstructedTimelineEntries(
@@ -31,21 +47,55 @@ export function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
 export async function threadDetailEntriesWithTurnItems(
   td: ThreadDetail,
   threadId: string,
-  listTurnItems: ListTurnItems
-): Promise<TimelineEntry[]> {
+  listTurnItems: ListTurnItems,
+  options: { cursor?: string | null } = {}
+): Promise<ThreadDetailTimelineSources> {
   const baseEntries = threadDetailEntries(td);
   const turnId = td.lastTurnId ?? lastTurnIdFromEntries(baseEntries);
   if (!turnId) {
-    return baseEntries;
+    return {
+      snapshotEntries: baseEntries,
+      detailEntries: [],
+      detailCompleteness: { status: "complete", nextCursor: null },
+      detailBytes: 0
+    };
   }
 
   try {
     const itemEntries: TimelineEntry[] = [];
-    let cursor: string | null | undefined;
-    for (let pageIndex = 0; pageIndex < TURN_ITEM_DETAIL_MAX_PAGES; pageIndex += 1) {
+    const seenCursors = new Set<string>();
+    const seenItemIds = new Set<string>();
+    let cursor: string | null | undefined = options.cursor;
+    let detailBytes = 0;
+    while (true) {
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+            status: "repair-required",
+            reason: "cursor-loop",
+            nextCursor: cursor
+          });
+        }
+        seenCursors.add(cursor);
+      }
       const page = await listTurnItems(threadId, turnId, cursor, TURN_ITEM_DETAIL_PAGE_LIMIT);
-      itemEntries.push(
-        ...page.items.map((item, idx) =>
+      const pageBytes = page.includedBytes ?? utf8ByteLength(JSON.stringify(page));
+      if (itemEntries.length > 0 && detailBytes + pageBytes > TIMELINE_RESPONSE_BYTE_BUDGET) {
+        return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+          status: "partial",
+          reason: "response-budget",
+          nextCursor: cursor ?? null,
+          includedBytes: detailBytes
+        });
+      }
+      let addedItems = 0;
+      const nextEntries = page.items.flatMap((item, idx) => {
+        if (seenItemIds.has(item.id)) {
+          return [];
+        }
+        seenItemIds.add(item.id);
+        addedItems += 1;
+        return [
           timelineItemToEntry(
             {
               ...item,
@@ -59,74 +109,77 @@ export async function threadDetailEntriesWithTurnItems(
             },
             td.updatedAt - itemEntries.length - page.items.length + idx
           )
-        )
-      );
-      cursor = page.nextCursor ?? null;
-      if (!cursor) {
-        break;
+        ];
+      });
+      itemEntries.push(...nextEntries);
+      detailBytes += pageBytes;
+      const nextCursor = page.nextCursor ?? page.completeness?.nextCursor ?? null;
+      if (!nextCursor) {
+        return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+          status: page.completeness?.status ?? "complete",
+          ...(page.completeness?.reason ? { reason: page.completeness.reason } : {}),
+          nextCursor: null,
+          includedBytes: detailBytes
+        });
       }
+      if (seenCursors.has(nextCursor)) {
+        return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+          status: "repair-required",
+          reason: "cursor-loop",
+          nextCursor,
+          includedBytes: detailBytes
+        });
+      }
+      if (addedItems === 0) {
+        return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+          status: "repair-required",
+          reason: "zero-progress",
+          nextCursor,
+          includedBytes: detailBytes
+        });
+      }
+      if (page.completeness?.status === "repair-required") {
+        return detailTimelineSources(baseEntries, itemEntries, detailBytes, page.completeness);
+      }
+      cursor = nextCursor;
     }
-
-    return mergeTurnItemDetailsIntoTimeline(baseEntries, itemEntries, turnId);
   } catch {
-    return baseEntries;
+    return {
+      snapshotEntries: baseEntries,
+      detailEntries: [],
+      detailCompleteness: { status: "repair-required", reason: "source-gap" },
+      detailBytes: 0
+    };
   }
 }
 
-export function mergeTurnItemDetailsIntoTimeline(
-  baseEntries: TimelineEntry[],
-  itemEntries: TimelineEntry[],
-  turnId: string
+function detailTimelineSources(
+  snapshotEntries: TimelineEntry[],
+  detailEntries: TimelineEntry[],
+  detailBytes: number,
+  detailCompleteness: TimelineCompleteness
+): ThreadDetailTimelineSources {
+  return {
+    snapshotEntries,
+    detailEntries: repairReconstructedTimelineEntries(detailEntries, "turn-detail"),
+    detailCompleteness,
+    detailBytes
+  };
+}
+
+export function repairReconstructedTimelineEntries(
+  entries: TimelineEntry[],
+  sourceKind: NonNullable<TimelineEntry["sourceOrder"]>["sourceKind"] = "snapshot"
 ): TimelineEntry[] {
-  if (!itemEntries.length) {
-    return baseEntries;
-  }
-  const turnItemEntries = itemEntries.filter((entry) => entry.turnId === turnId);
-  if (!turnItemEntries.length) {
-    return baseEntries;
-  }
-
-  const baseEntriesById = new Map(baseEntries.map((entry) => [entry.id, entry]));
-  const turnItemIds = new Set(turnItemEntries.map((entry) => entry.id));
-  const orderedTurnEntries = turnItemEntries.map((entry) =>
-    mergeTurnDetailEntry(baseEntriesById.get(entry.id), entry)
-  );
-  const baseOnlyTurnEntries = baseEntries.filter((entry) => entry.turnId === turnId && !turnItemIds.has(entry.id));
-  const mergedTurnEntries = mergeBaseOnlyTurnEntries(orderedTurnEntries, baseOnlyTurnEntries);
-  const firstTurnIndex = baseEntries.findIndex((entry) => entry.turnId === turnId);
-  if (firstTurnIndex < 0) {
-    return [...baseEntries, ...mergedTurnEntries];
-  }
-
-  const beforeTurn = baseEntries.slice(0, firstTurnIndex);
-  const afterTurn = baseEntries.slice(firstTurnIndex).filter((entry) => entry.turnId !== turnId);
-  return [
-    ...beforeTurn,
-    ...mergedTurnEntries,
-    ...afterTurn
-  ];
-}
-
-export function repairReconstructedTimelineEntries(entries: TimelineEntry[]): TimelineEntry[] {
-  const repaired: TimelineEntry[] = [];
-  let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index]!;
-    if (!entry.turnId) {
-      repaired.push(entry);
-      index += 1;
-      continue;
+  return entries.map((entry, ordinal) => ({
+    ...entry,
+    sourceOrder: entry.sourceOrder ?? {
+      sourceKind,
+      ordinal,
+      ...(entries[ordinal - 1]?.id ? { afterEntryId: entries[ordinal - 1]!.id } : {}),
+      ...(entries[ordinal + 1]?.id ? { beforeEntryId: entries[ordinal + 1]!.id } : {})
     }
-
-    const turnId = entry.turnId;
-    const turnEntries: TimelineEntry[] = [];
-    while (index < entries.length && entries[index]?.turnId === turnId) {
-      turnEntries.push(entries[index]!);
-      index += 1;
-    }
-    repaired.push(...repairReconstructedTurnEntries(turnEntries));
-  }
-  return repaired;
+  }));
 }
 
 function lastTurnIdFromEntries(entries: TimelineEntry[]): string | null {
@@ -137,100 +190,4 @@ function lastTurnIdFromEntries(entries: TimelineEntry[]): string | null {
     }
   }
   return null;
-}
-
-function mergeBaseOnlyTurnEntries(
-  orderedTurnEntries: TimelineEntry[],
-  baseOnlyTurnEntries: TimelineEntry[]
-): TimelineEntry[] {
-  if (!baseOnlyTurnEntries.length) {
-    return repairReconstructedTurnEntries(orderedTurnEntries);
-  }
-
-  const detailHasUser = orderedTurnEntries.some((entry) => entry.body.kind === "user-message");
-  const baseOnlyUsers = baseOnlyTurnEntries.filter((entry) => entry.body.kind === "user-message");
-  const baseOnlyOtherEntries = baseOnlyTurnEntries.filter((entry) => entry.body.kind !== "user-message");
-  if (!detailHasUser && baseOnlyUsers.length) {
-    return repairReconstructedTurnEntries([
-      ...baseOnlyUsers,
-      ...orderedTurnEntries,
-      ...baseOnlyOtherEntries
-    ]);
-  }
-
-  return repairReconstructedTurnEntries([...orderedTurnEntries, ...baseOnlyTurnEntries]);
-}
-
-function repairReconstructedTurnEntries(entries: TimelineEntry[]): TimelineEntry[] {
-  return withCreatedAtFollowingEntryOrder(moveTrailingActivityBeforeFinalAssistant(entries));
-}
-
-function moveTrailingActivityBeforeFinalAssistant(entries: TimelineEntry[]): TimelineEntry[] {
-  const finalAssistantIndex = findLastAgentMessageIndex(entries);
-  if (finalAssistantIndex < 0 || finalAssistantIndex === entries.length - 1) {
-    return entries;
-  }
-
-  const beforeFinalAssistant = entries.slice(0, finalAssistantIndex);
-  const finalAssistant = entries[finalAssistantIndex]!;
-  const afterFinalAssistant = entries.slice(finalAssistantIndex + 1);
-  const trailingActivity = afterFinalAssistant.filter(isInlineActivityEntry);
-  if (!trailingActivity.length) {
-    return entries;
-  }
-  const trailingOtherEntries = afterFinalAssistant.filter((entry) => !isInlineActivityEntry(entry));
-  return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherEntries];
-}
-
-function withCreatedAtFollowingEntryOrder(entries: TimelineEntry[]): TimelineEntry[] {
-  if (entries.length < 2 || hasMonotonicCreatedAt(entries)) {
-    return entries;
-  }
-
-  const baseCreatedAt = Math.min(...entries.map((entry) => entry.createdAt));
-  return entries.map((entry, index) => ({
-    ...entry,
-    createdAt: baseCreatedAt + index * 0.001
-  }));
-}
-
-function hasMonotonicCreatedAt(entries: TimelineEntry[]): boolean {
-  for (let index = 1; index < entries.length; index += 1) {
-    if (entries[index]!.createdAt < entries[index - 1]!.createdAt) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function findLastAgentMessageIndex(entries: TimelineEntry[]): number {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index]?.body.kind === "agent-message") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function isInlineActivityEntry(entry: TimelineEntry): boolean {
-  return (
-    entry.body.kind === "reasoning" ||
-    entry.body.kind === "tool" ||
-    entry.body.kind === "command" ||
-    entry.body.kind === "diff"
-  );
-}
-
-function mergeTurnDetailEntry(baseEntry: TimelineEntry | undefined, detailEntry: TimelineEntry): TimelineEntry {
-  if (!baseEntry) {
-    return detailEntry;
-  }
-  return {
-    ...detailEntry,
-    createdAt: baseEntry.createdAt,
-    turnIndex: detailEntry.turnIndex ?? baseEntry.turnIndex,
-    generation: detailEntry.generation ?? baseEntry.generation,
-    snapshotSequence: detailEntry.snapshotSequence ?? baseEntry.snapshotSequence,
-    clientUserMessageId: detailEntry.clientUserMessageId ?? baseEntry.clientUserMessageId
-  };
 }

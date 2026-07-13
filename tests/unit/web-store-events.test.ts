@@ -218,6 +218,9 @@ describe("web store codex events", () => {
 
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
     expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
+    expect(
+      useStore.getState().threads["thread-1"]?.timelineEngine.diagnostics.droppedStaleGenerationEvents
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("streams agent deltas into timeline entries", () => {
@@ -347,7 +350,78 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("places a late completed activity before the final assistant message in the same turn", () => {
+  it("merges timeline content reference preview with later complete item", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "timeline_content_reference",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-reference",
+        originalKind: "item_updated",
+        itemRole: "tool",
+        toolKind: "command",
+        server: "command",
+        tool: "npm test",
+        status: "success",
+        preview: "preview output",
+        contentRef: "tlc-reference",
+        completeness: {
+          status: "truncated",
+          reason: "event-budget",
+          originalBytes: 500_000,
+          includedBytes: 14,
+          contentRef: "tlc-reference"
+        },
+        eventId: "thread-1:7:9:item_updated",
+        revision: 7,
+        sequence: 9,
+        generation: 1
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "tool-reference",
+        completeness: expect.objectContaining({ status: "truncated", contentRef: "tlc-reference" }),
+        body: expect.objectContaining({ kind: "tool", result: "preview output" })
+      })
+    ]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 10,
+        item: {
+          id: "tool-reference",
+          role: "tool",
+          text: "preview output + complete",
+          toolKind: "command",
+          server: "command",
+          tool: "npm test",
+          status: "success",
+          completeness: { status: "complete", originalBytes: 25, includedBytes: 25 }
+        },
+        eventId: "thread-1:8:10:item_updated",
+        revision: 8,
+        sequence: 10,
+        generation: 1
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "tool-reference",
+        completeness: expect.objectContaining({ status: "complete" }),
+        body: expect.objectContaining({ kind: "tool", result: "preview output + complete" })
+      })
+    ]);
+  });
+
+  it("keeps a late completed activity at its source delivery position when no anchor is provided", () => {
     useStore.getState().setThreadEntries(
       "thread-1",
       [
@@ -388,8 +462,8 @@ describe("web store codex events", () => {
 
     expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
       "user-1",
-      "read-files",
-      "agent-final"
+      "agent-final",
+      "read-files"
     ]);
   });
 
@@ -465,6 +539,37 @@ describe("web store codex events", () => {
         id: "agent-1",
         body: { kind: "agent-message", text: "只出现一次" }
       })
+    ]);
+  });
+
+  it("records accepted single-event revisions and rejects older replay", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "revision-2",
+        revision: 2,
+        kind: "agent_message_delta",
+        threadId: "thread-revision",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "new"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "revision-1",
+        revision: 1,
+        kind: "agent_message_delta",
+        threadId: "thread-revision",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "old"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-revision"]?.entries).toEqual([
+      expect.objectContaining({ body: { kind: "agent-message", text: "new" } })
     ]);
   });
 
@@ -1075,6 +1180,159 @@ describe("web store codex events", () => {
         id: "agent-1",
         body: { kind: "agent-message", text: "hello world!" }
       })
+    ]);
+  });
+
+  it("commits one visible thread update for one protocol event batch", () => {
+    useStore.getState().ensureThread("thread-batch");
+    useStore.getState().__resetTimelineDiagnostics?.();
+    let threadUpdates = 0;
+    let previousThread = useStore.getState().threads["thread-batch"];
+    const unsubscribe = useStore.subscribe((state) => {
+      const nextThread = state.threads["thread-batch"];
+      if (nextThread !== previousThread) {
+        previousThread = nextThread;
+        threadUpdates += 1;
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      events: [
+        {
+          eventId: "batch-agent-1",
+          kind: "agent_message_delta",
+          threadId: "thread-batch",
+          turnId: "turn-1",
+          itemId: "agent-1",
+          revision: 1,
+          delta: "hello "
+        },
+        {
+          eventId: "batch-agent-2",
+          kind: "agent_message_delta",
+          threadId: "thread-batch",
+          turnId: "turn-1",
+          itemId: "agent-1",
+          revision: 2,
+          delta: "world"
+        },
+        {
+          eventId: "batch-tool-1",
+          kind: "tool_output_delta",
+          threadId: "thread-batch",
+          turnId: "turn-1",
+          itemId: "tool-1",
+          revision: 1,
+          delta: "done"
+        }
+      ]
+    });
+    unsubscribe();
+
+    expect(threadUpdates).toBe(1);
+    expect(useStore.getState().__getTimelineDiagnostics?.()?.batchFlushes).toBe(1);
+    expect(useStore.getState().threads["thread-batch"]?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "agent-1", body: { kind: "agent-message", text: "hello world" } }),
+        expect.objectContaining({
+          id: "tool-1",
+          body: expect.objectContaining({ kind: "tool", result: "done" })
+        })
+      ])
+    );
+  });
+
+  it("rejects a stale delivery epoch batch after timeline invalidation", () => {
+    useStore.getState().ensureThread("thread-stale-batch");
+    useStore.getState().invalidateTimelineDelivery("thread-stale-batch", 2);
+    useStore.getState().__resetTimelineDiagnostics?.();
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      deliveryEpoch: 1,
+      events: [
+        {
+          eventId: "stale-agent-delta",
+          kind: "agent_message_delta",
+          threadId: "thread-stale-batch",
+          turnId: "turn-old",
+          itemId: "agent-old",
+          delta: "stale"
+        }
+      ]
+    });
+
+    const thread = useStore.getState().threads["thread-stale-batch"]!;
+    expect(thread.deliveryEpoch).toBe(2);
+    expect(thread.entries).toEqual([]);
+    expect(thread.processedEventIds.has("stale-agent-delta")).toBe(false);
+    expect(useStore.getState().__getTimelineDiagnostics?.()).toEqual(
+      expect.objectContaining({ barrierRevalidations: 1, droppedDeliveryEpochEvents: 1 })
+    );
+  });
+
+  it("routes a real delta batch through engine fast paths without snapshot normalization", () => {
+    useStore.getState().setThreadEntries(
+      "thread-real-batch",
+      Array.from({ length: 1200 }, (_value, index) => ({
+        id: `agent-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `reply ${index}` }
+      })),
+      "older"
+    );
+    const before = useStore.getState().threads["thread-real-batch"]!.timelineEngine.diagnostics;
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      events: Array.from({ length: 200 }, (_value, index) => ({
+        eventId: `real-delta-${index}`,
+        kind: "agent_message_delta",
+        threadId: "thread-real-batch",
+        turnId: "turn-1199",
+        itemId: "agent-1199",
+        revision: index + 1,
+        sequence: index + 1,
+        delta: "x"
+      }))
+    });
+
+    const thread = useStore.getState().threads["thread-real-batch"]!;
+    expect(thread.timelineEngine.diagnostics.structuralNormalizations).toBe(before.structuralNormalizations);
+    expect(thread.timelineEngine.diagnostics.fastPathCommits - before.fastPathCommits).toBe(200);
+    expect(thread.entries[1199]).toEqual(
+      expect.objectContaining({ body: { kind: "agent-message", text: `reply 1199${"x".repeat(200)}` } })
+    );
+  });
+
+  it("scopes fallback live identities to their turns", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event-batch",
+      events: [
+        {
+          eventId: "turn-1-agent",
+          kind: "agent_message_delta",
+          threadId: "thread-fallback",
+          turnId: "turn-1",
+          generation: 1,
+          delta: "first"
+        },
+        {
+          eventId: "turn-2-agent",
+          kind: "agent_message_delta",
+          threadId: "thread-fallback",
+          turnId: "turn-2",
+          generation: 1,
+          delta: "second"
+        }
+      ]
+    });
+
+    expect(useStore.getState().threads["thread-fallback"]?.entries).toEqual([
+      expect.objectContaining({ turnId: "turn-1", body: { kind: "agent-message", text: "first" } }),
+      expect.objectContaining({ turnId: "turn-2", body: { kind: "agent-message", text: "second" } })
     ]);
   });
 
@@ -2719,6 +2977,139 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("authoritatively replaces a fallback live partial with a differently identified completed item", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "fallback-live",
+        kind: "agent_message_delta",
+        threadId: "thread-fallback-completed",
+        turnId: "turn-1",
+        delta: "partial text that diverges"
+      }
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-fallback-completed",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: { id: "agent-server", turnId: "turn-1", role: "agent", text: "authoritative final" }
+      }
+    });
+
+    expect(useStore.getState().threads["thread-fallback-completed"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-server",
+        body: { kind: "agent-message", text: "authoritative final" }
+      })
+    ]);
+  });
+
+  it("lets the engine reject duplicate stale deleted and interrupted completed items", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "completed-once",
+        revision: 1,
+        kind: "item_updated",
+        threadId: "thread-engine-barriers",
+        turnId: "turn-live",
+        generation: 2,
+        item: { id: "agent-live", role: "agent", text: "accepted" }
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "completed-once",
+        revision: 2,
+        kind: "item_updated",
+        threadId: "thread-engine-barriers",
+        turnId: "turn-live",
+        generation: 2,
+        item: { id: "agent-live", role: "agent", text: "duplicate must not replace" }
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "completed-old-generation",
+        kind: "item_updated",
+        threadId: "thread-engine-barriers",
+        turnId: "turn-old",
+        generation: 1,
+        item: { id: "agent-old", role: "agent", text: "stale" }
+      }
+    });
+    useStore.getState().markTurnDeleted("thread-engine-barriers", "turn-deleted");
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "completed-deleted",
+        kind: "item_updated",
+        threadId: "thread-engine-barriers",
+        turnId: "turn-deleted",
+        generation: 2,
+        item: { id: "agent-deleted", role: "agent", text: "deleted" }
+      }
+    });
+    useStore.getState().markTurnInterrupted("thread-engine-barriers", "turn-interrupted");
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "completed-interrupted",
+        kind: "item_updated",
+        threadId: "thread-engine-barriers",
+        turnId: "turn-interrupted",
+        generation: 2,
+        item: { id: "agent-interrupted", role: "agent", text: "interrupted" }
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-engine-barriers"]!;
+    expect(thread.entries).toEqual([
+      expect.objectContaining({ id: "agent-live", body: { kind: "agent-message", text: "accepted" } })
+    ]);
+    expect(thread.timelineEngine.diagnostics.droppedDuplicateEvents).toBeGreaterThanOrEqual(1);
+    expect(thread.timelineEngine.diagnostics.droppedStaleGenerationEvents).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not rewrite completed activity timestamps to move them before an assistant message", () => {
+    useStore.getState().setThreadEntries(
+      "thread-activity-order",
+      [
+        {
+          id: "agent-final",
+          turnId: "turn-1",
+          createdAt: 100,
+          body: { kind: "agent-message", text: "final" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().replaceOrAddEntry("thread-activity-order", {
+      id: "tool-completed",
+      turnId: "turn-1",
+      createdAt: 200,
+      body: {
+        kind: "tool",
+        toolKind: "command",
+        server: "command",
+        tool: "npm test",
+        status: "success",
+        result: "passed"
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-activity-order"]!;
+    expect(thread.entries.find((entry) => entry.id === "tool-completed")?.createdAt).toBe(200);
+    expect(thread.entries.map((entry) => entry.id)).toEqual(["agent-final", "tool-completed"]);
+  });
+
   it("normalizes pending server requests restored from the HTTP API", () => {
     useStore.getState().setPendingRequests([
       {
@@ -2779,19 +3170,70 @@ describe("web store codex events", () => {
         normalizeRuns: expect.any(Number),
         entryIndexBuildEntries: expect.any(Number),
         linearEntryScans: expect.any(Number),
-        equivalentOutputCandidateChecks: expect.any(Number)
+        equivalentOutputCandidateChecks: expect.any(Number),
+        fastPathCommits: expect.any(Number),
+        structuralNormalizations: expect.any(Number),
+        indexRebuildEntries: expect.any(Number)
       })
     );
     expect(diagnostics!.normalizeRuns).toBeLessThanOrEqual(2);
     expect(diagnostics!.entryIndexBuildEntries).toBeLessThanOrEqual(1400);
     expect(diagnostics!.linearEntryScans).toBeLessThanOrEqual(3000);
     expect(diagnostics!.equivalentOutputCandidateChecks).toBeLessThanOrEqual(2000);
+    expect(diagnostics!.fastPathCommits).toBeGreaterThanOrEqual(200);
+    expect(diagnostics!.structuralNormalizations).toBeLessThanOrEqual(2);
+    expect(diagnostics!.indexRebuildEntries).toBeLessThanOrEqual(2500);
     expect(useStore.getState().threads["thread-long"]?.entries).toHaveLength(1240);
     expect(useStore.getState().threads["thread-long"]?.entries.at(-41)).toEqual(
       expect.objectContaining({
         id: "agent-1199",
         body: { kind: "agent-message", text: `回复 1199${"x".repeat(200)}` }
       })
+    );
+  });
+
+  it("keeps persisted engine entries indexes and ledgers aligned with thread state", () => {
+    useStore.getState().setThreadEntries(
+      "thread-engine-state",
+      [
+        {
+          id: "agent-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "agent-message", text: "hello" }
+        }
+      ],
+      "older"
+    );
+    useStore.getState().appendTextToEntry("thread-engine-state", {
+      id: "agent-1",
+      turnId: "turn-1",
+      createdAt: 2,
+      body: { kind: "agent-message", text: " world" }
+    });
+    useStore.getState().prependEntries(
+      "thread-engine-state",
+      [
+        {
+          id: "user-0",
+          turnId: "turn-0",
+          createdAt: 0,
+          body: { kind: "user-message", text: "older", status: "sent" }
+        }
+      ],
+      null,
+      true
+    );
+
+    const thread = useStore.getState().threads["thread-engine-state"]!;
+    expect(thread.timelineEngine.entries).toBe(thread.entries);
+    expect(thread.timelineEngine.deletedTurnIds).toBe(thread.deletedTurnIds);
+    expect(thread.timelineEngine.processedEventIds).toBe(thread.processedEventIds);
+    expect(thread.timelineEngine.itemRevisions).toBe(thread.itemRevisions);
+    expect(thread.timelineEngine.indexes.byEntryId.get("user-0")).toBe(0);
+    expect(thread.timelineEngine.indexes.byEntryId.get("agent-1")).toBe(1);
+    expect(thread.entries[1]).toEqual(
+      expect.objectContaining({ body: { kind: "agent-message", text: "hello world" } })
     );
   });
 
@@ -2908,6 +3350,15 @@ describe("web store codex events", () => {
     expect(source).not.toMatch(/\bfunction removeConfirmedLocalUserMessages\b/);
     expect(source).not.toMatch(/\bfunction removeDuplicateLocalUserMessages\b/);
     expect(source).not.toMatch(/\bfunction removeAdjacentDuplicateUserMessages\b/);
+    expect(source).not.toMatch(/\bfunction findEquivalentOutputIndex\b/);
+    expect(source).not.toMatch(/\bfunction mergeEquivalentOutputEntry\b/);
+    expect(source).not.toMatch(/\bfunction completedActivityEntryBeforeFinalAssistant\b/);
+    expect(source).not.toMatch(/createdAt:\s*current\.createdAt\s*-\s*0\.001/);
+    expect(source).not.toMatch(/\bfunction itemRevisionsFromEntries\b/);
+    expect(source).not.toMatch(/\bfunction trimProcessedEventIds\b/);
+    expect(source).not.toMatch(/\bfunction hasProcessedEventId\b/);
+    expect(source).not.toMatch(/\bfunction recordProcessedEventId\b/);
+    expect(source).not.toMatch(/prev\.interruptedTurnIds\.has\(entry\.turnId\)/);
   });
 
   it("keeps timeline ledger and snapshot suppression helpers in the engine", async () => {

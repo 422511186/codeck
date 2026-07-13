@@ -1,5 +1,6 @@
 import { getAppServerGateway, unauthorized } from "../_route-helpers";
 import { browserEventId, type BrowserTimelineEvent } from "../../../../server/app-server/runtime";
+import { browserTimelineEventForBudget } from "../../../../server/timeline-event-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +88,7 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 function encodeSseEvent(id: string, event: BrowserTimelineEvent): string {
-  return `id: ${id}\n${encodeSseData(event)}`;
+  return `id: ${id}\n${encodeSseData(browserTimelineEventForBudget(event))}`;
 }
 
 function encodeSseData(event: BrowserTimelineEvent | TimelineGapEvent): string {

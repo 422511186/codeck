@@ -1,4 +1,5 @@
 import type { TimelineEntry } from "./timeline";
+import type { TimelineCompleteness } from "../../shared/timeline-content";
 
 const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
 const MAX_PROCESSED_EVENT_IDS = 2_000;
@@ -17,7 +18,14 @@ export type TimelineInput =
       reachedBeginning?: boolean;
       generation?: number;
     }
+  | {
+      kind: "snapshot-merge";
+      entries: TimelineEntry[];
+      cursor?: string | null;
+      generation?: number;
+    }
   | TimelineEntryInput
+  | TimelineDeltaInput
   | {
       kind: "live-event-batch";
       inputs: TimelineInput[];
@@ -27,13 +35,54 @@ export type TimelineInput =
       entries: TimelineEntry[];
       generation?: number;
       deletedTurnIds?: string[];
+    }
+  | {
+      kind: "remove-empty-reasoning";
+      turnId: string | null;
+      pendingId: string;
+    }
+  | {
+      kind: "finish-turn";
+      turnId: string;
+      status: string;
+    }
+  | {
+      kind: "bind-user-turn";
+      clientUserMessageId: string;
+      turnId: string;
+    }
+  | {
+      kind: "start-reasoning";
+      entry: TimelineEntry;
+      pendingId: string;
+      eventId?: string;
+      revision?: number;
+    }
+  | {
+      kind: "set-generation";
+      generation: number;
     };
 
 export type TimelineEntryInput = {
-  kind: "live-event" | "overlay-item" | "turn-item-detail" | "rollout-supplement-item" | "optimistic-user";
+  kind:
+    | "live-event"
+    | "completed-item"
+    | "overlay-item"
+    | "turn-item-detail"
+    | "rollout-supplement-item"
+    | "optimistic-user";
   entry: TimelineEntry;
   eventId?: string;
   revision?: number;
+};
+
+export type TimelineDeltaInput = {
+  kind: "live-delta";
+  entry: TimelineEntry;
+  eventId?: string;
+  revision?: number;
+  sequence?: number;
+  deliveryEpoch?: number;
 };
 
 export type TimelineEngineDiagnostics = {
@@ -46,6 +95,17 @@ export type TimelineEngineDiagnostics = {
   droppedStaleRevisions: number;
   normalizationRuns: number;
   normalizedEntryVisits: number;
+  fastPathCommits: number;
+  structuralNormalizations: number;
+  indexRebuildEntries: number;
+  droppedDeliveryEpochEvents: number;
+  droppedStaleSequences: number;
+  sequenceGaps: number;
+  itemTruncations: number;
+  repairRequiredInputs: number;
+  fullContentCompletions: number;
+  pageContinuations: number;
+  eventTruncations: number;
 };
 
 export type OrderedDistinctTurn = {
@@ -74,8 +134,12 @@ export type TimelineEngineState = {
   reachedBeginning: boolean;
   generation: number;
   deletedTurnIds: Set<string>;
+  interruptedTurnIds: Set<string>;
   processedEventIds: Set<string>;
   itemRevisions: Map<string, number>;
+  itemSequences: Map<string, number>;
+  snapshotDeltaSuppressions: Map<string, SnapshotDeltaSuppression>;
+  deliveryEpoch: number;
   diagnostics: TimelineEngineDiagnostics;
 };
 
@@ -89,8 +153,12 @@ export function createTimelineEngineState(init?: Partial<TimelineEngineState>): 
     reachedBeginning: init?.reachedBeginning ?? false,
     generation,
     deletedTurnIds: new Set(init?.deletedTurnIds ?? []),
+    interruptedTurnIds: new Set(init?.interruptedTurnIds ?? []),
     processedEventIds: new Set(init?.processedEventIds ?? []),
     itemRevisions: new Map(init?.itemRevisions ?? []),
+    itemSequences: new Map(init?.itemSequences ?? []),
+    snapshotDeltaSuppressions: new Map(init?.snapshotDeltaSuppressions ?? []),
+    deliveryEpoch: init?.deliveryEpoch ?? 0,
     diagnostics: {
       fallbackIdentityMerges: 0,
       identityConflicts: 0,
@@ -101,6 +169,17 @@ export function createTimelineEngineState(init?: Partial<TimelineEngineState>): 
       droppedStaleRevisions: 0,
       normalizationRuns: 0,
       normalizedEntryVisits: 0,
+      fastPathCommits: 0,
+      structuralNormalizations: 0,
+      indexRebuildEntries: 0,
+      droppedDeliveryEpochEvents: 0,
+      droppedStaleSequences: 0,
+      sequenceGaps: 0,
+      itemTruncations: 0,
+      repairRequiredInputs: 0,
+      fullContentCompletions: 0,
+      pageContinuations: 0,
+      eventTruncations: 0,
       ...init?.diagnostics
     }
   };
@@ -110,15 +189,30 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
   switch (input.kind) {
     case "snapshot-window": {
       const generation = nextGeneration(state, input.generation, input.entries);
-      return withEntries(
+      const entries = mergeSnapshotEntriesWithExistingContent(state.entries, input.entries, generation);
+      const diagnostics = input.cursor
+        ? incrementDiagnostic(
+            recordEntryCompletenessDiagnostics(state.diagnostics, state.entries, input.entries, generation),
+            "pageContinuations"
+          )
+        : recordEntryCompletenessDiagnostics(state.diagnostics, state.entries, input.entries, generation);
+      const nextState = withEntries(
         {
           ...state,
           generation,
           cursor: input.cursor ?? state.cursor,
-          reachedBeginning: input.cursor === null
+          reachedBeginning: input.cursor === null,
+          diagnostics
         },
-        input.entries
+        entries
       );
+      return {
+        ...nextState,
+        processedEventIds: snapshotProcessedEventIds(nextState.processedEventIds, nextState.generation),
+        itemRevisions: snapshotItemRevisions(nextState.entries, nextState.itemRevisions),
+        snapshotDeltaSuppressions: createSnapshotDeltaSuppressions(nextState.entries),
+        itemSequences: snapshotItemSequences(nextState.entries, nextState.generation, nextState.itemSequences)
+      };
     }
     case "pagination-page": {
       const generation = nextGeneration(state, input.generation, input.entries);
@@ -127,9 +221,24 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
           ...state,
           generation,
           cursor: input.cursor ?? state.cursor,
-          reachedBeginning: input.reachedBeginning ?? input.cursor === null
+          reachedBeginning: input.reachedBeginning ?? input.cursor === null,
+          diagnostics: input.cursor
+            ? incrementDiagnostic(state.diagnostics, "pageContinuations")
+            : state.diagnostics
         },
         [...input.entries, ...state.entries]
+      );
+    }
+    case "snapshot-merge": {
+      const generation = nextGeneration(state, input.generation, input.entries);
+      return withEntries(
+        {
+          ...state,
+          generation,
+          cursor: input.cursor ?? state.cursor,
+          reachedBeginning: input.cursor === null
+        },
+        [...state.entries, ...input.entries]
       );
     }
     case "live-event-batch":
@@ -143,15 +252,316 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
           ...state,
           generation,
           deletedTurnIds: new Set([...(state.deletedTurnIds ?? []), ...(input.deletedTurnIds ?? [])]),
-          processedEventIds: new Set(),
-          itemRevisions: new Map()
+          processedEventIds: new Set(state.processedEventIds),
+          itemRevisions: new Map(state.itemRevisions)
         },
         input.entries
       );
     }
+    case "live-delta":
+      return applyLiveDeltaInput(state, input);
+    case "remove-empty-reasoning":
+      return removeEmptyReasoning(state, input.turnId, input.pendingId);
+    case "finish-turn":
+      return finishTurnEntries(state, input.turnId, input.status);
+    case "bind-user-turn":
+      return bindUserTurn(state, input.clientUserMessageId, input.turnId);
+    case "start-reasoning":
+      return applyStartReasoningInput(state, input);
+    case "set-generation": {
+      if (input.generation <= state.generation) return state;
+      return {
+        ...state,
+        generation: input.generation,
+        processedEventIds: snapshotProcessedEventIds(state.processedEventIds, input.generation),
+        snapshotDeltaSuppressions: createSnapshotDeltaSuppressions(state.entries)
+      };
+    }
     default:
       return applyEntryInput(state, input);
   }
+}
+
+function applyLiveDeltaInput(state: TimelineEngineState, input: TimelineDeltaInput): TimelineEngineState {
+  if (typeof input.deliveryEpoch === "number" && input.deliveryEpoch !== state.deliveryEpoch) {
+    return withDiagnostic(state, "droppedDeliveryEpochEvents");
+  }
+  const entryGeneration = entryGenerationOrState(input.entry, state);
+  if (entryGeneration < state.generation && isVisibleEntry(input.entry)) {
+    return withDiagnostic(state, "droppedStaleGenerationEvents");
+  }
+  if (
+    input.entry.turnId &&
+    (state.deletedTurnIds.has(input.entry.turnId) || state.interruptedTurnIds.has(input.entry.turnId))
+  ) {
+    return withDiagnostic(state, "droppedStaleGenerationEvents");
+  }
+
+  const eventKey = input.eventId ? eventLedgerKey(entryGeneration, input.eventId) : null;
+  if (eventKey && state.processedEventIds.has(eventKey)) {
+    return withDiagnostic(state, "droppedDuplicateEvents");
+  }
+  const identity = identityKey(input.entry, state.generation);
+  if (!identity) {
+    return withDiagnostic(withDiagnostic(state, "missingIdentityInputs"), "repairRequests");
+  }
+
+  const revisionKey = revisionLedgerKey(entryGeneration, identity);
+  if (typeof input.revision === "number") {
+    const itemRevisionKey = timelineItemRevisionKey(
+      input.entry.id,
+      typeof input.entry.generation === "number" ? input.entry.generation : null
+    );
+    const sameHistoricalEntry = state.entries.some(
+      (entry) => entry.id === input.entry.id && entry.turnId === input.entry.turnId
+    );
+    const currentRevision = Math.max(
+      state.itemRevisions.get(revisionKey) ?? Number.NEGATIVE_INFINITY,
+      state.itemRevisions.get(itemRevisionKey) ?? Number.NEGATIVE_INFINITY,
+      sameHistoricalEntry
+        ? state.itemRevisions.get(timelineItemRevisionKey(input.entry.id, null)) ?? Number.NEGATIVE_INFINITY
+        : Number.NEGATIVE_INFINITY
+    );
+    if (typeof currentRevision === "number") {
+      if (input.revision < currentRevision) {
+        return withDiagnostic(state, "droppedStaleRevisions");
+      }
+      if (input.revision === currentRevision) {
+        return withDiagnostic(withDiagnostic(state, "identityConflicts"), "repairRequests");
+      }
+    }
+  }
+
+  const sequenceKey = revisionLedgerKey(entryGeneration, identity);
+  const snapshotDeltaSuppressions = new Map(state.snapshotDeltaSuppressions);
+  const suppressed = shouldSuppressSnapshotDeltaReplay(
+    snapshotDeltaSuppressions,
+    input.entry.id,
+    deltaComparableText(input.entry),
+    input.sequence,
+    entryGeneration
+  );
+  if (typeof input.sequence === "number") {
+    const currentSequence = state.itemSequences.get(sequenceKey);
+    if (typeof currentSequence === "number") {
+      if (input.sequence <= currentSequence) {
+        if (suppressed) {
+          return acceptedDeltaMetadataState(state, input, entryGeneration, identity, snapshotDeltaSuppressions);
+        }
+        return withDiagnostic(state, "droppedStaleSequences");
+      }
+      if (input.sequence > currentSequence + 1) {
+        return withDiagnostic(withDiagnostic(state, "sequenceGaps"), "repairRequests");
+      }
+    }
+  }
+
+  const acceptedState = acceptedDeltaMetadataState(
+    state,
+    input,
+    entryGeneration,
+    identity,
+    snapshotDeltaSuppressions
+  );
+  if (suppressed) {
+    return acceptedState;
+  }
+
+  const currentIndex = state.indexes.byIdentity.get(identity);
+  if (typeof currentIndex === "number") {
+    const current = state.entries[currentIndex];
+    const appended = current ? appendDeltaEntry(current, input.entry) : null;
+    if (!appended) {
+      return withDiagnostic(withDiagnostic(acceptedState, "identityConflicts"), "repairRequests");
+    }
+    const entries = state.entries.slice();
+    entries[currentIndex] = appended;
+    return {
+      ...acceptedState,
+      entries,
+      diagnostics: incrementDiagnostic(acceptedState.diagnostics, "fastPathCommits")
+    };
+  }
+
+  const pendingReplacement = replacePendingReasoningEntry(acceptedState, input.entry, identity);
+  if (pendingReplacement) {
+    return pendingReplacement;
+  }
+
+  const entries = [...state.entries, input.entry];
+  const byEntryId = new Map(state.indexes.byEntryId);
+  const byIdentity = new Map(state.indexes.byIdentity);
+  const byTurnId = new Map(state.indexes.byTurnId);
+  const index = entries.length - 1;
+  byEntryId.set(input.entry.id, index);
+  byIdentity.set(identity, index);
+  if (input.entry.turnId) {
+    byTurnId.set(input.entry.turnId, [...(byTurnId.get(input.entry.turnId) ?? []), index]);
+  }
+  return {
+    ...acceptedState,
+    entries,
+    indexes: { byEntryId, byIdentity, byTurnId },
+    diagnostics: incrementDiagnostic(acceptedState.diagnostics, "fastPathCommits")
+  };
+}
+
+function acceptedDeltaMetadataState(
+  state: TimelineEngineState,
+  input: TimelineDeltaInput,
+  entryGeneration: number,
+  identity: string,
+  snapshotDeltaSuppressions: Map<string, SnapshotDeltaSuppression>
+): TimelineEngineState {
+  const revisionKey = revisionLedgerKey(entryGeneration, identity);
+  const sequenceKey = revisionLedgerKey(entryGeneration, identity);
+  const eventKey = input.eventId ? eventLedgerKey(entryGeneration, input.eventId) : null;
+  const processedEventIds = new Set(state.processedEventIds);
+  if (eventKey) {
+    processedEventIds.add(eventKey);
+    if (input.eventId) {
+      processedEventIds.add(input.eventId);
+    }
+    trimEventLedgerInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS, entryGeneration);
+  }
+  const itemRevisions = new Map(state.itemRevisions);
+  if (typeof input.revision === "number") {
+    itemRevisions.set(revisionKey, Math.max(itemRevisions.get(revisionKey) ?? 0, input.revision));
+    const itemRevisionKey = timelineItemRevisionKey(
+      input.entry.id,
+      typeof input.entry.generation === "number" ? input.entry.generation : null
+    );
+    itemRevisions.set(itemRevisionKey, Math.max(itemRevisions.get(itemRevisionKey) ?? 0, input.revision));
+  }
+  const itemSequences = new Map(state.itemSequences);
+  if (typeof input.sequence === "number") {
+    itemSequences.set(sequenceKey, Math.max(itemSequences.get(sequenceKey) ?? 0, input.sequence));
+  }
+  return {
+    ...state,
+    generation: Math.max(state.generation, entryGeneration),
+    processedEventIds,
+    itemRevisions,
+    itemSequences,
+    snapshotDeltaSuppressions
+  };
+}
+
+function snapshotItemSequences(
+  entries: TimelineEntry[],
+  generation: number,
+  previous: Map<string, number>
+): Map<string, number> {
+  const itemSequences = new Map(previous);
+  for (const entry of entries) {
+    if (typeof entry.snapshotSequence !== "number") {
+      continue;
+    }
+    const identity = identityKey(entry, generation);
+    if (identity) {
+      itemSequences.set(revisionLedgerKey(entry.generation ?? generation, identity), entry.snapshotSequence);
+    }
+  }
+  return itemSequences;
+}
+
+function snapshotProcessedEventIds(values: Set<string>, generation: number): Set<string> {
+  const processedEventIds = new Set(values);
+  trimEventLedgerInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS, generation);
+  return processedEventIds;
+}
+
+function snapshotItemRevisions(
+  entries: TimelineEntry[],
+  previous: Map<string, number>
+): Map<string, number> {
+  const itemRevisions = new Map(previous);
+  for (const entry of entries) {
+    const key = timelineItemRevisionKey(
+      entry.id,
+      typeof entry.generation === "number" ? entry.generation : null
+    );
+    if (!itemRevisions.has(key)) itemRevisions.set(key, 0);
+  }
+  return itemRevisions;
+}
+
+function replacePendingReasoningEntry(
+  state: TimelineEngineState,
+  entry: TimelineEntry,
+  identity: string
+): TimelineEngineState | null {
+  if (entry.body.kind !== "reasoning" || !entry.turnId) {
+    return null;
+  }
+  const pendingIndex = state.entries.findIndex(
+    (candidate) =>
+      candidate.turnId === entry.turnId &&
+      candidate.body.kind === "reasoning" &&
+      !candidate.body.text.trim() &&
+      candidate.id.endsWith("-reasoning-pending")
+  );
+  if (pendingIndex < 0) {
+    return null;
+  }
+  const pending = state.entries[pendingIndex]!;
+  const entries = state.entries.slice();
+  entries[pendingIndex] = { ...entry, createdAt: pending.createdAt };
+  const byEntryId = new Map(state.indexes.byEntryId);
+  byEntryId.delete(pending.id);
+  byEntryId.set(entry.id, pendingIndex);
+  const byIdentity = new Map(state.indexes.byIdentity);
+  const pendingIdentity = identityKey(pending, state.generation);
+  if (pendingIdentity) {
+    byIdentity.delete(pendingIdentity);
+  }
+  byIdentity.set(identity, pendingIndex);
+  return {
+    ...state,
+    entries,
+    indexes: { ...state.indexes, byEntryId, byIdentity },
+    diagnostics: incrementDiagnostic(state.diagnostics, "fastPathCommits")
+  };
+}
+
+function deltaComparableText(entry: TimelineEntry): string {
+  if (entry.body.kind === "agent-message" || entry.body.kind === "reasoning" || entry.body.kind === "system") {
+    return entry.body.text;
+  }
+  if (entry.body.kind === "tool") {
+    return entry.body.result ?? "";
+  }
+  return "";
+}
+
+function appendDeltaEntry(current: TimelineEntry, delta: TimelineEntry): TimelineEntry | null {
+  if (current.body.kind === "agent-message" && delta.body.kind === "agent-message") {
+    return { ...current, body: { ...current.body, text: `${current.body.text}${delta.body.text}` } };
+  }
+  if (current.body.kind === "reasoning" && delta.body.kind === "reasoning") {
+    return {
+      ...current,
+      body: { ...current.body, text: `${current.body.text}${delta.body.text}`, done: current.body.done && delta.body.done }
+    };
+  }
+  if (current.body.kind === "system" && delta.body.kind === "system") {
+    return { ...current, body: { ...current.body, text: `${current.body.text}${delta.body.text}` } };
+  }
+  if (current.body.kind === "tool" && delta.body.kind === "tool") {
+    return {
+      ...current,
+      body: {
+        ...current.body,
+        toolKind: delta.body.toolKind ?? current.body.toolKind,
+        actionKind: delta.body.actionKind ?? current.body.actionKind,
+        server: delta.body.server || current.body.server,
+        tool: delta.body.tool || current.body.tool,
+        status: delta.body.status,
+        result: `${current.body.result ?? ""}${delta.body.result ?? ""}`
+      }
+    };
+  }
+  return null;
 }
 
 export function selectTimelineEntries(state: TimelineEngineState): TimelineEntry[] {
@@ -316,7 +726,10 @@ function applyEntryInput(state: TimelineEngineState, input: TimelineEntryInput):
   if (entryGeneration < state.generation && isVisibleEntry(input.entry)) {
     return withDiagnostic(state, "droppedStaleGenerationEvents");
   }
-  if (input.entry.turnId && state.deletedTurnIds.has(input.entry.turnId)) {
+  if (
+    input.entry.turnId &&
+    (state.deletedTurnIds.has(input.entry.turnId) || state.interruptedTurnIds.has(input.entry.turnId))
+  ) {
     return withDiagnostic(state, "droppedStaleGenerationEvents");
   }
 
@@ -338,31 +751,41 @@ function applyEntryInput(state: TimelineEngineState, input: TimelineEntryInput):
     }
   }
 
-  const entries = upsertEntryByIdentity(state.entries, input.entry, identity, state.generation);
   const processedEventIds = new Set(state.processedEventIds);
   if (eventKey) {
     processedEventIds.add(eventKey);
-    trimStringSetInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS);
+    if (input.eventId) processedEventIds.add(input.eventId);
+    trimEventLedgerInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS, entryGeneration);
   }
   const itemRevisions = new Map(state.itemRevisions);
   if (typeof input.revision === "number") {
     itemRevisions.set(revisionKey, Math.max(itemRevisions.get(revisionKey) ?? 0, input.revision));
+    const itemRevisionKey = timelineItemRevisionKey(
+      input.entry.id,
+      typeof input.entry.generation === "number" ? input.entry.generation : null
+    );
+    itemRevisions.set(itemRevisionKey, Math.max(itemRevisions.get(itemRevisionKey) ?? 0, input.revision));
   }
 
-  return withEntries(
-    {
-      ...state,
-      generation: Math.max(state.generation, entryGeneration),
-      processedEventIds,
-      itemRevisions
-    },
-    entries
+  const nextState = {
+    ...state,
+    generation: Math.max(state.generation, entryGeneration),
+    processedEventIds,
+    itemRevisions,
+    diagnostics: recordEntryCompletenessDiagnostic(state.diagnostics, state.entries[state.indexes.byIdentity.get(identity) ?? -1], input.entry)
+  };
+  const authoritative = isAuthoritativeEntryInput(input);
+  const fastPath = applyIndexedEntryUpdate(nextState, input.entry, identity, authoritative);
+  return fastPath ?? withEntries(
+    nextState,
+    upsertEntryByIdentity(state.entries, input.entry, identity, state.generation, authoritative)
   );
 }
 
 function isTimelineEntryInput(input: TimelineInput): input is TimelineEntryInput {
   return (
     input.kind === "live-event" ||
+    input.kind === "completed-item" ||
     input.kind === "overlay-item" ||
     input.kind === "turn-item-detail" ||
     input.kind === "rollout-supplement-item" ||
@@ -371,65 +794,123 @@ function isTimelineEntryInput(input: TimelineInput): input is TimelineEntryInput
 }
 
 function applyEntryInputBatch(state: TimelineEngineState, inputs: TimelineEntryInput[]): TimelineEngineState {
-  let entries = state.entries;
-  let generation = state.generation;
-  let diagnostics = state.diagnostics;
-  const processedEventIds = new Set(state.processedEventIds);
-  const itemRevisions = new Map(state.itemRevisions);
+  let workingState = state;
+  const structuralInputs: Array<{ entry: TimelineEntry; identity: string; authoritative: boolean }> = [];
 
   for (const input of inputs) {
-    const entryGeneration = typeof input.entry.generation === "number" ? input.entry.generation : generation;
-    if (entryGeneration < generation && isVisibleEntry(input.entry)) {
-      diagnostics = incrementDiagnostic(diagnostics, "droppedStaleGenerationEvents");
+    const entryGeneration = entryGenerationOrState(input.entry, workingState);
+    if (entryGeneration < workingState.generation && isVisibleEntry(input.entry)) {
+      workingState = withDiagnostic(workingState, "droppedStaleGenerationEvents");
       continue;
     }
-    if (input.entry.turnId && state.deletedTurnIds.has(input.entry.turnId)) {
-      diagnostics = incrementDiagnostic(diagnostics, "droppedStaleGenerationEvents");
+    if (
+      input.entry.turnId &&
+      (workingState.deletedTurnIds.has(input.entry.turnId) || workingState.interruptedTurnIds.has(input.entry.turnId))
+    ) {
+      workingState = withDiagnostic(workingState, "droppedStaleGenerationEvents");
       continue;
     }
 
     const eventKey = input.eventId ? eventLedgerKey(entryGeneration, input.eventId) : null;
-    if (eventKey && processedEventIds.has(eventKey)) {
-      diagnostics = incrementDiagnostic(diagnostics, "droppedDuplicateEvents");
+    if (eventKey && workingState.processedEventIds.has(eventKey)) {
+      workingState = withDiagnostic(workingState, "droppedDuplicateEvents");
       continue;
     }
 
-    const identity = identityKey(input.entry, generation);
+    const identity = identityKey(input.entry, workingState.generation);
     if (!identity) {
-      diagnostics = incrementDiagnostic(diagnostics, "missingIdentityInputs");
+      workingState = withDiagnostic(workingState, "missingIdentityInputs");
       continue;
     }
 
     const revisionKey = revisionLedgerKey(entryGeneration, identity);
     if (typeof input.revision === "number") {
-      const currentRevision = itemRevisions.get(revisionKey);
+      const currentRevision = workingState.itemRevisions.get(revisionKey);
       if (typeof currentRevision === "number" && input.revision <= currentRevision) {
-        diagnostics = incrementDiagnostic(diagnostics, "droppedStaleRevisions");
+        workingState = withDiagnostic(workingState, "droppedStaleRevisions");
         continue;
       }
     }
 
-    entries = upsertEntryByIdentity(entries, input.entry, identity, generation);
+    const processedEventIds = new Set(workingState.processedEventIds);
     if (eventKey) {
       processedEventIds.add(eventKey);
-      trimStringSetInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS);
+      trimEventLedgerInPlace(processedEventIds, MAX_PROCESSED_EVENT_IDS, entryGeneration);
     }
+    const itemRevisions = new Map(workingState.itemRevisions);
     if (typeof input.revision === "number") {
       itemRevisions.set(revisionKey, Math.max(itemRevisions.get(revisionKey) ?? 0, input.revision));
+      const itemRevisionKey = timelineItemRevisionKey(
+        input.entry.id,
+        typeof input.entry.generation === "number" ? input.entry.generation : null
+      );
+      itemRevisions.set(itemRevisionKey, Math.max(itemRevisions.get(itemRevisionKey) ?? 0, input.revision));
     }
-    generation = Math.max(generation, entryGeneration);
-  }
-
-  return withEntries(
-    {
-      ...state,
-      generation,
-      diagnostics,
+    const nextState = {
+      ...workingState,
+      generation: Math.max(workingState.generation, entryGeneration),
       processedEventIds,
       itemRevisions
-    },
-    entries
-  );
+    };
+    const authoritative = isAuthoritativeEntryInput(input);
+    const fastPath = applyIndexedEntryUpdate(nextState, input.entry, identity, authoritative);
+    if (fastPath) {
+      workingState = fastPath;
+    } else {
+      workingState = nextState;
+      structuralInputs.push({ entry: input.entry, identity, authoritative });
+    }
+  }
+
+  if (!structuralInputs.length) {
+    return workingState;
+  }
+
+  let entries = workingState.entries;
+  for (const input of structuralInputs) {
+    entries = upsertEntryByIdentity(
+      entries,
+      input.entry,
+      input.identity,
+      workingState.generation,
+      input.authoritative
+    );
+  }
+  return withEntries(workingState, entries);
+}
+
+function applyIndexedEntryUpdate(
+  state: TimelineEngineState,
+  entry: TimelineEntry,
+  identity: string,
+  authoritative = false
+): TimelineEngineState | null {
+  const currentIndex = state.indexes.byIdentity.get(identity);
+  if (typeof currentIndex !== "number") {
+    return null;
+  }
+  const current = state.entries[currentIndex];
+  if (!current) {
+    return null;
+  }
+  const merged = mergeEntry(current, entry, authoritative);
+  if (
+    merged.id !== current.id ||
+    merged.turnId !== current.turnId ||
+    merged.turnIndex !== current.turnIndex ||
+    merged.createdAt !== current.createdAt ||
+    identityKey(merged, state.generation) !== identity
+  ) {
+    return null;
+  }
+
+  const entries = state.entries.slice();
+  entries[currentIndex] = merged;
+  return {
+    ...state,
+    entries,
+    diagnostics: incrementDiagnostic(state.diagnostics, "fastPathCommits")
+  };
 }
 
 function withEntries(state: TimelineEngineState, entries: TimelineEntry[]): TimelineEngineState {
@@ -441,7 +922,9 @@ function withEntries(state: TimelineEngineState, entries: TimelineEntry[]): Time
     diagnostics: {
       ...state.diagnostics,
       normalizationRuns: state.diagnostics.normalizationRuns + 1,
-      normalizedEntryVisits: state.diagnostics.normalizedEntryVisits + entries.length
+      normalizedEntryVisits: state.diagnostics.normalizedEntryVisits + entries.length,
+      structuralNormalizations: state.diagnostics.structuralNormalizations + 1,
+      indexRebuildEntries: state.diagnostics.indexRebuildEntries + normalizedEntries.length
     }
   };
 }
@@ -467,25 +950,58 @@ function incrementDiagnostic(
 }
 
 function normalizeEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  const generation = maxEntryGeneration(entries);
   const merged: TimelineEntry[] = [];
+  const identityIndexes = new Map<string, number>();
+  const fallbackBuckets = new Map<string, number[]>();
+
   for (const entry of entries) {
-    const identity = identityKey(entry, maxEntryGeneration(entries));
-    if (!identity) {
-      const fallbackIndexes = merged
-        .map((candidate, index) => ({ candidate, index }))
-        .filter(({ candidate }) => fallbackEquivalent(candidate, entry))
-        .map(({ index }) => index);
-      if (fallbackIndexes.length === 1) {
-        const fallbackIndex = fallbackIndexes[0]!;
-        merged[fallbackIndex] = mergeEntry(merged[fallbackIndex]!, entry);
-      } else {
-        merged.push(entry);
+    const identity = identityKey(entry, generation);
+    const identityIndex = identity ? identityIndexes.get(identity) : undefined;
+    if (typeof identityIndex === "number") {
+      merged[identityIndex] = mergeEntry(merged[identityIndex]!, entry);
+      continue;
+    }
+
+    const bucketKeys = fallbackBucketKeys(entry);
+    const fallbackIndexes = Array.from(
+      new Set(bucketKeys.flatMap((bucketKey) => fallbackBuckets.get(bucketKey) ?? []))
+    ).filter((index) => fallbackEquivalent(merged[index]!, entry));
+    if (fallbackIndexes.length === 1) {
+      const fallbackIndex = fallbackIndexes[0]!;
+      merged[fallbackIndex] = mergeEntry(merged[fallbackIndex]!, entry);
+      if (identity) {
+        identityIndexes.set(identity, fallbackIndex);
       }
       continue;
     }
-    merged.splice(0, merged.length, ...upsertEntryByIdentity(merged, entry, identity, maxEntryGeneration(merged)));
+
+    const nextIndex = merged.length;
+    merged.push(entry);
+    if (identity) {
+      identityIndexes.set(identity, nextIndex);
+    }
+    for (const bucketKey of bucketKeys) {
+      const bucket = fallbackBuckets.get(bucketKey) ?? [];
+      bucket.push(nextIndex);
+      fallbackBuckets.set(bucketKey, bucket);
+    }
   }
   return orderEntries(merged);
+}
+
+function fallbackBucketKeys(entry: TimelineEntry): string[] {
+  const keys = [`id:${entry.body.kind}:${entry.id}`];
+  if (entry.body.kind === "user-message") {
+    keys.push(`user:${entry.body.text.trim()}`);
+    return keys;
+  }
+  if (isContextCompactionEntry(entry)) {
+    keys.push(`compact:${entry.turnId ?? "none"}`);
+    return keys;
+  }
+  keys.push(`${entry.body.kind}:${entry.turnId ?? "none"}`);
+  return keys;
 }
 
 function buildTimelineIndexes(entries: TimelineEntry[], generation: number): TimelineEngineIndexes {
@@ -513,26 +1029,35 @@ function upsertEntryByIdentity(
   entries: TimelineEntry[],
   entry: TimelineEntry,
   key: string,
-  stateGeneration: number
+  stateGeneration: number,
+  authoritative = false
 ): TimelineEntry[] {
   const currentIndex = entries.findIndex((candidate) => identityKey(candidate, stateGeneration) === key);
   if (currentIndex >= 0) {
-    return entries.map((candidate, index) => (index === currentIndex ? mergeEntry(candidate, entry) : candidate));
+    return entries.map((candidate, index) =>
+      index === currentIndex ? mergeEntry(candidate, entry, authoritative) : candidate
+    );
   }
 
   const fallbackIndexes = entries
     .map((candidate, index) => ({ candidate, index }))
-    .filter(({ candidate }) => fallbackEquivalent(candidate, entry))
+    .filter(({ candidate }) =>
+      fallbackEquivalent(candidate, entry) || (authoritative && fallbackLiveEquivalent(candidate, entry))
+    )
     .map(({ index }) => index);
   if (fallbackIndexes.length === 1) {
     const fallbackIndex = fallbackIndexes[0]!;
-    return entries.map((candidate, index) => (index === fallbackIndex ? mergeEntry(candidate, entry) : candidate));
+    return entries.map((candidate, index) =>
+      index === fallbackIndex ? mergeEntry(candidate, entry, authoritative) : candidate
+    );
   }
 
-  return [...entries, entry];
+  return insertEntryBySourceOrder(entries, entry);
 }
 
-function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry {
+function mergeEntry(current: TimelineEntry, next: TimelineEntry, authoritative = false): TimelineEntry {
+  const keepCurrentContent = shouldKeepCurrentTimelineContent(current.completeness, next.completeness);
+  const completeness = mergeTimelineCompleteness(current.completeness, next.completeness);
   if (current.body.kind === "user-message" && next.body.kind === "user-message") {
     const keepCurrentLocal =
       isLocalUserEntry(current) &&
@@ -545,12 +1070,13 @@ function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry 
     const otherBody = keepCurrentLocal ? next.body : current.body;
     return {
       ...base,
-      createdAt: Math.min(current.createdAt, next.createdAt),
+      createdAt: current.createdAt,
       turnId: base.turnId ?? other.turnId,
       turnIndex: base.turnIndex ?? other.turnIndex,
       clientUserMessageId: base.clientUserMessageId ?? other.clientUserMessageId ?? current.id,
       generation: base.generation ?? other.generation,
       snapshotSequence: base.snapshotSequence ?? other.snapshotSequence,
+      ...(completeness ? { completeness } : {}),
       body: {
         ...baseBody,
         imagePaths: baseBody.imagePaths ?? otherBody.imagePaths,
@@ -561,13 +1087,24 @@ function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry 
   }
 
   if (current.body.kind === "agent-message" && next.body.kind === "agent-message") {
-    return mergeTextEntry(current, next, longerText(current.body.text, next.body.text));
+    const text = keepCurrentContent
+      ? current.body.text
+      : authoritative && next.body.text.trim()
+        ? next.body.text
+        : longerText(current.body.text, next.body.text);
+    return mergeTextEntry(current, next, text, completeness);
   }
 
   if (current.body.kind === "reasoning" && next.body.kind === "reasoning") {
-    const text = next.body.done ? next.body.text || current.body.text : longerText(current.body.text, next.body.text);
+    const text = keepCurrentContent
+      ? current.body.text
+      : authoritative && next.body.text.trim()
+        ? next.body.text
+        : next.body.done
+          ? next.body.text || current.body.text
+          : longerText(current.body.text, next.body.text);
     return {
-      ...mergeTextEntry(current, next, text),
+      ...mergeTextEntry(current, next, text, completeness),
       body: {
         ...next.body,
         text,
@@ -577,57 +1114,319 @@ function mergeEntry(current: TimelineEntry, next: TimelineEntry): TimelineEntry 
   }
 
   if (current.body.kind === "system" && next.body.kind === "system") {
-    return mergeTextEntry(current, next, longerText(current.body.text, next.body.text));
+    return mergeTextEntry(
+      current,
+      next,
+      keepCurrentContent ? current.body.text : longerText(current.body.text, next.body.text),
+      completeness
+    );
   }
 
   if (current.body.kind === "tool" && next.body.kind === "tool") {
     const useNext =
-      isFinalStatus(next.body.status) && !isFinalStatus(current.body.status) ||
-      (next.body.result ?? "").length >= (current.body.result ?? "").length;
+      !keepCurrentContent &&
+      (isFinalStatus(next.body.status) && !isFinalStatus(current.body.status) ||
+        (next.body.result ?? "").length >= (current.body.result ?? "").length);
     const base = useNext ? next : current;
     const other = useNext ? current : next;
     const baseBody = useNext ? next.body : current.body;
     const otherBody = useNext ? current.body : next.body;
     return {
       ...base,
-      createdAt: Math.min(current.createdAt, next.createdAt),
+      createdAt: current.createdAt,
       turnId: base.turnId ?? other.turnId,
       turnIndex: base.turnIndex ?? other.turnIndex,
       clientUserMessageId: base.clientUserMessageId ?? other.clientUserMessageId,
       generation: base.generation ?? other.generation,
       snapshotSequence: base.snapshotSequence ?? other.snapshotSequence,
+      ...(completeness ? { completeness } : {}),
       body: {
         ...baseBody,
         actionKind: baseBody.actionKind ?? otherBody.actionKind,
         arguments: baseBody.arguments ?? otherBody.arguments,
         imagePaths: baseBody.imagePaths ?? otherBody.imagePaths,
-        result: longerText(current.body.result ?? "", next.body.result ?? "") || undefined
+        result:
+          keepCurrentContent
+            ? current.body.result
+            : authoritative && (next.body.result ?? "").trim()
+            ? next.body.result
+            : longerText(current.body.result ?? "", next.body.result ?? "") || undefined
       }
     };
   }
 
   return {
     ...next,
-    createdAt: Math.min(current.createdAt, next.createdAt),
-    turnId: next.turnId ?? current.turnId,
-    turnIndex: next.turnIndex ?? current.turnIndex,
-    clientUserMessageId: next.clientUserMessageId ?? current.clientUserMessageId,
-    generation: next.generation ?? current.generation,
-    snapshotSequence: next.snapshotSequence ?? current.snapshotSequence
-  };
-}
-
-function mergeTextEntry(current: TimelineEntry, next: TimelineEntry, text: string): TimelineEntry {
-  return {
-    ...next,
-    createdAt: Math.min(current.createdAt, next.createdAt),
+    createdAt: current.createdAt,
     turnId: next.turnId ?? current.turnId,
     turnIndex: next.turnIndex ?? current.turnIndex,
     clientUserMessageId: next.clientUserMessageId ?? current.clientUserMessageId,
     generation: next.generation ?? current.generation,
     snapshotSequence: next.snapshotSequence ?? current.snapshotSequence,
+    ...(completeness ? { completeness } : {})
+  };
+}
+
+function isAuthoritativeEntryInput(input: TimelineEntryInput): boolean {
+  return input.kind === "completed-item" || input.kind === "turn-item-detail" || input.kind === "rollout-supplement-item";
+}
+
+function fallbackLiveEquivalent(current: TimelineEntry, next: TimelineEntry): boolean {
+  if (!current.turnId || current.turnId !== next.turnId || current.body.kind !== next.body.kind) {
+    return false;
+  }
+  if (current.generation !== undefined && next.generation !== undefined && current.generation !== next.generation) {
+    return false;
+  }
+  return current.id.endsWith(":live");
+}
+
+function insertEntryBySourceOrder(entries: TimelineEntry[], entry: TimelineEntry): TimelineEntry[] {
+  const beforeEntryId = entry.sourceOrder?.beforeEntryId;
+  if (beforeEntryId) {
+    const beforeIndex = entries.findIndex((candidate) => candidate.id === beforeEntryId);
+    if (beforeIndex >= 0) {
+      return [...entries.slice(0, beforeIndex), entry, ...entries.slice(beforeIndex)];
+    }
+  }
+  const afterEntryId = entry.sourceOrder?.afterEntryId;
+  if (afterEntryId) {
+    const afterIndex = entries.findIndex((candidate) => candidate.id === afterEntryId);
+    if (afterIndex >= 0) {
+      return [...entries.slice(0, afterIndex + 1), entry, ...entries.slice(afterIndex + 1)];
+    }
+  }
+  return [...entries, entry];
+}
+
+function removeEmptyReasoning(state: TimelineEngineState, turnId: string | null, pendingId: string): TimelineEngineState {
+  const entries = state.entries.filter((entry) =>
+    !(entry.id === pendingId && (!turnId || entry.turnId === turnId) && entry.body.kind === "reasoning" && !entry.body.text.trim())
+  );
+  return entries.length === state.entries.length ? state : withEntries(state, entries);
+}
+
+function finishTurnEntries(state: TimelineEngineState, turnId: string, status: string): TimelineEngineState {
+  const failed = /fail|error|cancel|interrupt/i.test(status);
+  const completedStatus: "failed" | "success" = failed ? "failed" : "success";
+  let changed = false;
+  const entries = state.entries.flatMap((entry) => {
+    if (entry.turnId !== turnId) return [entry];
+    if (entry.body.kind === "reasoning" && entry.body.done === false) {
+      changed = true;
+      return entry.body.text.trim() ? [{ ...entry, body: { ...entry.body, done: true } }] : [];
+    }
+    if (entry.body.kind === "tool" && entry.body.status === "running") {
+      changed = true;
+      return [{ ...entry, body: { ...entry.body, status: completedStatus } }];
+    }
+    if (entry.body.kind === "command" && entry.body.status === "running") {
+      changed = true;
+      return [{ ...entry, body: { ...entry.body, status: completedStatus } }];
+    }
+    return [entry];
+  });
+  return changed ? withEntries(state, entries) : state;
+}
+
+function bindUserTurn(state: TimelineEngineState, clientUserMessageId: string, turnId: string): TimelineEngineState {
+  const index = state.entries.findIndex(
+    (entry) => entry.id === clientUserMessageId && entry.body.kind === "user-message"
+  );
+  if (index < 0) return state;
+  const current = state.entries[index]!;
+  const entries = state.entries.slice();
+  entries[index] = {
+    ...current,
+    turnId,
+    clientUserMessageId,
+    body: current.body.kind === "user-message" ? { ...current.body, status: "sent" } : current.body
+  };
+  return withEntries(state, entries);
+}
+
+function startReasoning(state: TimelineEngineState, entry: TimelineEntry, pendingId: string): TimelineEngineState {
+  const existingIndex = state.entries.findIndex(
+    (candidate) => candidate.id === entry.id && candidate.body.kind === "reasoning"
+  );
+  const pendingIndex = state.entries.findIndex((candidate) => candidate.id === pendingId && candidate.id !== entry.id);
+  if (existingIndex >= 0) {
+    const current = state.entries[existingIndex]!;
+    if (current.body.kind !== "reasoning") return state;
+    const nextEntry = {
+      ...current,
+      ...(!current.turnId && entry.turnId ? { turnId: entry.turnId } : {}),
+      body: { ...current.body, done: false }
+    };
+    const entries = state.entries
+      .map((candidate, index) => (index === existingIndex ? nextEntry : candidate))
+      .filter((_candidate, index) => index !== pendingIndex);
+    return withEntries(state, entries);
+  }
+  if (pendingIndex >= 0) {
+    const entries = state.entries.slice();
+    entries[pendingIndex] = entry;
+    return withEntries(state, entries);
+  }
+  return withEntries(state, [...state.entries, entry]);
+}
+
+function applyStartReasoningInput(
+  state: TimelineEngineState,
+  input: Extract<TimelineInput, { kind: "start-reasoning" }>
+): TimelineEngineState {
+  const accepted = applyEntryInput(state, {
+    kind: "live-event",
+    entry: input.entry,
+    ...(input.eventId ? { eventId: input.eventId } : {}),
+    ...(typeof input.revision === "number" ? { revision: input.revision } : {})
+  });
+  return accepted.entries === state.entries ? accepted : startReasoning(accepted, input.entry, input.pendingId);
+}
+
+function mergeTextEntry(
+  current: TimelineEntry,
+  next: TimelineEntry,
+  text: string,
+  completeness = mergeTimelineCompleteness(current.completeness, next.completeness)
+): TimelineEntry {
+  return {
+    ...next,
+    createdAt: current.createdAt,
+    turnId: next.turnId ?? current.turnId,
+    turnIndex: next.turnIndex ?? current.turnIndex,
+    clientUserMessageId: next.clientUserMessageId ?? current.clientUserMessageId,
+    generation: next.generation ?? current.generation,
+    snapshotSequence: next.snapshotSequence ?? current.snapshotSequence,
+    ...(completeness ? { completeness } : {}),
     body: { ...next.body, text } as TimelineEntry["body"]
   };
+}
+
+function shouldKeepCurrentTimelineContent(
+  current: TimelineCompleteness | undefined,
+  next: TimelineCompleteness | undefined
+): boolean {
+  return completenessPreference(current, next) > 0;
+}
+
+function mergeTimelineCompleteness(
+  current: TimelineCompleteness | undefined,
+  next: TimelineCompleteness | undefined
+): TimelineCompleteness | undefined {
+  if (shouldKeepCurrentTimelineContent(current, next)) {
+    return mergePreferredTimelineCompleteness(current!, next);
+  }
+  if (next?.status === "complete") {
+    return next;
+  }
+  if (current?.status === "repair-required") {
+    return current;
+  }
+  if (next && current) {
+    return mergePreferredTimelineCompleteness(next, current);
+  }
+  return next ?? current;
+}
+
+function completenessPreference(
+  current: TimelineCompleteness | undefined,
+  next: TimelineCompleteness | undefined
+): number {
+  if (!current) return next ? -1 : 0;
+  if (!next) return 1;
+  if (current.status === "complete") return next.status === "complete" ? 0 : 1;
+  if (next.status === "complete") return -1;
+  if (current.status === "repair-required") return next.status === "repair-required" ? 0 : 1;
+  if (next.status === "repair-required") return -1;
+  const currentScore = (current.contentRef ? 1_000_000_000 : 0) + (current.includedBytes ?? 0);
+  const nextScore = (next.contentRef ? 1_000_000_000 : 0) + (next.includedBytes ?? 0);
+  return currentScore === nextScore ? 0 : currentScore > nextScore ? 1 : -1;
+}
+
+function mergePreferredTimelineCompleteness(
+  preferred: TimelineCompleteness,
+  other: TimelineCompleteness | undefined
+): TimelineCompleteness {
+  if (!other) return preferred;
+  const originalBytes = Math.max(preferred.originalBytes ?? 0, other.originalBytes ?? 0);
+  const includedBytes = Math.max(preferred.includedBytes ?? 0, other.includedBytes ?? 0);
+  return {
+    ...other,
+    ...preferred,
+    nextCursor: other.nextCursor ?? preferred.nextCursor,
+    contentRef: preferred.contentRef ?? other.contentRef,
+    contentCursor: preferred.contentCursor ?? other.contentCursor,
+    ...(originalBytes ? { originalBytes } : {}),
+    ...(includedBytes ? { includedBytes } : {})
+  };
+}
+
+function mergeSnapshotEntriesWithExistingContent(
+  currentEntries: TimelineEntry[],
+  snapshotEntries: TimelineEntry[],
+  generation: number
+): TimelineEntry[] {
+  const currentByIdentity = new Map<string, TimelineEntry>();
+  for (const entry of currentEntries) {
+    const identity = identityKey(entry, generation);
+    if (identity) {
+      currentByIdentity.set(identity, entry);
+    }
+  }
+  return snapshotEntries.map((entry) => {
+    const identity = identityKey(entry, generation);
+    const current = identity ? currentByIdentity.get(identity) : undefined;
+    return current ? mergeEntry(current, entry, true) : entry;
+  });
+}
+
+function recordEntryCompletenessDiagnostics(
+  diagnostics: TimelineEngineDiagnostics,
+  currentEntries: TimelineEntry[],
+  nextEntries: TimelineEntry[],
+  generation: number
+): TimelineEngineDiagnostics {
+  const currentByIdentity = new Map<string, TimelineEntry>();
+  for (const entry of currentEntries) {
+    const identity = identityKey(entry, generation);
+    if (identity) {
+      currentByIdentity.set(identity, entry);
+    }
+  }
+  return nextEntries.reduce((currentDiagnostics, entry) => {
+    const identity = identityKey(entry, generation);
+    return recordEntryCompletenessDiagnostic(
+      currentDiagnostics,
+      identity ? currentByIdentity.get(identity) : undefined,
+      entry
+    );
+  }, diagnostics);
+}
+
+function recordEntryCompletenessDiagnostic(
+  diagnostics: TimelineEngineDiagnostics,
+  current: TimelineEntry | undefined,
+  next: TimelineEntry
+): TimelineEngineDiagnostics {
+  let result = diagnostics;
+  if (next.completeness?.status === "truncated") {
+    result = incrementDiagnostic(result, "itemTruncations");
+    if (next.completeness.reason === "event-budget") {
+      result = incrementDiagnostic(result, "eventTruncations");
+    }
+  }
+  if (next.completeness?.status === "repair-required") {
+    result = incrementDiagnostic(result, "repairRequiredInputs");
+  }
+  if (
+    next.completeness?.status === "complete" &&
+    current?.completeness &&
+    current.completeness.status !== "complete"
+  ) {
+    result = incrementDiagnostic(result, "fullContentCompletions");
+  }
+  return result;
 }
 
 function identityKey(entry: TimelineEntry, stateGeneration: number): string | null {
@@ -643,17 +1442,19 @@ function identityKey(entry: TimelineEntry, stateGeneration: number): string | nu
       if (entry.id.startsWith("local-user-")) {
         return `user:local:${entry.id}`;
       }
-      return null;
+      return `user:event:${entry.id}`;
     case "agent-message":
     case "reasoning":
     case "diff":
-      return entry.turnId ? `${entry.body.kind}:${generation}:${entry.turnId}:${entry.id}` : null;
+      return entry.turnId
+        ? `${entry.body.kind}:${generation}:${entry.turnId}:${entry.id}`
+        : `${entry.body.kind}:event:${entry.id}`;
     case "tool":
       if (entry.turnId) {
         const toolIdentity = [entry.body.toolKind ?? "", entry.body.server, entry.body.tool, entry.id].join(":");
         return `tool:${generation}:${entry.turnId}:${toolIdentity}`;
       }
-      return null;
+      return `tool:event:${entry.id}`;
     case "system":
       if (isContextCompactionEntry(entry)) {
         return entry.turnId
@@ -741,10 +1542,18 @@ function orderEntries(entries: TimelineEntry[]): TimelineEntry[] {
       if (
         left.entry.turnId &&
         right.entry.turnId &&
-        left.entry.turnId === right.entry.turnId &&
-        left.entry.createdAt !== right.entry.createdAt
+        left.entry.turnId === right.entry.turnId
       ) {
-        return left.entry.createdAt - right.entry.createdAt;
+        const leftOrder = left.entry.sourceOrder;
+        const rightOrder = right.entry.sourceOrder;
+        if (
+          leftOrder &&
+          rightOrder &&
+          leftOrder.sourceKind === rightOrder.sourceKind &&
+          leftOrder.ordinal !== rightOrder.ordinal
+        ) {
+          return leftOrder.ordinal - rightOrder.ordinal;
+        }
       }
       return left.index - right.index;
     })
@@ -821,4 +1630,21 @@ function trimStringSetInPlace(values: Set<string>, maxSize: number): void {
     }
     values.delete(first);
   }
+}
+
+function trimEventLedgerInPlace(values: Set<string>, maxSize: number, currentGeneration: number): void {
+  if (values.size <= maxSize) {
+    return;
+  }
+  for (const value of values) {
+    const separator = value.indexOf("\u0000");
+    const generation = separator >= 0 ? Number(value.slice(0, separator)) : Number.NaN;
+    if (Number.isFinite(generation) && generation < currentGeneration - 1) {
+      values.delete(value);
+      if (values.size <= maxSize) {
+        return;
+      }
+    }
+  }
+  trimStringSetInPlace(values, maxSize);
 }

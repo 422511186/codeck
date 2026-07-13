@@ -5,6 +5,7 @@ import type { BrowserCodexEventEnvelope } from "./app-server/events";
 import type { BrowserServerRequestEvent } from "./app-server/pending-requests";
 import type { BrowserTimelineEvent } from "./app-server/runtime";
 import type { AppServerStatus } from "./app-server/transport";
+import { serializeBrowserTimelineEvent } from "./timeline-event-payload";
 
 export type BrowserEvent =
   | { type: "hello"; status: "connected" }
@@ -25,7 +26,7 @@ export function attachBrowserWebSocket(
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
   const unsubscribe = options.subscribeToAppServerEvents((event) => {
-    const payload = JSON.stringify(event);
+    const payload = serializeBrowserTimelineEvent(event);
     for (const client of wss.clients) {
       if (client.readyState === client.OPEN) {
         client.send(payload);

@@ -15,6 +15,7 @@ import type {
   ThreadPage,
   ThreadSummary,
   TimelinePage,
+  TimelineContentChunk,
   UploadedImage
 } from "./types";
 
@@ -135,7 +136,11 @@ export async function listTurnsBefore(
     `/api/codex/threads/${encodeURIComponent(threadId)}/turns`,
     { query: { cursor, limit } }
   );
-  return { items: data.page?.items ?? [], nextCursor: data.page?.nextCursor ?? null };
+  return {
+    ...data.page,
+    items: data.page?.items ?? [],
+    nextCursor: data.page?.nextCursor ?? null
+  };
 }
 
 export async function listTurnItems(
@@ -148,7 +153,24 @@ export async function listTurnItems(
     `/api/codex/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/items`,
     { query: { cursor, limit } }
   );
-  return { items: data.page?.items ?? [], nextCursor: data.page?.nextCursor ?? null };
+  return {
+    ...data.page,
+    items: data.page?.items ?? [],
+    nextCursor: data.page?.nextCursor ?? null
+  };
+}
+
+export async function readTimelineContent(
+  threadId: string,
+  contentRef: string,
+  cursor?: string | null,
+  maxBytes?: number
+): Promise<TimelineContentChunk> {
+  const data = await api<{ chunk: TimelineContentChunk }>(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/content`,
+    { query: { contentRef, cursor, maxBytes } }
+  );
+  return data.chunk;
 }
 
 export type StartThreadInput = {
@@ -394,6 +416,7 @@ export const codex = {
   resumeThread,
   listTurnsBefore,
   listTurnItems,
+  readTimelineContent,
   startThread,
   startTurn,
   interruptTurn,

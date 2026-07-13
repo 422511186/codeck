@@ -1,4 +1,5 @@
 import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
+import type { TimelineCompleteness } from "../../shared/timeline-content";
 import {
   createTimelineEngineState,
   selectRollbackMetadataForEntry,
@@ -85,6 +86,14 @@ export type TimelineEntry = {
   clientUserMessageId?: string;
   generation?: number;
   snapshotSequence?: number;
+  completeness?: TimelineCompleteness;
+  sourceOrder?: {
+    sourceKind: "live" | "snapshot" | "pagination" | "turn-detail" | "supplement" | "optimistic";
+    ordinal: number;
+    sequence?: number;
+    beforeEntryId?: string;
+    afterEntryId?: string;
+  };
   createdAt: number;
   body:
     | UserMessageEntry
@@ -223,13 +232,17 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
 
 function timelineEntryMeta(
   item: TimelineItem
-): Pick<TimelineEntry, "turnId" | "turnIndex" | "clientUserMessageId" | "generation" | "snapshotSequence"> {
+): Pick<
+  TimelineEntry,
+  "turnId" | "turnIndex" | "clientUserMessageId" | "generation" | "snapshotSequence" | "completeness"
+> {
   return {
     ...(item.turnId ? { turnId: item.turnId } : {}),
     ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {}),
     ...(item.clientUserMessageId ? { clientUserMessageId: item.clientUserMessageId } : {}),
     ...(typeof item.generation === "number" ? { generation: item.generation } : {}),
-    ...(typeof item.snapshotSequence === "number" ? { snapshotSequence: item.snapshotSequence } : {})
+    ...(typeof item.snapshotSequence === "number" ? { snapshotSequence: item.snapshotSequence } : {}),
+    ...(item.completeness ? { completeness: item.completeness } : {})
   };
 }
 

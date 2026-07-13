@@ -1,4 +1,10 @@
 import type { MobileThreadContextUsage, MobileTimelineItem } from "../../shared/codex";
+import {
+  boundedTimelineText,
+  createOpaqueTimelineContentRef,
+  TIMELINE_ITEM_INLINE_BYTE_BUDGET,
+  utf8ByteLength
+} from "../../shared/timeline-content";
 
 export type SessionTimelineRecord =
   | {
@@ -16,7 +22,6 @@ export type SessionTimelineRecord =
     };
 type SessionToolRecord = Extract<SessionTimelineRecord, { kind: "tool" }>;
 
-const SESSION_TOOL_TEXT_LIMIT = 12_000;
 const INTERNAL_CONTROL_TOOL_NAMES = new Set(["update_plan", "write_stdin", "read_thread", "list_threads", "read_thread_terminal"]);
 const DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT = 120;
 
@@ -40,13 +45,6 @@ function stringifyJson(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function truncateToolText(text: string): string {
-  if (text.length <= SESSION_TOOL_TEXT_LIMIT) {
-    return text;
-  }
-  return `${text.slice(0, SESSION_TOOL_TEXT_LIMIT)}\n...`;
 }
 
 function payloadTurnId(payload: Record<string, unknown>): string | null {
@@ -370,7 +368,11 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
   };
 }
 
-function applyFunctionOutput(record: SessionToolRecord, output: string): void {
+function applyFunctionOutput(
+  record: SessionToolRecord,
+  output: string,
+  contentRefFactory?: (locator: SessionContentRefLocator) => string
+): void {
   const nextStatus = toolStatusFromOutput(output);
   if (record.item.server === "skills" && record.item.tool === "loaded") {
     const skillName = skillNameFromOutput(output) ?? record.item.text;
@@ -387,9 +389,27 @@ function applyFunctionOutput(record: SessionToolRecord, output: string): void {
     return;
   }
 
+  const text = output || record.item.text;
+  const contentRef =
+    utf8ByteLength(text) > TIMELINE_ITEM_INLINE_BYTE_BUDGET
+      ? contentRefFactory?.({
+          turnId: record.turnId,
+          itemId: record.item.id,
+          sequence: record.sequence,
+          callId: record.callId,
+          field: "text"
+        }) ??
+        createOpaqueTimelineContentRef([
+          "session",
+          record.turnId,
+          record.item.id,
+          record.sequence,
+          "text"
+        ])
+      : undefined;
   record.item = {
     ...record.item,
-    text: truncateToolText(output || record.item.text),
+    ...boundedTimelineText(text, { ...(contentRef ? { contentRef } : {}) }),
     status: nextStatus
   };
 }
@@ -479,6 +499,15 @@ export function latestSessionContextUsage(
 type SessionTimelineRecordsOptions = {
   allowedTurnIds?: ReadonlySet<string>;
   maxSupplementRecords?: number;
+  contentRefFactory?: (locator: SessionContentRefLocator) => string;
+};
+
+export type SessionContentRefLocator = {
+  turnId: string;
+  itemId: string;
+  sequence: number;
+  callId: string | null;
+  field: "text";
 };
 
 export type ScanSessionTimelineSupplementOptions = SessionTimelineRecordsOptions & {
@@ -548,7 +577,7 @@ export function scanSessionTimelineSupplement(
 
     const line = next.value;
     scannedLines += 1;
-    scannedBytes += line.length + 1;
+    scannedBytes += utf8ByteLength(line) + 1;
     if (scannedBytes > maxScanBytes) {
       budgetExhausted = true;
       break;
@@ -615,7 +644,7 @@ export function scanSessionTimelineSupplement(
       const callId = typeof payload.call_id === "string" ? payload.call_id : null;
       const record = callId ? byCallId.get(callId) : null;
       if (record) {
-        applyFunctionOutput(record, outputText(payload.output));
+        applyFunctionOutput(record, outputText(payload.output), options.contentRefFactory);
       }
     }
   }
@@ -633,6 +662,33 @@ export function scanSessionTimelineSupplement(
       budgetExhausted
     }
   };
+}
+
+export function sessionToolOutputFromLines(lines: Iterable<string>, callId: string): string | null {
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.payload)) {
+      continue;
+    }
+    const payload = parsed.payload;
+    if (
+      (payload.type === "function_call_output" ||
+        payload.type === "custom_tool_call_output" ||
+        payload.type === "tool_search_output") &&
+      payload.call_id === callId
+    ) {
+      return outputText(payload.output);
+    }
+  }
+  return null;
 }
 
 function sessionTimelineRecords(

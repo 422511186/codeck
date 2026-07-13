@@ -4,6 +4,8 @@ import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { attachBrowserWebSocket } from "../../src/server/ws";
+import type { BrowserTimelineEvent } from "../../src/server/app-server/runtime";
+import { browserTimelineEventForBudget } from "../../src/server/timeline-event-payload";
 
 class FakeSocket extends Duplex {
   writes: string[] = [];
@@ -100,5 +102,90 @@ describe("attachBrowserWebSocket", () => {
 
     wss.close();
     server.close();
+  });
+
+  it("无安全 contentRef resolver 时将 oversize 可见事件转换为 repair-required envelope", () => {
+    const server = createServer();
+    const nextUpgradeHandler = vi.fn(async () => {});
+    const eventHandlers: Array<(event: BrowserTimelineEvent) => void> = [];
+    const options = {
+      isAuthenticated: vi.fn(() => true),
+      getAppServerStatus: vi.fn(() => ({ state: "ready" as const })),
+      subscribeToAppServerEvents: vi.fn((handler: (event: BrowserTimelineEvent) => void) => {
+        eventHandlers.push(handler);
+        return vi.fn();
+      })
+    };
+    const client = { send: vi.fn(), readyState: 1, OPEN: 1 };
+    const wss = attachBrowserWebSocket(server, nextUpgradeHandler, options);
+    wss.clients.add(client as never);
+
+    eventHandlers[0]!({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1,
+        item: { id: "tool-oversize", role: "tool", text: "中".repeat(300_000) },
+        eventId: "thread-1:7:9:item_updated",
+        sequence: 9,
+        revision: 7,
+        generation: 2
+      }
+    });
+
+    const payload = client.send.mock.calls.at(-1)?.[0] as string;
+    const parsed = JSON.parse(payload) as { event: Record<string, unknown> };
+    expect(Buffer.byteLength(payload, "utf8")).toBeLessThanOrEqual(256 * 1024);
+    expect(parsed.event).toEqual(
+      expect.objectContaining({
+        kind: "timeline_content_reference",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-oversize",
+        eventId: "thread-1:7:9:item_updated",
+        sequence: 9,
+        revision: 7,
+        generation: 2,
+        completeness: expect.objectContaining({
+          status: "repair-required",
+          reason: "event-budget"
+        })
+      })
+    );
+    expect(parsed.event).not.toHaveProperty("contentRef");
+
+    wss.close();
+    server.close();
+  });
+
+  it("最小 reference metadata 仍超限时继续压缩到硬预算内", () => {
+    const event = browserTimelineEventForBudget(
+      {
+        type: "codex-event",
+        event: {
+          kind: "item_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          completedAtMs: 1,
+          item: {
+            id: "tool-1",
+            role: "tool",
+            text: "中".repeat(10_000),
+            server: "server".repeat(1_000),
+            tool: "tool".repeat(1_000)
+          },
+          eventId: "event-1",
+          sequence: 9,
+          revision: 7,
+          generation: 2
+        }
+      },
+      512,
+      { createContentRef: () => "tlc-safe" }
+    );
+
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(512);
   });
 });

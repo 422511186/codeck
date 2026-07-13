@@ -767,7 +767,7 @@ agent 输出渲染层 SHALL 在大会话和高频 delta 下保持有界 DOM 与 
 - **AND** 其他 timeline rows MUST NOT 因该展开操作重建完整长输出 DOM
 
 ### Requirement: Output derivations are cached by stable entry identity
-agent 输出渲染层 SHALL 对长 Markdown、diff rows、command output preview、tool result preview、reasoning preview 和 inline activity detail preview 使用稳定 entry identity 的派生缓存或等价机制。系统 MUST 不在每个 unrelated timeline update 或每个 delta commit 中重新 split、parse 或格式化未变化的大文本。
+agent 输出渲染层 SHALL 对长 Markdown、diff rows、command output preview、tool result preview、reasoning preview 和 inline activity detail preview 使用稳定 entry identity、entry 引用和内容版本的派生缓存或等价机制。系统 MUST 不在每个 unrelated timeline update 或每个 delta commit 中重新 split、parse 或格式化未变化的大文本；父 timeline 更新时，未变化 row MUST 能跳过重新渲染。
 
 #### Scenario: Unrelated delta does not reparse long diff
 - **WHEN** timeline 中存在已展开或可见的长 diff
@@ -785,6 +785,12 @@ agent 输出渲染层 SHALL 对长 Markdown、diff rows、command output preview
 - **WHEN** agent message 的 `entry.id`、generation、revision 或文本内容发生变化
 - **THEN** Markdown/preview cache MUST 对该 entry 失效并重新派生
 - **AND** 其他 entry 的 Markdown 派生 MUST 保持可复用
+
+#### Scenario: Unchanged row skips render
+- **WHEN** timeline entries 数组因另一个 entry 的 live delta 产生新引用
+- **AND** 某个可见 row 的 entry 引用、live 状态、action 状态和回调语义均未变化
+- **THEN** 该 row MUST 跳过 React render 或执行等价的零昂贵派生更新
+- **AND** 其 Markdown、diff、preview 和 activity detail MUST 不重新计算
 
 ### Requirement: Heavy rendering follows the recycled viewport
 agent 输出中的 Markdown、代码高亮、Mermaid、diff rows、长 command output、tool result、reasoning detail 和 inline activity detail SHALL 只在当前 recycled viewport 或用户展开的有界区域内执行重渲染。窗口外 rows MUST 不构造 Markdown AST、highlight DOM、diff row DOM 或长 `<pre>` 预览。
@@ -805,7 +811,7 @@ agent 输出中的 Markdown、代码高亮、Mermaid、diff rows、长 command o
 - **AND** 其他 viewport rows MUST 不因此重建完整长输出 DOM
 
 ### Requirement: Live output stays lightweight until stable
-流式 agent、reasoning、tool 或 command 输出 SHALL 在 live 阶段使用轻量文本渲染和批处理后的最小更新。系统 MUST 不对每个 live delta 同步执行完整 Markdown 解析、代码高亮、diff parsing、activity summary 全量重建或长文本 preview 全量重算。
+流式 agent、reasoning、tool 或 command 输出 SHALL 在 live 阶段使用轻量文本渲染和批处理后的最小更新。系统 MUST 不对每个 live delta 同步执行完整 Markdown 解析、代码高亮、diff parsing、activity summary 全量重建或长文本 preview 全量重算；同一 item 的短窗口 delta MUST 只使其所属 row 或 activity block 失效。
 
 #### Scenario: Agent live delta renders as plain text
 - **WHEN** active turn 的 agent message 高频追加 delta
@@ -816,4 +822,35 @@ agent 输出中的 Markdown、代码高亮、Mermaid、diff rows、长 command o
 - **WHEN** running tool output 高频追加 stdout/stderr delta
 - **THEN** UI MUST 只更新受影响 tool entry 的轻量尾部显示或有界 preview
 - **AND** MUST 不因每段 delta 重新计算整个 timeline 的 activity sections
+
+#### Scenario: Batched delta invalidates one render block
+- **WHEN** 同一 item 的多个文本 delta 被合并为一次 store 提交
+- **THEN** 渲染层 MUST 只失效包含该 item 的 timeline row 或 inline activity block
+- **AND** 其他可见 blocks MUST 保持派生缓存和展开状态
+
+### Requirement: Truncated agent output is visibly incomplete
+agent message、reasoning、tool output、command output 和 diff 的正文不完整时，渲染层 SHALL 显示明确的 truncated/partial 状态和读取完整内容控件。系统 MUST 不以普通 `...` 文本冒充完整正文。
+
+#### Scenario: Truncated tool preview
+- **WHEN** tool output 仅包含 inline preview 和 contentRef
+- **THEN** activity detail MUST 显示已省略 bytes/内容状态
+- **AND** MUST 提供读取完整内容的明确命令
+
+#### Scenario: Complete content loaded
+- **WHEN** 用户读取全部 full-content chunks
+- **THEN** 原 card/block MUST 原位显示完整内容
+- **AND** 展开状态、复制入口和 timeline 顺序 MUST 保持不变
+
+### Requirement: Long content loading remains bounded
+读取完整内容时 SHALL 分 chunk 更新目标 row/block，MUST 不阻塞完整 timeline 派生或一次挂载所有历史长正文。复制完整内容只有在内容 complete 时直接复制本地全文；partial 状态 MUST 明确提示继续读取或按 chunk 服务端复制策略处理。
+
+#### Scenario: Multiple megabyte tool output
+- **WHEN** 用户展开数 MiB tool output
+- **THEN** 客户端 MUST 按 chunk 读取并只更新目标 activity block
+- **AND** 其他可见 Markdown、diff 和 activity blocks MUST 不重新派生
+
+#### Scenario: Full-content request fails
+- **WHEN** contentRef 请求失败或返回 repair-required
+- **THEN** card MUST 保留已有 preview
+- **AND** MUST 显示明确错误和可重试状态，不得变为空白
 

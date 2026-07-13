@@ -1,6 +1,8 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import { assertRuntimePathAllowed } from "../security";
 import type { AppServerConfig } from "../../config/env";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type {
@@ -61,6 +63,7 @@ import type {
   MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
   MobileTimelineItem,
+  MobileTimelineContentChunk,
   MobileTimelinePage,
   MobileThreadDetail,
   MobileThreadPage,
@@ -68,6 +71,16 @@ import type {
   MobileWindowsSandboxReadinessView,
   MobileWindowsSandboxSetupResultView
 } from "../../shared/codex";
+import {
+  TIMELINE_RESPONSE_BYTE_BUDGET,
+  TIMELINE_PAGE_BYTE_BUDGET,
+  TIMELINE_ITEM_INLINE_BYTE_BUDGET,
+  TIMELINE_CONTENT_CHUNK_BYTE_BUDGET,
+  boundedTimelineText,
+  utf8SafeChunk,
+  utf8ByteLength,
+  type TimelineCompleteness
+} from "../../shared/timeline-content";
 import { getRuntimeConfig } from "../runtime";
 import {
   CodexAppServerClient,
@@ -119,9 +132,15 @@ import {
   latestSessionContextUsageFromLines,
   mergeSessionTimelineRecords,
   scanSessionTimelineSupplement,
+  sessionToolOutputFromLines,
+  type SessionContentRefLocator,
   type SessionTimelineRecord
 } from "./session-timeline";
 import { createManagedAppServerPeer, type AppServerStatus, type ManagedAppServerPeer } from "./transport";
+import {
+  browserTimelineEventForBudget,
+  type TimelineEventContentLocator
+} from "../timeline-event-payload";
 import { createTextUserInput } from "./user-input";
 import type { ThreadStartParams } from "../../../docs/generated/app-server-ts/v2/ThreadStartParams";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
@@ -167,6 +186,35 @@ type TimelineOverlayEntry = {
   item: MobileTimelineItem;
   turnId: string | null;
   updatedAtMs: number;
+};
+
+type TimelineContentSourceBase = {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  field: "text";
+  sourceRevision: string;
+  expiresAt: number;
+};
+
+type SessionTimelineContentSource = TimelineContentSourceBase & {
+  kind: "session";
+  callId: string;
+  sequence: number;
+  rolloutPath: string;
+};
+
+type AppServerTimelineContentSource = TimelineContentSourceBase & {
+  kind: "app-server";
+};
+
+type TimelineContentSource = SessionTimelineContentSource | AppServerTimelineContentSource;
+
+type TimelineContentCursorState = {
+  contentRef: string;
+  sourceRevision: string;
+  byteOffset: number;
+  chunkBytes: number;
 };
 
 export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequestEvent;
@@ -2716,13 +2764,21 @@ export class AppServerGateway {
   private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
   private readonly timelineOverlays = new Map<string, Map<string, TimelineOverlayEntry>>();
   private readonly deletedTurnIdsByThread = new Map<string, Set<string>>();
+  private readonly timelineContentSources = new Map<string, TimelineContentSource>();
+  private readonly timelineContentCursors = new Map<string, TimelineContentCursorState>();
+  private readonly timelineContentCursorByPosition = new Map<string, string>();
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
   private fileSearchSessionCounter = 0;
   private browserEventSequence = 0;
 
-  constructor(private readonly peer: ManagedAppServerPeer) {
+  constructor(
+    private readonly peer: ManagedAppServerPeer,
+    private readonly timelinePathPolicy: { assertPathAllowed(path: string): string } = {
+      assertPathAllowed: assertRuntimePathAllowed
+    }
+  ) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
     this.peer.onNotification((message) => {
       this.recordProcessNotification(message);
@@ -2822,7 +2878,14 @@ export class AppServerGateway {
       revision,
       generation
     };
-    const next = { ...envelope, event };
+    const next = browserTimelineEventForBudget(
+      { ...envelope, event },
+      undefined,
+      {
+        createContentRef: (content, identity) =>
+          this.registerAppServerTimelineContentSource(content, identity)
+      }
+    ) as BrowserCodexEventEnvelope;
     this.recordBrowserEvent(next);
     return next;
   }
@@ -3267,7 +3330,72 @@ export class AppServerGateway {
   async readThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
     const detail = await this.applySessionTimelineSupplement(await this.client.readThread(threadId));
-    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
+    return this.timelineThreadWithinBudget(
+      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+    );
+  }
+
+  private timelineThreadWithinBudget(detail: MobileThreadDetail): MobileThreadDetail {
+    if (!detail.timeline.length) {
+      return timelineThreadWithCompleteness(detail);
+    }
+    const contentRefs = new Map<string, string>();
+    const contentRefForItem = (item: MobileTimelineItem): string | undefined => {
+      if (!item.turnId) {
+        return undefined;
+      }
+      const key = `${item.turnId}\u0000${item.id}`;
+      const existing = contentRefs.get(key);
+      if (existing) {
+        return existing;
+      }
+      const contentRef = this.registerAppServerItemContentSource(
+        detail.id,
+        item.turnId,
+        item.id,
+        `${item.generation ?? detail.generation ?? 0}:${item.snapshotSequence ?? detail.snapshotSequence ?? 0}`
+      );
+      contentRefs.set(key, contentRef);
+      return contentRef;
+    };
+    let itemTextBudget = Math.min(
+      TIMELINE_ITEM_INLINE_BYTE_BUDGET,
+      Math.max(256, Math.floor((TIMELINE_RESPONSE_BYTE_BUDGET - 128 * 1024) / detail.timeline.length))
+    );
+    let result = timelineThreadWithCompleteness(detail);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const timeline = detail.timeline.map((item) => {
+        const contentRef = item.completeness?.contentRef ??
+          (utf8ByteLength(item.text) > itemTextBudget ? contentRefForItem(item) : undefined);
+        const bounded = boundedTimelineText(item.text, {
+          maxBytes: itemTextBudget,
+          ...(contentRef ? { contentRef } : {})
+        });
+        return {
+          ...item,
+          ...(attempt > 0 && item.arguments ? { arguments: undefined } : {}),
+          text: bounded.text,
+          ...(bounded.completeness.status === "complete"
+            ? item.completeness
+              ? { completeness: item.completeness }
+              : {}
+            : { completeness: bounded.completeness })
+        };
+      });
+      result = timelineThreadWithCompleteness({ ...detail, timeline });
+      if (utf8ByteLength(JSON.stringify(result)) <= TIMELINE_RESPONSE_BYTE_BUDGET) {
+        return result;
+      }
+      itemTextBudget = Math.max(0, Math.floor(itemTextBudget * 0.7));
+    }
+    result = timelineThreadWithCompleteness({
+      ...detail,
+      timeline: detail.timeline.map((item) => compactTimelineItemForHardBudget(item, contentRefForItem(item)))
+    });
+    if (utf8ByteLength(JSON.stringify(result)) <= TIMELINE_RESPONSE_BYTE_BUDGET) {
+      return result;
+    }
+    throw new RangeError("Timeline thread response exceeds hard payload budget");
   }
 
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
@@ -3281,10 +3409,11 @@ export class AppServerGateway {
     options: { includeContextUsage?: boolean } = {}
   ): Promise<{ records: SessionTimelineRecord[]; contextUsage?: MobileThreadDetail["contextUsage"] } | null> {
     try {
-      const rolloutPath = await this.client.getConversationRolloutPath(threadId);
-      if (!rolloutPath) {
+      const sourceRolloutPath = await this.client.getConversationRolloutPath(threadId);
+      if (!sourceRolloutPath) {
         return null;
       }
+      const rolloutPath = this.timelinePathPolicy.assertPathAllowed(sourceRolloutPath);
       const metadata = await stat(rolloutPath);
       if (!metadata.isFile() || metadata.size > SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT) {
         return null;
@@ -3302,7 +3431,9 @@ export class AppServerGateway {
         maxScanLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
         maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
         maxSupplementRecords: SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT,
-        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS
+        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS,
+        contentRefFactory: (locator) =>
+          this.registerSessionTimelineContentSource(threadId, rolloutPath, metadata, locator)
       });
       const contextUsage = options.includeContextUsage
         ? latestSessionContextUsageFromLines(lines, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES })
@@ -3946,7 +4077,10 @@ export class AppServerGateway {
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
-    return this.applySessionTimelinePageSupplement(input.threadId, await this.client.listThreadTurns(input));
+    return this.timelinePageWithinBudget(
+      input.threadId,
+      await this.applySessionTimelinePageSupplement(input.threadId, await this.client.listThreadTurns(input))
+    );
   }
 
   async listThreadTurnItems(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
@@ -3960,33 +4094,333 @@ export class AppServerGateway {
       }
       page = await this.listThreadTurnItemsFromTurns(input);
     }
-    return this.applySessionTimelinePageSupplement(input.threadId, page);
+    return this.timelinePageWithinBudget(
+      input.threadId,
+      await this.applySessionTimelinePageSupplement(input.threadId, page)
+    );
+  }
+
+  private timelinePageWithinBudget(threadId: string, page: MobileTimelinePage): MobileTimelinePage {
+    if (!page.items.length) {
+      return timelinePageWithCompleteness(page);
+    }
+    const contentRefs = new Map<string, string>();
+    const contentRefForItem = (item: MobileTimelineItem): string | undefined => {
+      if (!item.turnId) {
+        return undefined;
+      }
+      const key = `${item.turnId}\u0000${item.id}`;
+      const existing = contentRefs.get(key);
+      if (existing) {
+        return existing;
+      }
+      const contentRef = this.registerAppServerItemContentSource(
+        threadId,
+        item.turnId,
+        item.id,
+        `${item.generation ?? 0}:${item.snapshotSequence ?? 0}`
+      );
+      contentRefs.set(key, contentRef);
+      return contentRef;
+    };
+    let itemTextBudget = Math.min(
+      TIMELINE_ITEM_INLINE_BYTE_BUDGET,
+      Math.max(256, Math.floor((TIMELINE_PAGE_BYTE_BUDGET - 64 * 1024) / page.items.length))
+    );
+    let result = timelinePageWithCompleteness(page);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const items = page.items.map((item) => {
+        const contentRef = item.completeness?.contentRef ??
+          (utf8ByteLength(item.text) > itemTextBudget ? contentRefForItem(item) : undefined);
+        const bounded = boundedTimelineText(item.text, {
+          maxBytes: itemTextBudget,
+          ...(contentRef ? { contentRef } : {})
+        });
+        return {
+          ...item,
+          ...(attempt > 0 && item.arguments ? { arguments: undefined } : {}),
+          text: bounded.text,
+          ...(bounded.completeness.status === "complete"
+            ? item.completeness
+              ? { completeness: item.completeness }
+              : {}
+            : { completeness: bounded.completeness })
+        };
+      });
+      result = timelinePageWithCompleteness({ ...page, items });
+      if (utf8ByteLength(JSON.stringify(result)) <= TIMELINE_PAGE_BYTE_BUDGET) {
+        return result;
+      }
+      itemTextBudget = Math.max(0, Math.floor(itemTextBudget * 0.7));
+    }
+    result = timelinePageWithCompleteness({
+      ...page,
+      items: page.items.map((item) => compactTimelineItemForHardBudget(item, contentRefForItem(item)))
+    });
+    if (utf8ByteLength(JSON.stringify(result)) <= TIMELINE_PAGE_BYTE_BUDGET) {
+      return result;
+    }
+    throw new RangeError("Timeline page response exceeds hard payload budget");
+  }
+
+  async readTimelineContent(input: {
+    threadId: string;
+    contentRef: string;
+    cursor?: string | null;
+    maxBytes?: number;
+  }): Promise<MobileTimelineContentChunk> {
+    const source = this.timelineContentSources.get(input.contentRef);
+    if (!source || source.threadId !== input.threadId || source.expiresAt < Date.now()) {
+      return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
+    }
+
+    let byteOffset = 0;
+    let chunkBytes = clampTimelineContentChunkBytes(input.maxBytes);
+    if (input.cursor) {
+      const cursor = this.timelineContentCursors.get(input.cursor);
+      if (
+        !cursor ||
+        cursor.contentRef !== input.contentRef ||
+        cursor.sourceRevision !== source.sourceRevision
+      ) {
+        return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
+      }
+      byteOffset = cursor.byteOffset;
+      chunkBytes = cursor.chunkBytes;
+    }
+
+    const resolved = await this.resolveTimelineContentSource(source);
+    if (typeof resolved !== "string") {
+      return repairRequiredContentChunk(input.contentRef, resolved.reason);
+    }
+    const text = resolved;
+
+    const chunk = utf8SafeChunk(text, byteOffset, chunkBytes);
+    const nextCursor =
+      chunk.endOffset < chunk.totalBytes
+        ? this.timelineContentCursor(
+            input.contentRef,
+            source.sourceRevision,
+            chunk.endOffset,
+            chunkBytes
+          )
+        : null;
+    return {
+      text: chunk.text,
+      startOffset: chunk.startOffset,
+      endOffset: chunk.endOffset,
+      nextCursor,
+      includedBytes: chunk.endOffset - chunk.startOffset,
+      completeness: {
+        status: nextCursor ? "partial" : "complete",
+        ...(nextCursor ? { reason: "response-budget" as const } : {}),
+        nextCursor,
+        originalBytes: chunk.totalBytes,
+        includedBytes: chunk.endOffset - chunk.startOffset,
+        contentRef: input.contentRef,
+        contentCursor: nextCursor
+      }
+    };
+  }
+
+  private registerSessionTimelineContentSource(
+    threadId: string,
+    rolloutPath: string,
+    metadata: { size: number; mtimeMs: number },
+    locator: SessionContentRefLocator
+  ): string {
+    if (!locator.callId) {
+      return `tlc_unresolved_${locator.itemId}`;
+    }
+    const contentRef = `tlc_${randomUUID().replace(/-/g, "")}`;
+    this.timelineContentSources.set(contentRef, {
+      kind: "session",
+      threadId,
+      turnId: locator.turnId,
+      itemId: locator.itemId,
+      callId: locator.callId,
+      sequence: locator.sequence,
+      field: locator.field,
+      rolloutPath,
+      sourceRevision: `${metadata.size}:${metadata.mtimeMs}`,
+      expiresAt: Date.now() + 15 * 60 * 1000
+    });
+    while (this.timelineContentSources.size > 2_000) {
+      const oldest = this.timelineContentSources.keys().next().value;
+      if (!oldest) break;
+      this.timelineContentSources.delete(oldest);
+    }
+    return contentRef;
+  }
+
+  private registerAppServerTimelineContentSource(
+    content: TimelineEventContentLocator,
+    identity: BrowserCodexEventEnvelope["event"]
+  ): string | undefined {
+    if (!content.turnId || !content.itemId) {
+      return undefined;
+    }
+    return this.registerAppServerItemContentSource(
+      content.threadId,
+      content.turnId,
+      content.itemId,
+      `${identity.generation ?? 0}:${identity.revision ?? 0}`
+    );
+  }
+
+  private registerAppServerItemContentSource(
+    threadId: string,
+    turnId: string,
+    itemId: string,
+    sourceRevision: string
+  ): string {
+    const contentRef = `tlc_${randomUUID().replace(/-/g, "")}`;
+    this.timelineContentSources.set(contentRef, {
+      kind: "app-server",
+      threadId,
+      turnId,
+      itemId,
+      field: "text",
+      sourceRevision,
+      expiresAt: Date.now() + 15 * 60 * 1000
+    });
+    return contentRef;
+  }
+
+  private async resolveTimelineContentSource(
+    source: TimelineContentSource
+  ): Promise<string | { reason: "source-revision" | "source-gap" }> {
+    if (source.kind === "session") {
+      let rolloutPath: string;
+      try {
+        rolloutPath = this.timelinePathPolicy.assertPathAllowed(source.rolloutPath);
+      } catch {
+        return { reason: "source-gap" };
+      }
+      const metadata = await stat(rolloutPath).catch(() => null);
+      const sourceRevision = metadata ? `${metadata.size}:${metadata.mtimeMs}` : null;
+      if (!metadata?.isFile() || sourceRevision !== source.sourceRevision) {
+        return { reason: "source-revision" };
+      }
+      const { lines, budgetExhausted } = await readBoundedJsonlLines(rolloutPath, {
+        maxLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
+        maxBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
+        maxElapsedMs: Math.max(SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS, 250)
+      });
+      if (budgetExhausted && !lines.length) {
+        return { reason: "source-gap" };
+      }
+      return sessionToolOutputFromLines(lines, source.callId) ?? { reason: "source-gap" };
+    }
+
+    const seenCursors = new Set<string>();
+    let cursor: string | null | undefined;
+    let scannedBytes = 0;
+    while (true) {
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          return { reason: "source-gap" };
+        }
+        seenCursors.add(cursor);
+      }
+      const page = await this.client.listThreadTurnItems({
+        threadId: source.threadId,
+        turnId: source.turnId,
+        cursor,
+        limit: 100
+      });
+      scannedBytes += utf8ByteLength(JSON.stringify(page));
+      if (scannedBytes > TIMELINE_RESPONSE_BYTE_BUDGET) {
+        return { reason: "source-gap" };
+      }
+      const item = page.items.find((candidate) => candidate.id === source.itemId);
+      if (item) {
+        if (
+          typeof item.generation === "number" &&
+          !source.sourceRevision.startsWith(`${item.generation}:`)
+        ) {
+          return { reason: "source-revision" };
+        }
+        return item.text;
+      }
+      const nextCursor = page.nextCursor ?? null;
+      if (!nextCursor) {
+        return { reason: "source-gap" };
+      }
+      if (seenCursors.has(nextCursor)) {
+        return { reason: "source-gap" };
+      }
+      cursor = nextCursor;
+    }
+  }
+
+  private timelineContentCursor(
+    contentRef: string,
+    sourceRevision: string,
+    byteOffset: number,
+    chunkBytes: number
+  ): string {
+    const key = `${contentRef}\u0000${sourceRevision}\u0000${byteOffset}\u0000${chunkBytes}`;
+    const existing = this.timelineContentCursorByPosition.get(key);
+    if (existing) {
+      return existing;
+    }
+    const cursor = `tlcc_${randomUUID().replace(/-/g, "")}`;
+    this.timelineContentCursorByPosition.set(key, cursor);
+    this.timelineContentCursors.set(cursor, { contentRef, sourceRevision, byteOffset, chunkBytes });
+    return cursor;
   }
 
   private async listThreadTurnItemsFromTurns(input: ListThreadTurnItemsInput): Promise<MobileTimelinePage> {
     let cursor: string | null | undefined;
     const pageLimit = Math.max(1, Math.min(input.limit ?? 30, 100));
+    const seenCursors = new Set<string>();
+    let scannedBytes = 0;
 
-    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+    while (true) {
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          return timelinePageWithCompleteness(
+            { items: [], nextCursor: cursor },
+            { status: "repair-required", reason: "cursor-loop", nextCursor: cursor }
+          );
+        }
+        seenCursors.add(cursor);
+      }
       const page = await this.client.listThreadTurns({
         threadId: input.threadId,
         cursor,
         limit: pageLimit
       });
+      scannedBytes += utf8ByteLength(JSON.stringify(page));
+      if (scannedBytes > TIMELINE_RESPONSE_BYTE_BUDGET) {
+        return timelinePageWithCompleteness(
+          { items: [], nextCursor: cursor ?? page.nextCursor ?? null },
+          {
+            status: "partial",
+            reason: "response-budget",
+            nextCursor: cursor ?? page.nextCursor ?? null
+          }
+        );
+      }
       const items = page.items.filter((item) => item.turnId === input.turnId);
       if (items.length) {
-        return {
+        return timelinePageWithCompleteness({
           items: typeof input.limit === "number" ? items.slice(0, input.limit) : items,
           nextCursor: null
-        };
+        });
       }
       if (!page.nextCursor) {
-        return { items: [], nextCursor: null };
+        return timelinePageWithCompleteness({ items: [], nextCursor: null });
+      }
+      if (seenCursors.has(page.nextCursor)) {
+        return timelinePageWithCompleteness(
+          { items: [], nextCursor: page.nextCursor },
+          { status: "repair-required", reason: "cursor-loop", nextCursor: page.nextCursor }
+        );
       }
       cursor = page.nextCursor;
     }
-
-    return { items: [], nextCursor: cursor ?? null };
   }
 
   async addEnvironment(input: AddEnvironmentInput): Promise<MobileEnvironmentAddResult> {
@@ -4092,7 +4526,131 @@ export class AppServerGateway {
   close(): void {
     this.peer.close();
     this.initialized = null;
+    this.timelineContentSources.clear();
+    this.timelineContentCursors.clear();
+    this.timelineContentCursorByPosition.clear();
   }
+}
+
+function clampTimelineContentChunkBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return TIMELINE_CONTENT_CHUNK_BYTE_BUDGET;
+  }
+  return Math.max(1, Math.min(Math.floor(value), TIMELINE_CONTENT_CHUNK_BYTE_BUDGET));
+}
+
+function repairRequiredContentChunk(
+  contentRef: string,
+  reason: "invalid-content-ref" | "source-revision" | "source-gap"
+): MobileTimelineContentChunk {
+  return {
+    text: "",
+    startOffset: 0,
+    endOffset: 0,
+    nextCursor: null,
+    includedBytes: 0,
+    completeness: {
+      status: "repair-required",
+      reason,
+      nextCursor: null,
+      includedBytes: 0,
+      contentRef,
+      contentCursor: null
+    }
+  };
+}
+
+function compactTimelineItemForHardBudget(
+  item: MobileTimelineItem,
+  fallbackContentRef: string | undefined
+): MobileTimelineItem {
+  const contentRef = item.completeness?.contentRef ?? fallbackContentRef;
+  const bounded = boundedTimelineText(item.text, {
+    maxBytes: 0,
+    ...(contentRef ? { contentRef } : {})
+  });
+  const completeness =
+    item.completeness?.status === "repair-required"
+      ? item.completeness
+      : bounded.completeness.status === "complete"
+        ? item.completeness
+        : bounded.completeness;
+  return {
+    id: item.id,
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+    ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {}),
+    ...(item.clientUserMessageId ? { clientUserMessageId: item.clientUserMessageId } : {}),
+    ...(typeof item.generation === "number" ? { generation: item.generation } : {}),
+    ...(typeof item.snapshotSequence === "number" ? { snapshotSequence: item.snapshotSequence } : {}),
+    role: item.role,
+    text: bounded.text,
+    ...(item.toolKind ? { toolKind: item.toolKind } : {}),
+    ...(item.actionKind ? { actionKind: item.actionKind } : {}),
+    ...(item.status ? { status: item.status } : {}),
+    ...(typeof item.added === "number" ? { added: item.added } : {}),
+    ...(typeof item.removed === "number" ? { removed: item.removed } : {}),
+    ...(completeness ? { completeness } : {})
+  };
+}
+
+function timelinePageWithCompleteness(
+  page: MobileTimelinePage,
+  completeness: TimelineCompleteness =
+    page.completeness ??
+    {
+      status: page.nextCursor ? "partial" : "complete",
+      ...(page.nextCursor ? { reason: "page-budget" as const } : {}),
+      nextCursor: page.nextCursor
+    }
+): MobileTimelinePage {
+  let includedBytes = page.includedBytes ?? 0;
+  let result: MobileTimelinePage = {
+    ...page,
+    includedBytes,
+    completeness: { ...completeness, includedBytes }
+  };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const nextBytes = utf8ByteLength(JSON.stringify(result));
+    if (nextBytes === includedBytes) {
+      break;
+    }
+    includedBytes = nextBytes;
+    result = {
+      ...result,
+      includedBytes,
+      completeness: { ...result.completeness!, includedBytes }
+    };
+  }
+  return result;
+}
+
+function timelineThreadWithCompleteness(detail: MobileThreadDetail): MobileThreadDetail {
+  const completeness: TimelineCompleteness =
+    detail.completeness ??
+    {
+      status: detail.nextCursor ? "partial" : "complete",
+      ...(detail.nextCursor ? { reason: "response-budget" as const } : {}),
+      nextCursor: detail.nextCursor
+    };
+  let includedBytes = detail.includedBytes ?? 0;
+  let result: MobileThreadDetail = {
+    ...detail,
+    includedBytes,
+    completeness: { ...completeness, includedBytes }
+  };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const nextBytes = utf8ByteLength(JSON.stringify(result));
+    if (nextBytes === includedBytes) {
+      break;
+    }
+    includedBytes = nextBytes;
+    result = {
+      ...result,
+      includedBytes,
+      completeness: { ...result.completeness!, includedBytes }
+    };
+  }
+  return result;
 }
 
 function createPeer(config: AppServerConfig): ManagedAppServerPeer {

@@ -14,6 +14,7 @@ import {
   __resetTextPreviewDiagnostics
 } from "../../src/web/components/cards/LongTextPreview";
 import { useStore } from "../../src/web/state/store";
+import { codex } from "../../src/web/api/endpoints";
 
 describe("Timeline", () => {
   beforeEach(() => {
@@ -268,6 +269,63 @@ describe("Timeline", () => {
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
   });
 
+  it("truncated 消息按 cursor 读取完整内容并替换 preview", async () => {
+    const user = userEvent.setup();
+    const readContent = vi.spyOn(codex, "readTimelineContent")
+      .mockResolvedValueOnce({
+        text: "完整内容第一段",
+        startOffset: 0,
+        endOffset: 21,
+        nextCursor: "cursor-2",
+        includedBytes: 21,
+        completeness: { status: "partial", nextCursor: "cursor-2" }
+      })
+      .mockResolvedValueOnce({
+        text: "，第二段",
+        startOffset: 21,
+        endOffset: 33,
+        nextCursor: null,
+        includedBytes: 12,
+        completeness: { status: "complete", nextCursor: null }
+      });
+
+    render(
+      <Timeline
+        threadId="thread-1"
+        entries={[
+          {
+            id: "agent-truncated",
+            turnId: "turn-1",
+            createdAt: 1,
+            completeness: {
+              status: "truncated",
+              reason: "item-budget",
+              originalBytes: 33,
+              includedBytes: 6,
+              contentRef: "tlc-agent"
+            },
+            body: { kind: "agent-message", text: "预览" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("内容已截断")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "读取完整内容" }));
+
+    expect(await screen.findByText("完整内容第一段，第二段")).toBeInTheDocument();
+    expect(readContent).toHaveBeenNthCalledWith(1, "thread-1", "tlc-agent", null);
+    expect(readContent).toHaveBeenNthCalledWith(2, "thread-1", "tlc-agent", "cursor-2");
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-truncated",
+        completeness: expect.objectContaining({ status: "complete" }),
+        body: { kind: "agent-message", text: "完整内容第一段，第二段" }
+      })
+    ]);
+    readContent.mockRestore();
+  });
+
   it("长文本 preview 使用有界扫描而不是 split 完整文本", () => {
     const split = vi.spyOn(String.prototype, "split");
     const longText = Array.from({ length: 1_000 }, (_value, index) => `line-${index}`).join("\n");
@@ -303,6 +361,90 @@ describe("Timeline", () => {
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
     expect(screen.getAllByText(/历史回复/).length).toBeLessThanOrEqual(80);
     expect(screen.queryAllByRole("button", { name: "复制代码" }).length).toBeLessThanOrEqual(2);
+  });
+
+  it("连续 activity 先合并为 render block 再参与窗口和 spacer 计算", () => {
+    const entries = [
+      ...Array.from({ length: 100 }, (_value, index) => ({
+        id: `agent-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+      })),
+      ...Array.from({ length: 100 }, (_value, index) => ({
+        id: `tool-${index}`,
+        turnId: "turn-activity",
+        createdAt: 100 + index,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "command",
+          tool: `command-${index}`,
+          status: "success" as const,
+          result: `result-${index}`
+        }
+      }))
+    ];
+
+    const { container } = render(<Timeline entries={entries} />);
+
+    const topSpacer = container.querySelector("[data-timeline-spacer='top']") as HTMLDivElement;
+    expect(topSpacer.style.minHeight).toBe("1722px");
+    expect(container.querySelectorAll("[data-timeline-row='true']")).toHaveLength(80);
+    expect(screen.getByRole("button", { name: /已运行 100 条命令/ })).toBeInTheDocument();
+  });
+
+  it("activity group 跨旧 entry window 边界时保持完整成员和稳定 block key", () => {
+    const entries = [
+      ...Array.from({ length: 140 }, (_value, index) => ({
+        id: `agent-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+      })),
+      ...Array.from({ length: 90 }, (_value, index) => ({
+        id: `activity-${index}`,
+        turnId: "turn-shared-activity",
+        createdAt: 140 + index,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "command",
+          tool: `npm test ${index}`,
+          status: "success" as const,
+          result: `passed ${index}`
+        }
+      }))
+    ];
+
+    const { container, rerender } = render(<Timeline entries={entries} />);
+    const activityRow = container.querySelector("[data-timeline-block-id*='turn-shared-activity']");
+    expect(activityRow).not.toBeNull();
+    expect(screen.getByRole("button", { name: /已运行 90 条命令/ })).toBeInTheDocument();
+
+    rerender(
+      <Timeline
+        entries={[
+          ...entries,
+          {
+            id: "activity-90",
+            turnId: "turn-shared-activity",
+            createdAt: 230,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "command",
+              tool: "npm test 90",
+              status: "success",
+              result: "passed 90"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /已运行 91 条命令/ })).toBeInTheDocument();
+    expect(container.querySelector("[data-timeline-block-id*='turn-shared-activity']")).not.toBeNull();
   });
 
   it("滚入顶部占位区域时扩展可见窗口，避免出现空白历史区域", () => {
@@ -377,7 +519,7 @@ describe("Timeline", () => {
 
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
 
-    scrollTop = 10_000;
+    scrollTop = 11_480;
     act(() => {
       fireEvent.scroll(scroller);
     });
@@ -386,7 +528,7 @@ describe("Timeline", () => {
     expect(screen.queryByText("历史回复 350")).not.toBeInTheDocument();
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(100);
 
-    scrollTop = 22_000;
+    scrollTop = 28_700;
     act(() => {
       fireEvent.scroll(scroller);
     });
@@ -433,7 +575,7 @@ describe("Timeline", () => {
       </div>
     );
     const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
-    let scrollTop = 9_000;
+    let scrollTop = 10_250;
     Object.defineProperty(scroller, "scrollTop", {
       configurable: true,
       get: () => scrollTop,
@@ -451,10 +593,409 @@ describe("Timeline", () => {
     });
 
     const bottomSpacer = container.querySelector("[data-timeline-spacer='bottom']") as HTMLDivElement;
-    expect(bottomSpacer.style.minHeight).toBe("5280px");
+    expect(bottomSpacer.style.minHeight).toBe("5830px");
     expect(bottomSpacer.style.minHeight).not.toBe("3960px");
 
     getBoundingClientRect.mockRestore();
+  });
+
+  it("同 identity 正文变化时更新 block version 并失效旧高度缓存", () => {
+    const entries = Array.from({ length: 120 }, (_value, index) => ({
+      id: `agent-version-${index}`,
+      turnId: `turn-version-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `版本一 ${index}` }
+    }));
+    const { container, rerender } = render(<Timeline entries={entries} />);
+    const before = container
+      .querySelector("[data-timeline-block-id='agent-version-119']")
+      ?.getAttribute("data-timeline-block-version");
+
+    rerender(
+      <Timeline
+        entries={entries.map((entry, index) =>
+          index === 119
+            ? { ...entry, body: { kind: "agent-message" as const, text: `版本二 ${index} ${"长正文".repeat(200)}` } }
+            : entry
+        )}
+      />
+    );
+
+    const after = container
+      .querySelector("[data-timeline-block-id='agent-version-119']")
+      ?.getAttribute("data-timeline-block-version");
+    expect(after).not.toBe(before);
+  });
+
+  it("动态高度参与 scroll offset 到 render block 的定位", () => {
+    const entries = Array.from({ length: 240 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      turnIndex: index,
+      createdAt: index,
+      body: {
+        kind: "agent-message" as const,
+        text: index >= 160 ? `超长历史回复 ${index}\n${"内容\n".repeat(80)}` : `历史回复 ${index}`
+      }
+    }));
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const text = this.textContent ?? "";
+        const match = text.match(/历史回复 (\d+)/);
+        const index = match ? Number(match[1]) : -1;
+        const height = index >= 160 ? 144 : 72;
+        return {
+          x: 0,
+          y: 0,
+          width: 360,
+          height,
+          top: 0,
+          right: 360,
+          bottom: height,
+          left: 0,
+          toJSON: () => ({})
+        };
+      });
+
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 9_000;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 600
+    });
+
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    scrollTop = 12_500;
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    expect(screen.getByText("历史回复 150")).toBeInTheDocument();
+    expect(screen.queryByText(/历史回复 239/)).not.toBeInTheDocument();
+    expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
+
+    getBoundingClientRect.mockRestore();
+  });
+
+  it("prepend 历史后按 render block identity 恢复 scroll anchor", () => {
+    const entries = Array.from({ length: 200 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 10_250;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 600
+    });
+
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    expect(screen.getByText("历史回复 125")).toBeInTheDocument();
+
+    const olderEntries = Array.from({ length: 10 }, (_value, index) => ({
+      id: `older-${index}`,
+      turnId: `older-turn-${index}`,
+      createdAt: -10 + index,
+      body: { kind: "agent-message" as const, text: `更早回复 ${index}` }
+    }));
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline entries={[...olderEntries, ...entries]} />
+      </div>
+    );
+
+    expect(scroller.scrollTop).toBe(11_070);
+    expect(screen.getByText("历史回复 125")).toBeInTheDocument();
+  });
+
+  it("长 Markdown、图片和 activity 混合滚动时每个 viewport 都挂载真实 block", () => {
+    const entries = [
+      ...Array.from({ length: 160 }, (_value, index) => ({
+        id: `message-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body:
+          index % 40 === 0
+            ? {
+                kind: "user-message" as const,
+                text: `图片提问 ${index}`,
+                status: "sent" as const,
+                imagePaths: [`/api/files/preview-${index}.png`]
+              }
+            : {
+                kind: "agent-message" as const,
+                text: index % 15 === 0 ? `超长 Markdown ${index}\n${"段落内容\n".repeat(120)}` : `历史回复 ${index}`
+              }
+      })),
+      ...Array.from({ length: 40 }, (_value, index) => ({
+        id: `mixed-activity-${index}`,
+        turnId: "turn-mixed-activity",
+        createdAt: 160 + index,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "command",
+          tool: `command-${index}`,
+          status: "success" as const,
+          result: `result-${index}`
+        }
+      }))
+    ];
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", {
+      configurable: true,
+      get: () => 640
+    });
+
+    for (const nextScrollTop of [0, 3_000, 7_000, 11_000]) {
+      scrollTop = nextScrollTop;
+      act(() => {
+        fireEvent.scroll(scroller);
+      });
+      const rows = container.querySelectorAll("[data-timeline-row='true']");
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBeLessThanOrEqual(80);
+      expect(Array.from(rows).some((row) => Boolean(row.textContent?.trim()))).toBe(true);
+    }
+
+    scrollTop = 20_000;
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    expect(screen.getByRole("button", { name: /已运行 40 条命令/ })).toBeInTheDocument();
+  });
+
+  it("锚点 block 被删除时优先恢复相邻 before block", () => {
+    const entries = Array.from({ length: 200 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 10_250;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 600 });
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    const olderEntries = Array.from({ length: 5 }, (_value, index) => ({
+      id: `older-${index}`,
+      turnId: `older-turn-${index}`,
+      createdAt: -5 + index,
+      body: { kind: "agent-message" as const, text: `更早回复 ${index}` }
+    }));
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline entries={[...olderEntries, ...entries.filter((entry) => entry.id !== "agent-125")]} />
+      </div>
+    );
+
+    expect(scroller.scrollTop).toBe(10_578);
+    expect(screen.getByText("历史回复 124")).toBeInTheDocument();
+  });
+
+  it("activity regroup 改变 block id 时按成员 identity 恢复 anchor", () => {
+    const headEntries = Array.from({ length: 120 }, (_value, index) => ({
+      id: `head-${index}`,
+      turnId: `head-turn-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `头部回复 ${index}` }
+    }));
+    const activityEntries = Array.from({ length: 20 }, (_value, index) => ({
+      id: `activity-${index}`,
+      turnId: "turn-regroup",
+      createdAt: 120 + index,
+      body: {
+        kind: "tool" as const,
+        toolKind: "command" as const,
+        server: "command",
+        tool: `command-${index}`,
+        status: "success" as const,
+        result: `result-${index}`
+      }
+    }));
+    const tailEntries = Array.from({ length: 100 }, (_value, index) => ({
+      id: `tail-${index}`,
+      turnId: `tail-turn-${index}`,
+      createdAt: 140 + index,
+      body: { kind: "agent-message" as const, text: `尾部回复 ${index}` }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={[...headEntries, ...activityEntries, ...tailEntries]} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 9_840;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 600 });
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+    expect(screen.getByRole("button", { name: /已运行 20 条命令/ })).toBeInTheDocument();
+
+    const olderEntries = Array.from({ length: 5 }, (_value, index) => ({
+      id: `older-${index}`,
+      turnId: `older-turn-${index}`,
+      createdAt: -5 + index,
+      body: { kind: "agent-message" as const, text: `更早回复 ${index}` }
+    }));
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline
+          entries={[
+            ...olderEntries,
+            ...headEntries,
+            {
+              id: "activity-before",
+              turnId: "turn-regroup",
+              createdAt: 119,
+              body: {
+                kind: "tool",
+                toolKind: "command",
+                server: "command",
+                tool: "command-before",
+                status: "success",
+                result: "result-before"
+              }
+            },
+            ...activityEntries,
+            ...tailEntries
+          ]}
+        />
+      </div>
+    );
+
+    expect(scroller.scrollTop).toBe(10_250);
+    expect(screen.getByRole("button", { name: /已运行 21 条命令/ })).toBeInTheDocument();
+  });
+
+  it("ResizeObserver 高度修正后保持 block intra-offset", () => {
+    let resizeCallback: ResizeObserverCallback | null = null;
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe(): void {}
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    let expanded = false;
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const height = this.dataset.timelineBlockId === "agent-110" && expanded ? 144 : 72;
+        return {
+          x: 0,
+          y: 0,
+          width: 360,
+          height,
+          top: 0,
+          right: 360,
+          bottom: height,
+          left: 0,
+          toJSON: () => ({})
+        };
+      });
+    const entries = Array.from({ length: 200 }, (_value, index) => ({
+      id: `agent-${index}`,
+      turnId: `turn-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `历史回复 ${index}` }
+    }));
+    const { container } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 10_250;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 600 });
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    expanded = true;
+    act(() => {
+      resizeCallback?.([], {} as ResizeObserver);
+    });
+
+    expect(scroller.scrollTop).toBe(10_322);
+
+    getBoundingClientRect.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("窗口化后仍渲染尾部系统消息、错误卡片和审批卡片", async () => {
@@ -522,6 +1063,88 @@ describe("Timeline", () => {
     const diagnostics = __getTimelineDerivationDiagnostics();
     expect(diagnostics.derivationRuns).toBe(1);
     expect(diagnostics.rowEntryScans).toBe(0);
+  });
+
+  it("1200+ entries 与长 activity run 保持 block 派生和挂载有界", () => {
+    __resetTimelineDerivationDiagnostics();
+    const entries = [
+      ...Array.from({ length: 1_200 }, (_value, index) => ({
+        id: `agent-scale-${index}`,
+        turnId: `turn-scale-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message" as const, text: `规模回复 ${index}` }
+      })),
+      ...Array.from({ length: 1_000 }, (_value, index) => ({
+        id: `activity-scale-${index}`,
+        turnId: "turn-scale-activity",
+        createdAt: 1_200 + index,
+        completeness:
+          index === 999
+            ? {
+                status: "truncated" as const,
+                reason: "item-budget" as const,
+                originalBytes: 4 * 1024 * 1024,
+                includedBytes: 64,
+                contentRef: "tlc-scale"
+              }
+            : undefined,
+        body: {
+          kind: "tool" as const,
+          toolKind: "command" as const,
+          server: "command",
+          tool: `command-${index}`,
+          status: "success" as const,
+          result: `result-${index}`
+        }
+      }))
+    ];
+
+    const { container } = render(<Timeline entries={entries} />);
+
+    expect(container.querySelectorAll("[data-timeline-row='true']")).toHaveLength(80);
+    expect(screen.getByRole("button", { name: /已运行 1000 条命令/ })).toBeInTheDocument();
+    expect((container.querySelector("[data-timeline-spacer='top']") as HTMLDivElement).style.minHeight).toBe(
+      `${1_121 * 82}px`
+    );
+    const diagnostics = __getTimelineDerivationDiagnostics();
+    expect(diagnostics.derivationRuns).toBe(1);
+    expect(diagnostics.rowEntryScans).toBe(0);
+    expect(diagnostics.inlineActivitySectionRuns).toBeLessThanOrEqual(1);
+  });
+
+  it("单个 entry 更新只重渲染对应 TimelineRow", () => {
+    const first = {
+      id: "agent-first",
+      turnId: "turn-1",
+      createdAt: 1,
+      body: { kind: "agent-message" as const, text: "first" }
+    };
+    const second = {
+      id: "agent-second",
+      turnId: "turn-2",
+      createdAt: 2,
+      body: { kind: "agent-message" as const, text: "second" }
+    };
+    const third = {
+      id: "agent-third",
+      turnId: "turn-3",
+      createdAt: 3,
+      body: { kind: "agent-message" as const, text: "third" }
+    };
+    const { rerender } = render(<Timeline entries={[first, second, third]} />);
+    __resetTimelineDerivationDiagnostics();
+
+    rerender(
+      <Timeline
+        entries={[
+          first,
+          { ...second, body: { ...second.body, text: "second updated" } },
+          third
+        ]}
+      />
+    );
+
+    expect(__getTimelineDerivationDiagnostics().timelineRowRenderRuns).toBe(1);
   });
 
   it("无关 timeline 更新不会重新派生未变化的长 Markdown、diff、tool 和 activity detail", async () => {
@@ -1327,7 +1950,7 @@ describe("Timeline", () => {
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
-  it("repair 后补活动按 store 语义顺序渲染在最终助手回复之前", () => {
+  it("repair 输入按权威来源顺序渲染且不依赖 createdAt 重排", () => {
     useStore.getState().appendEntries("thread-1", [
       {
         id: "user-1",
@@ -1336,15 +1959,9 @@ describe("Timeline", () => {
         body: { kind: "user-message", text: "分析 bug", status: "sent" }
       },
       {
-        id: "agent-final",
-        turnId: "turn-1",
-        createdAt: 3,
-        body: { kind: "agent-message", text: "最终结论" }
-      },
-      {
         id: "tool-repaired",
         turnId: "turn-1",
-        createdAt: 2,
+        createdAt: 3,
         body: {
           kind: "tool",
           toolKind: "command",
@@ -1353,6 +1970,12 @@ describe("Timeline", () => {
           status: "success",
           result: "src/web/state/store.ts"
         }
+      },
+      {
+        id: "agent-final",
+        turnId: "turn-1",
+        createdAt: 2,
+        body: { kind: "agent-message", text: "最终结论" }
       }
     ]);
 
