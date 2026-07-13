@@ -373,6 +373,17 @@ describe("ThreadPage", () => {
       nextCursor: "turn-older",
       updatedAt: Date.now()
     });
+    mockListTurnsBefore.mockResolvedValue({
+      items: [
+        {
+          id: "recent-user",
+          turnId: "turn-newest",
+          role: "user",
+          text: "Recent message"
+        }
+      ],
+      nextCursor: "turn-older"
+    });
 
     render(<ThreadPage />);
 
@@ -385,32 +396,55 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should preserve the message page cursor when the first page has no visible items", async () => {
+    mockListTurnsBefore.mockResolvedValue({ items: [], nextCursor: "older-hidden-items" });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith("thread-1", [], "older-hidden-items");
+    });
+  });
+
+  it("should keep metadata usable when the initial message page fails", async () => {
+    mockListTurnsBefore.mockRejectedValue(new Error("message page unavailable"));
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith("thread-1", [], null);
+    });
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+  });
+
   it("should preserve trailing snapshot activity source order and timestamps", async () => {
+    const timeline = [
+      { id: "user-1", turnId: "turn-1", role: "user", text: "分析 timeline" },
+      { id: "agent-final", turnId: "turn-1", role: "agent", text: "最终结论" },
+      {
+        id: "cmd-1",
+        turnId: "turn-1",
+        role: "tool",
+        text: "src/app/threads/[threadId]/page.tsx",
+        toolKind: "command",
+        actionKind: "read",
+        server: "command",
+        tool: "sed -n '1,220p' src/app/threads/[threadId]/page.tsx",
+        status: "success"
+      }
+    ];
     mockReadThread.mockResolvedValue({
       id: "thread-1",
       cwd: "C:/test",
       title: "Test Thread",
       modelProvider: "claude-opus-4",
       status: "idle",
-      timeline: [
-        { id: "user-1", turnId: "turn-1", role: "user", text: "分析 timeline" },
-        { id: "agent-final", turnId: "turn-1", role: "agent", text: "最终结论" },
-        {
-          id: "cmd-1",
-          turnId: "turn-1",
-          role: "tool",
-          text: "src/app/threads/[threadId]/page.tsx",
-          toolKind: "command",
-          actionKind: "read",
-          server: "command",
-          tool: "sed -n '1,220p' src/app/threads/[threadId]/page.tsx",
-          status: "success"
-        }
-      ],
+      timeline,
       lastTurnId: "turn-1",
       nextCursor: null,
       updatedAt: Date.now()
     });
+    mockListTurnsBefore.mockResolvedValue({ items: timeline, nextCursor: null });
 
     render(<ThreadPage />);
 
@@ -669,7 +703,7 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should merge bounded snapshot repair while preserving the loaded history cursor", async () => {
+  it("should merge bounded snapshot repair while preserving an explicit reached-beginning cursor", async () => {
     const initialDetail = {
       id: "thread-1",
       cwd: "C:/test",
@@ -692,19 +726,9 @@ describe("ThreadPage", () => {
       nextCursor: null,
       updatedAt: Date.now()
     };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    let pageCount = 0;
-    mockListTurnsBefore.mockImplementation(() => {
-      pageCount += 1;
-      return Promise.resolve(pageCount === 1
-        ? { items: initialDetail.timeline, nextCursor: "initial-older" }
-        : { items: repairDetail.timeline, nextCursor: "repair-older" });
-    });
-    mockThreadState.mockReturnValue({
+    mockReadThread.mockResolvedValue(initialDetail);
+    mockListTurnsBefore.mockResolvedValue({ items: initialDetail.timeline, nextCursor: "initial-older" });
+    let threadState = {
       entries: [
         {
           id: "cached-1",
@@ -717,496 +741,36 @@ describe("ThreadPage", () => {
       mode: "build",
       running: false,
       activeTurnId: null,
-      repairRequestedAt: 123,
+      repairRequestedAt: null as number | null,
       plan: [],
-      cursor: "stale-older",
-      reachedBeginning: false
+      cursor: null,
+      reachedBeginning: true
+    };
+    mockThreadState.mockImplementation(() => threadState);
+
+    const { rerender } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+        "thread-1",
+        [expect.objectContaining({ id: "cached-1" })],
+        "initial-older"
+      );
     });
 
-    render(<ThreadPage />);
+    mockReadThread.mockResolvedValue(repairDetail);
+    mockListTurnsBefore.mockResolvedValue({ items: repairDetail.timeline, nextCursor: "repair-older" });
+    threadState = { ...threadState, repairRequestedAt: 123 };
+    rerender(<ThreadPage />);
 
     await waitFor(() => {
       expect(mockMergeThreadEntries).toHaveBeenCalledWith(
         "thread-1",
         [expect.objectContaining({ id: "repair-1" })],
-        "stale-older"
+        null
       );
     });
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
-  });
-
-  it.skip("should not continue full-detail repair after an active repaired snapshot without output", async () => {
-    vi.useFakeTimers();
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Still Running",
-      modelProvider: "claude-opus-4",
-      status: "active",
-      timeline: [{ id: "user-active", turnId: "turn-active", role: "user", text: "waiting" }],
-      lastTurnId: "turn-active",
-      updatedAt: Date.now()
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    mockThreadState.mockReturnValue({
-      entries: [],
-      pendingApprovals: [],
-      mode: "build",
-      running: true,
-      activeTurnId: "turn-active",
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    render(<ThreadPage />);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(mockSetThreadEntries).toHaveBeenCalledWith(
-      "thread-1",
-      [expect.objectContaining({ id: "user-active" })],
-      null
-    );
-    mockRequestSnapshotRepair.mockClear();
-
-    act(() => {
-      vi.advanceTimersByTime(2600);
-    });
-    vi.useRealTimers();
-
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
-  });
-
-  it.skip("should not continue full-detail repair after an active repaired snapshot with partial output", async () => {
-    vi.useFakeTimers();
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Still Running",
-      modelProvider: "claude-opus-4",
-      status: "active",
-      timeline: [
-        { id: "user-active", turnId: "turn-active", role: "user", text: "waiting" },
-        { id: "agent-active", turnId: "turn-active", role: "agent", text: "partial" }
-      ],
-      lastTurnId: "turn-active",
-      updatedAt: Date.now()
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    mockThreadState.mockReturnValue({
-      entries: [
-        {
-          id: "agent-active",
-          turnId: "turn-active",
-          createdAt: Date.now(),
-          body: { kind: "agent-message", text: "partial" }
-        }
-      ],
-      pendingApprovals: [],
-      mode: "build",
-      running: true,
-      activeTurnId: "turn-active",
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    render(<ThreadPage />);
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(mockSetThreadEntries).toHaveBeenCalledWith(
-      "thread-1",
-      expect.arrayContaining([expect.objectContaining({ id: "agent-active" })]),
-      null
-    );
-    mockRequestSnapshotRepair.mockClear();
-
-    act(() => {
-      vi.advanceTimersByTime(2600);
-    });
-    vi.useRealTimers();
-
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
-  });
-
-  it.skip("should merge turn item activity into snapshot repair when the main timeline omits command items", async () => {
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Repaired",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [{ id: "agent-1", turnId: "turn-new", role: "agent", text: "完成了。" }],
-      lastTurnId: "turn-new",
-      nextCursor: null,
-      updatedAt: Date.now()
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    mockListTurnItems.mockResolvedValue({
-      items: [
-        { id: "agent-1", turnId: "turn-new", role: "agent", text: "完成了。" },
-        {
-          id: "cmd-1",
-          turnId: "turn-new",
-          role: "tool",
-          text: "tests passed",
-          toolKind: "command",
-          actionKind: "command",
-          server: "command",
-          tool: "npm test",
-          status: "success"
-        },
-        {
-          id: "read-1",
-          turnId: "turn-new",
-          role: "tool",
-          text: "src/app.ts",
-          toolKind: "command",
-          actionKind: "read",
-          server: "command",
-          tool: "sed -n '1,80p' src/app.ts",
-          status: "success"
-        }
-      ],
-      nextCursor: null
-    });
-    mockThreadState.mockReturnValue({
-      entries: [],
-      pendingApprovals: [],
-      mode: "build",
-      running: false,
-      activeTurnId: null,
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    render(<ThreadPage />);
-
-    await waitFor(() => {
-      expect(mockListTurnItems).toHaveBeenCalledWith("thread-1", "turn-new", undefined, 100);
-    });
-    await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
-        "thread-1",
-        [
-          expect.objectContaining({ id: "agent-1" })
-        ],
-        null,
-        [
-          expect.objectContaining({ id: "agent-1" }),
-          expect.objectContaining({
-            id: "cmd-1",
-            body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "command", tool: "npm test" })
-          }),
-          expect.objectContaining({
-            id: "read-1",
-            body: expect.objectContaining({ kind: "tool", toolKind: "command", actionKind: "read" })
-          })
-        ]
-      );
-    });
-    expect(mockInvalidateTimelineEventThread).toHaveBeenCalledWith("thread-1");
-    expect(mockInvalidateTimelineDelivery).toHaveBeenCalledWith("thread-1", 7);
-    expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
-  });
-
-  it.skip("should save partial turn detail continuation and resume it on the next top scroll", async () => {
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      nextCursor: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      ...initialDetail,
-      title: "Repaired",
-      lastTurnId: "turn-new",
-      timeline: [{ id: "agent-1", turnId: "turn-new", role: "agent", text: "preview" }]
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    let itemPageCall = 0;
-    mockListTurnItems.mockImplementation(async (_threadId, turnId, cursor) => {
-      itemPageCall += 1;
-      if (itemPageCall === 1) {
-        return {
-          items: [{ id: "agent-1", turnId, role: "agent", text: "preview" }],
-          nextCursor: "detail-next",
-          includedBytes: 1_500_000
-        };
-      }
-      if (itemPageCall === 2) {
-        return {
-          items: [{ id: "tool-deferred", turnId, role: "tool", text: "deferred" }],
-          nextCursor: "detail-end",
-          includedBytes: 1_000_000
-        };
-      }
-      expect(cursor).toBe("detail-next");
-      return {
-        items: [{ id: "tool-deferred", turnId, role: "tool", text: "deferred" }],
-        nextCursor: null,
-        includedBytes: 1_000_000
-      };
-    });
-    mockThreadState.mockReturnValue({
-      entries: [],
-      pendingApprovals: [],
-      mode: "build",
-      running: false,
-      activeTurnId: null,
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    const { container } = render(<ThreadPage />);
-
-    await waitFor(() => expect(mockListTurnItems).toHaveBeenCalledTimes(2));
-    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
-    Object.defineProperty(scroller, "scrollTop", { configurable: true, value: 0, writable: true });
-    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1_000 });
-    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 500 });
-    fireEvent.scroll(scroller);
-
-    await waitFor(() => expect(mockListTurnItems).toHaveBeenCalledTimes(3));
-    expect(mockMergeThreadEntries).toHaveBeenCalledWith(
-      "thread-1",
-      [expect.objectContaining({ id: "tool-deferred" })],
-      null
-    );
-  });
-
-  it.skip("should preserve repaired turn item detail source order", async () => {
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Repaired",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [
-        { id: "user-1", turnId: "turn-new", role: "user", text: "分析 bug" },
-        { id: "agent-1", turnId: "turn-new", role: "agent", text: "最终结论" }
-      ],
-      lastTurnId: "turn-new",
-      nextCursor: null,
-      updatedAt: Date.now()
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    mockListTurnItems.mockResolvedValue({
-      items: [
-        { id: "agent-1", turnId: "turn-new", role: "agent", text: "最终结论" },
-        {
-          id: "cmd-1",
-          turnId: "turn-new",
-          role: "tool",
-          text: "tests passed",
-          toolKind: "command",
-          actionKind: "command",
-          server: "command",
-          tool: "npm test",
-          status: "success"
-        }
-      ],
-      nextCursor: null
-    });
-    mockThreadState.mockReturnValue({
-      entries: [],
-      pendingApprovals: [],
-      mode: "build",
-      running: false,
-      activeTurnId: null,
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    render(<ThreadPage />);
-
-    await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
-        "thread-1",
-        [
-          expect.objectContaining({ id: "user-1" }),
-          expect.objectContaining({ id: "agent-1" })
-        ],
-        null,
-        [
-          expect.objectContaining({ id: "agent-1" }),
-          expect.objectContaining({
-            id: "cmd-1",
-            body: expect.objectContaining({ kind: "tool", toolKind: "command", tool: "npm test" })
-          })
-        ]
-      );
-    });
-  });
-
-  it.skip("should preserve repaired detail order when item details include the user", async () => {
-    const initialDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Initial",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [],
-      lastTurnId: null,
-      updatedAt: Date.now()
-    };
-    const repairDetail = {
-      id: "thread-1",
-      cwd: "C:/test",
-      title: "Repaired",
-      modelProvider: "claude-opus-4",
-      status: "idle",
-      timeline: [
-        { id: "user-1", turnId: "turn-new", role: "user", text: "分析目标模式" },
-        { id: "agent-1", turnId: "turn-new", role: "agent", text: "方案已经整理好了。" }
-      ],
-      lastTurnId: "turn-new",
-      nextCursor: null,
-      updatedAt: Date.now()
-    };
-    let readCount = 0;
-    mockReadThread.mockImplementation(() => {
-      readCount += 1;
-      return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
-    });
-    mockListTurnItems.mockResolvedValue({
-      items: [
-        { id: "user-1", turnId: "turn-new", role: "user", text: "分析目标模式" },
-        { id: "agent-1", turnId: "turn-new", role: "agent", text: "方案已经整理好了。" },
-        {
-          id: "cmd-1",
-          turnId: "turn-new",
-          role: "tool",
-          text: "src/app/threads/[threadId]/page.tsx",
-          toolKind: "command",
-          actionKind: "read",
-          server: "command",
-          tool: "sed -n '1,220p' src/app/threads/[threadId]/page.tsx",
-          status: "success"
-        },
-        {
-          id: "cmd-2",
-          turnId: "turn-new",
-          role: "tool",
-          text: "src/web/state/store.ts",
-          toolKind: "command",
-          actionKind: "search",
-          server: "command",
-          tool: "rg timeline src",
-          status: "success"
-        }
-      ],
-      nextCursor: null
-    });
-    mockThreadState.mockReturnValue({
-      entries: [],
-      pendingApprovals: [],
-      mode: "build",
-      running: false,
-      activeTurnId: null,
-      repairRequestedAt: 123,
-      plan: [],
-      cursor: null,
-      reachedBeginning: false
-    });
-
-    render(<ThreadPage />);
-
-    await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenLastCalledWith(
-        "thread-1",
-        [
-          expect.objectContaining({ id: "user-1" }),
-          expect.objectContaining({ id: "agent-1" })
-        ],
-        null,
-        [
-          expect.objectContaining({ id: "user-1" }),
-          expect.objectContaining({ id: "agent-1" }),
-          expect.objectContaining({ id: "cmd-1" }),
-          expect.objectContaining({ id: "cmd-2" })
-        ]
-      );
-    });
   });
 
   it("should render timeline with multiple entries", async () => {
@@ -2421,6 +1985,11 @@ describe("ThreadPage", () => {
   });
 
   it("should keep scroll anchor when older history is prepended", async () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    });
     mockThreadState.mockReturnValue({
       entries: [
         {
@@ -2472,16 +2041,16 @@ describe("ThreadPage", () => {
       expect(mockListTurnsBefore).toHaveBeenCalled();
     });
     scrollHeight = 1400;
-    act(() => {
+    await act(async () => {
       resolvePage?.({
         items: [{ id: "older", role: "user", text: "Older message" }],
         nextCursor: "turn-5"
       });
+      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(scroller.scrollTop).toBe(400);
-    });
+    expect(scroller.scrollTop).toBe(400);
+    expect(animationFrames).toHaveLength(0);
   });
 
   it("should preserve paginated activity before the final assistant message with stable timestamps", async () => {
@@ -2754,7 +2323,7 @@ describe("ThreadPage", () => {
     expect(screen.getByRole("button", { name: /跳到最新/ })).toBeInTheDocument();
   });
 
-  it("should keep following timeline tail when live delta arrives at bottom", async () => {
+  it("should keep following timeline tail when the existing last entry grows", async () => {
     const baseThread = {
       entries: Array.from({ length: 120 }, (_value, index) => ({
         id: `entry-${index}`,
@@ -2795,15 +2364,11 @@ describe("ThreadPage", () => {
     fireEvent.scroll(scroller);
     threadState = {
       ...baseThread,
-      entries: [
-        ...baseThread.entries,
-        {
-          id: "agent-live-delta",
-          turnId: "turn-active",
-          createdAt: 121,
-          body: { kind: "agent-message" as const, text: "live delta" }
-        }
-      ]
+      entries: baseThread.entries.map((entry) =>
+        entry.id === "entry-119"
+          ? { ...entry, body: { kind: "agent-message" as const, text: `${entry.body.text}\nstreamed delta` } }
+          : entry
+      )
     };
     scrollHeight = 8_712;
     rerender(<ThreadPage />);
@@ -4988,10 +4553,12 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("输入消息"), {
-      target: { value: "missing live output" }
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText("输入消息"), {
+        target: { value: "missing live output" }
+      });
     });
-    await waitFor(() => expect(screen.getByLabelText("发送")).toBeEnabled());
+    expect(screen.getByLabelText("发送")).toBeEnabled();
     vi.useFakeTimers();
     await act(async () => {
       fireEvent.click(screen.getByLabelText("发送"));
@@ -5408,6 +4975,12 @@ describe("ThreadPage", () => {
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
     expect(mockRollbackThread).not.toHaveBeenCalled();
     mockSetThreadEntries.mockClear();
+    mockListTurnsBefore.mockResolvedValue({
+      items: [
+        { id: "auth-user", turnId: "turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
+      ],
+      nextCursor: null
+    });
 
     resolveInitialRead({
       id: "thread-1",

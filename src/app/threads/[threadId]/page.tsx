@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoints";
@@ -13,8 +13,7 @@ import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
 import {
   repairReconstructedTimelineEntries,
-  threadDetailEntries,
-  threadDetailEntriesWithTurnItems
+  threadDetailEntries
 } from "../../../web/state/timeline-adapter";
 import {
   DEFAULT_COLLABORATION_MODEL,
@@ -80,7 +79,7 @@ export default function ThreadPage(): JSX.Element {
   const threadContextUsage = useStore((s) => s.threads[threadId]?.contextUsage ?? null);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
-  const lastEntryId = useStore((s) => s.threads[threadId]?.entries.at(-1)?.id ?? null);
+  const lastEntry = useStore((s) => s.threads[threadId]?.entries.at(-1) ?? null);
   const compactCompletionSeen = useStore((s) => threadHasCompactCompletion(s.threads[threadId]));
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const wsState = useStore((s) => s.wsState);
@@ -119,13 +118,12 @@ export default function ThreadPage(): JSX.Element {
   const requestCoordinatorRef = useRef(createRequestCoordinator());
   const invalidatedRepairSignalsRef = useRef(new Set<string>());
   const loadingPageCursorsRef = useRef(new Set<string>());
+  const pendingPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
   const streamDisconnectedRepairKeysRef = useRef(new Set<string>());
   const repairRetryTimerRef = useRef<number | null>(null);
-  const detailContinuationRef = useRef<{ detail: ThreadDetail; cursor: string } | null>(null);
-  const loadingDetailContinuationRef = useRef(false);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -175,8 +173,6 @@ export default function ThreadPage(): JSX.Element {
     streamDisconnectedRepairKeysRef.current.clear();
     setCompactPending(false);
     clearRepairRetryTimer();
-    detailContinuationRef.current = null;
-    loadingDetailContinuationRef.current = false;
     return clearRepairRetryTimer;
   }, [threadId, clearRepairRetryTimer]);
 
@@ -339,22 +335,20 @@ export default function ThreadPage(): JSX.Element {
     setLoading(true);
     (async () => {
       try {
-        const [td, initialPage] = await Promise.all([
-          requestCoordinatorRef.current.dedupeRequest(
-            `thread:${threadId}:detail`,
-            () => codex.readThread(threadId)
-          ).catch((err) => recoverInitialThreadDetail(threadId, err)),
-          requestCoordinatorRef.current.dedupeRequest(
-            `thread:${threadId}:turns:initial`,
-            () => codex.listTurnsBefore(threadId, null)
-          )
-        ]);
+        const td = await requestCoordinatorRef.current.dedupeRequest(
+          `thread:${threadId}:detail`,
+          () => codex.readThread(threadId)
+        ).catch((err) => recoverInitialThreadDetail(threadId, err));
+        const initialPage = await requestCoordinatorRef.current.dedupeRequest(
+          `thread:${threadId}:turns:initial`,
+          () => codex.listTurnsBefore(threadId, null)
+        ).catch(() => null);
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail({
           ...td,
-          timeline: initialPage.items.length ? initialPage.items : td.timeline,
-          nextCursor: initialPage.items.length ? (initialPage.nextCursor ?? null) : td.nextCursor
+          timeline: initialPage ? initialPage.items : td.timeline,
+          nextCursor: initialPage ? (initialPage.nextCursor ?? null) : td.nextCursor
         }, "replace");
       } catch (err) {
         if (isRequestAbort(err)) return;
@@ -399,8 +393,8 @@ export default function ThreadPage(): JSX.Element {
           requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
-        const currentCursor = useStore.getState().threads[threadId]?.cursor ?? page.nextCursor ?? null;
-        detailContinuationRef.current = null;
+        const currentThread = useStore.getState().threads[threadId];
+        const currentCursor = currentThread ? currentThread.cursor : (page.nextCursor ?? null);
         applyThreadDetail({ ...td, timeline: page.items, nextCursor: currentCursor }, "merge");
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
@@ -506,7 +500,16 @@ export default function ThreadPage(): JSX.Element {
     if (atBottomRef.current) {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
-  }, [loading, lastEntryId]);
+  }, [loading, lastEntry]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    const anchor = pendingPrependAnchorRef.current;
+    if (!scroller || !anchor) return;
+    if (restorePrependScrollAnchor(scroller, anchor.scrollHeight, anchor.scrollTop)) {
+      pendingPrependAnchorRef.current = null;
+    }
+  }, [lastEntry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -533,34 +536,6 @@ export default function ThreadPage(): JSX.Element {
       setShowJumpLatest(!atBottomRef.current);
 
       const currentThread = useStore.getState().threads[threadId];
-      const detailContinuation = detailContinuationRef.current;
-      if (el.scrollTop < 64 && detailContinuation && !loadingDetailContinuationRef.current) {
-        loadingDetailContinuationRef.current = true;
-        try {
-          const sources = await threadDetailEntriesWithTurnItems(
-            detailContinuation.detail,
-            threadId,
-            codex.listTurnItems,
-            { cursor: detailContinuation.cursor }
-          );
-          if (sources.detailCompleteness.status === "repair-required") {
-            detailContinuationRef.current = null;
-            requestSnapshotRepair(threadId, {
-              reason: "timeline-gap",
-              turnId: detailContinuation.detail.lastTurnId
-            });
-          } else {
-            mergeThreadEntries(threadId, sources.detailEntries, currentThread?.cursor ?? null);
-            const nextCursor = sources.detailCompleteness.nextCursor;
-            detailContinuationRef.current = nextCursor
-              ? { detail: detailContinuation.detail, cursor: nextCursor }
-              : null;
-          }
-        } finally {
-          loadingDetailContinuationRef.current = false;
-        }
-        return;
-      }
       if (el.scrollTop < 64 && currentThread && !currentThread.reachedBeginning && currentThread.cursor) {
         const cursor = currentThread.cursor;
         const pageKey = `${threadId}\u0001${cursor}`;
@@ -580,8 +555,13 @@ export default function ThreadPage(): JSX.Element {
             ),
             "pagination"
           );
+          pendingPrependAnchorRef.current = extra.length
+            ? { scrollHeight: previousScrollHeight, scrollTop: previousScrollTop }
+            : null;
           prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
-          restorePrependScrollAnchor(el, previousScrollHeight, previousScrollTop);
+          if (extra.length && restorePrependScrollAnchor(el, previousScrollHeight, previousScrollTop)) {
+            pendingPrependAnchorRef.current = null;
+          }
         } catch {
           // ignore page load failure
         } finally {
@@ -589,7 +569,7 @@ export default function ThreadPage(): JSX.Element {
         }
       }
     },
-    [threadId, prependEntries, mergeThreadEntries, requestSnapshotRepair]
+    [threadId, prependEntries]
   );
 
   const onSend = useCallback(
@@ -2215,21 +2195,16 @@ function restorePrependScrollAnchor(
   scroller: HTMLDivElement,
   previousScrollHeight: number,
   previousScrollTop: number
-): void {
+): boolean {
   if (scroller.dataset.timelineAnchorManaged === "true") {
-    return;
+    return true;
   }
-  const win = scroller.ownerDocument.defaultView;
-  const schedule =
-    win && typeof win.requestAnimationFrame === "function"
-      ? (callback: () => void) => win.requestAnimationFrame(() => callback())
-      : (callback: () => void) => (win ?? window).setTimeout(callback, 0);
-  schedule(() => {
-    const addedHeight = scroller.scrollHeight - previousScrollHeight;
-    if (addedHeight > 0) {
-      scroller.scrollTop = previousScrollTop + addedHeight;
-    }
-  });
+  const addedHeight = scroller.scrollHeight - previousScrollHeight;
+  if (addedHeight > 0) {
+    scroller.scrollTop = previousScrollTop + addedHeight;
+    return true;
+  }
+  return false;
 }
 
 function uniqueTimelineId(prefix: string): string {
