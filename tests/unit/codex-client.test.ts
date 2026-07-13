@@ -3242,7 +3242,7 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("legacy 会话仅回退到固定三个 turn 的游标页", async () => {
+  it("legacy 会话仅回退到固定一个 turn 的游标页", async () => {
     const peer = new FakePeer();
     const originalRequest = peer.request.bind(peer);
     peer.request = async (method, params) => {
@@ -3261,11 +3261,53 @@ describe("CodexAppServerClient", () => {
       params: {
         threadId: "thread-1",
         cursor: "legacy-cursor",
-        limit: 3,
+        limit: 1,
         sortDirection: "desc",
         itemsView: "full"
       }
     });
+  });
+
+  it("legacy 单个 turn 的大量 items 仍按 item limit 分页", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        throw new Error("thread/items/list is not supported yet");
+      }
+      if (method === "thread/turns/list") {
+        return {
+          data: [{
+            id: "turn-large",
+            itemsView: { type: "complete" },
+            status: { type: "completed" },
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: Array.from({ length: 80 }, (_, index) => ({
+              type: "agentMessage",
+              id: `large-${index}`,
+              text: `item ${index}`,
+              phase: "final",
+              memoryCitation: null
+            }))
+          }],
+          nextCursor: "older-turn",
+          backwardsCursor: null
+        };
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    const first = await client.listThreadTurns({ threadId: "thread-1", limit: 30 });
+    const second = await client.listThreadTurns({ threadId: "thread-1", cursor: first.nextCursor, limit: 30 });
+
+    expect(first.items).toHaveLength(30);
+    expect(second.items).toHaveLength(30);
+    expect(first.nextCursor).toContain("legacy-thread-items");
+    expect(second.nextCursor).toContain("legacy-thread-items");
   });
 
   it("分页读取 turns 时显式请求 desc 并返回页内正序 timeline", async () => {

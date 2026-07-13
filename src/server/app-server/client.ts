@@ -302,13 +302,43 @@ import { createTurnUserInput } from "./user-input";
 
 const DEFAULT_TIMELINE_PAGE_LIMIT = 30;
 const MAX_TIMELINE_PAGE_LIMIT = 100;
-const LEGACY_THREAD_TURN_PAGE_LIMIT = 3;
+const LEGACY_THREAD_TURN_PAGE_LIMIT = 1;
+const LEGACY_ITEM_CURSOR_KIND = "legacy-thread-items";
+
+type LegacyItemCursor = {
+  kind: typeof LEGACY_ITEM_CURSOR_KIND;
+  turnCursor: string | null;
+  itemOffset: number;
+};
 
 function timelinePageLimit(limit: number | null | undefined): number {
   if (typeof limit !== "number" || !Number.isFinite(limit)) {
     return DEFAULT_TIMELINE_PAGE_LIMIT;
   }
   return Math.max(1, Math.min(Math.floor(limit), MAX_TIMELINE_PAGE_LIMIT));
+}
+
+function parseLegacyItemCursor(cursor: string | null | undefined): LegacyItemCursor | null {
+  if (!cursor) return null;
+  try {
+    const parsed = JSON.parse(cursor) as Partial<LegacyItemCursor>;
+    if (
+      parsed.kind === LEGACY_ITEM_CURSOR_KIND &&
+      (typeof parsed.turnCursor === "string" || parsed.turnCursor === null) &&
+      typeof parsed.itemOffset === "number" &&
+      Number.isInteger(parsed.itemOffset) &&
+      parsed.itemOffset >= 0
+    ) {
+      return parsed as LegacyItemCursor;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function legacyItemCursor(turnCursor: string | null, itemOffset: number): string {
+  return JSON.stringify({ kind: LEGACY_ITEM_CURSOR_KIND, turnCursor, itemOffset } satisfies LegacyItemCursor);
 }
 
 export type AppServerPeer = {
@@ -2538,14 +2568,18 @@ export class CodexAppServerClient {
   }
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
+    const legacyCursor = parseLegacyItemCursor(input.cursor);
     const params: ThreadItemsListParams = {
       threadId: input.threadId,
-      cursor: input.cursor,
+      cursor: legacyCursor ? undefined : input.cursor,
       limit: timelinePageLimit(input.limit),
       sortDirection: "desc"
     };
     let response: ThreadItemsListResponse;
     try {
+      if (legacyCursor) {
+        throw new Error("thread/items/list is not supported yet");
+      }
       response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
     } catch (error) {
       if (!isUnsupportedThreadItemsListError(error)) {
@@ -2553,14 +2587,21 @@ export class CodexAppServerClient {
       }
       const legacyResponse = (await this.peer.request("thread/turns/list", {
         threadId: input.threadId,
-        cursor: input.cursor,
+        cursor: legacyCursor?.turnCursor ?? input.cursor,
         limit: Math.min(timelinePageLimit(input.limit), LEGACY_THREAD_TURN_PAGE_LIMIT),
         sortDirection: "desc",
         itemsView: "full"
       } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+      const pageLimit = timelinePageLimit(input.limit);
+      const itemOffset = legacyCursor?.itemOffset ?? 0;
+      const legacyItems = chronologicalTurnsFromDescPage(legacyResponse.data).flatMap((turn) => timelineItemsForTurn(turn));
+      const items = legacyItems.slice(itemOffset, itemOffset + pageLimit);
+      const nextOffset = itemOffset + items.length;
       return {
-        items: chronologicalTurnsFromDescPage(legacyResponse.data).flatMap((turn) => timelineItemsForTurn(turn)),
-        nextCursor: legacyResponse.nextCursor ?? null
+        items,
+        nextCursor: nextOffset < legacyItems.length
+          ? legacyItemCursor(legacyCursor?.turnCursor ?? input.cursor ?? null, nextOffset)
+          : (legacyResponse.nextCursor ?? null)
       };
     }
 
