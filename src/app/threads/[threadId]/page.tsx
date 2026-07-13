@@ -80,7 +80,7 @@ export default function ThreadPage(): JSX.Element {
   const threadContextUsage = useStore((s) => s.threads[threadId]?.contextUsage ?? null);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
-  const entryCount = useStore((s) => s.threads[threadId]?.entries.length ?? 0);
+  const lastEntryId = useStore((s) => s.threads[threadId]?.entries.at(-1)?.id ?? null);
   const compactCompletionSeen = useStore((s) => threadHasCompactCompletion(s.threads[threadId]));
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const wsState = useStore((s) => s.wsState);
@@ -399,8 +399,9 @@ export default function ThreadPage(): JSX.Element {
           requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
+        const currentCursor = useStore.getState().threads[threadId]?.cursor ?? page.nextCursor ?? null;
         detailContinuationRef.current = null;
-        applyThreadDetail({ ...td, timeline: page.items, nextCursor: page.nextCursor ?? null }, "replace");
+        applyThreadDetail({ ...td, timeline: page.items, nextCursor: currentCursor }, "merge");
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -505,7 +506,7 @@ export default function ThreadPage(): JSX.Element {
     if (atBottomRef.current) {
       scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
     }
-  }, [loading, entryCount]);
+  }, [loading, lastEntryId]);
 
   useEffect(() => {
     let cancelled = false;

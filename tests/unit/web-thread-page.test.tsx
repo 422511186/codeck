@@ -669,7 +669,7 @@ describe("ThreadPage", () => {
     );
   });
 
-  it.skip("should preserve older history cursor after bounded snapshot repair", async () => {
+  it("should merge bounded snapshot repair while preserving the loaded history cursor", async () => {
     const initialDetail = {
       id: "thread-1",
       cwd: "C:/test",
@@ -689,13 +689,20 @@ describe("ThreadPage", () => {
       status: "idle",
       timeline: [{ id: "repair-1", turnId: "turn-new", role: "agent", text: "Repaired tail" }],
       lastTurnId: "turn-new",
-      nextCursor: "repair-older",
+      nextCursor: null,
       updatedAt: Date.now()
     };
     let readCount = 0;
     mockReadThread.mockImplementation(() => {
       readCount += 1;
       return Promise.resolve(readCount === 1 ? initialDetail : repairDetail);
+    });
+    let pageCount = 0;
+    mockListTurnsBefore.mockImplementation(() => {
+      pageCount += 1;
+      return Promise.resolve(pageCount === 1
+        ? { items: initialDetail.timeline, nextCursor: "initial-older" }
+        : { items: repairDetail.timeline, nextCursor: "repair-older" });
     });
     mockThreadState.mockReturnValue({
       entries: [
@@ -719,10 +726,10 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
         "thread-1",
         [expect.objectContaining({ id: "repair-1" })],
-        "repair-older"
+        "stale-older"
       );
     });
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
