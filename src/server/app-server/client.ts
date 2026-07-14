@@ -2596,11 +2596,13 @@ export class CodexAppServerClient {
       const pageLimit = timelinePageLimit(input.limit);
       const itemOffset = legacyCursor?.itemOffset ?? 0;
       const legacyItems = chronologicalTurnsFromDescPage(legacyResponse.data).flatMap((turn) => timelineItemsForTurn(turn));
-      const items = legacyItems.slice(itemOffset, itemOffset + pageLimit);
+      const pageEnd = Math.max(0, legacyItems.length - itemOffset);
+      const pageStart = Math.max(0, pageEnd - pageLimit);
+      const items = legacyItems.slice(pageStart, pageEnd);
       const nextOffset = itemOffset + items.length;
       return {
         items,
-        nextCursor: nextOffset < legacyItems.length
+        nextCursor: pageStart > 0
           ? legacyItemCursor(legacyCursor ? legacyCursor.turnCursor : (input.cursor ?? null), nextOffset)
           : (legacyResponse.nextCursor ?? null)
       };

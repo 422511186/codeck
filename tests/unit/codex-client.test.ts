@@ -3378,13 +3378,25 @@ describe("CodexAppServerClient", () => {
 
     const first = await client.listThreadTurns({ threadId: "thread-1", limit: 30 });
     const second = await client.listThreadTurns({ threadId: "thread-1", cursor: first.nextCursor, limit: 30 });
+    const third = await client.listThreadTurns({ threadId: "thread-1", cursor: second.nextCursor, limit: 30 });
 
     expect(first.items).toHaveLength(30);
     expect(second.items).toHaveLength(30);
+    expect(third.items).toHaveLength(20);
+    expect(first.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 30 }, (_, index) => `large-${index + 50}`)
+    );
+    expect(second.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 30 }, (_, index) => `large-${index + 20}`)
+    );
+    expect(third.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `large-${index}`)
+    );
     expect(first.nextCursor).toContain("legacy-thread-items");
     expect(second.nextCursor).toContain("legacy-thread-items");
     const turnPageCalls = peer.calls.filter((call) => call.method === "thread/turns/list");
     expect(turnPageCalls[1]?.params).toEqual(expect.objectContaining({ cursor: null }));
+    expect(turnPageCalls[2]?.params).toEqual(expect.objectContaining({ cursor: null }));
   });
 
   it("分页读取 turns 时显式请求 desc 并返回页内正序 timeline", async () => {
