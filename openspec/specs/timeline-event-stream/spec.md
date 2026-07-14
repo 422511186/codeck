@@ -830,3 +830,59 @@ timeline event stream SHALL 在发送前检查序列化 UTF-8 bytes。超过 eve
 - **THEN** 服务端 MUST 返回 item-scoped repair-required
 - **AND** 客户端 MUST 不覆盖其他完整 timeline entries
 
+### Requirement: File change item identity remains stable across sources
+timeline engine SHALL 将同一 generation、turnId 和 itemId 的 file change live delta、completed item、snapshot item 与 repair item 归一化为同一 timeline entry。实时阶段的占位 `tool`、完成阶段的真实路径、status 和 diff 统计变化 MUST NOT 创建第二条 Files changed activity。
+
+#### Scenario: Live file delta followed by completed snapshot
+- **WHEN** 客户端先收到带稳定 itemId 的 `file_output_delta`
+- **AND** 后续 snapshot 或 completed item 使用同一 generation、turnId 和 itemId，但 `tool` 从占位值变为真实文件路径
+- **THEN** timeline MUST 原位合并为一条 file change entry
+- **AND** Files changed MUST 保持在原事件位置
+- **AND** timeline MUST NOT 在末尾追加重复 Files changed
+
+#### Scenario: Different file item ids remain distinct
+- **WHEN** 同一 turn 包含两个不同 itemId 的 file change items
+- **THEN** timeline MUST 保留两条独立 file change entries
+- **AND** 每条 entry MUST 使用各自完成态路径和 diff 统计
+
+### Requirement: Cross-source repair preserves anchored event position
+snapshot merge 和 bounded repair SHALL 使用稳定 identity 以及 `beforeEntryId`、`afterEntryId` 或等价 anchor 恢复条目位置。不同来源的局部 ordinal MUST NOT 因数值比较而覆盖原事件顺序。
+
+#### Scenario: Repair fills file change between agent messages
+- **WHEN** 当前 timeline 已包含同一 turn 的前后 agent messages
+- **AND** bounded repair 返回位于两者之间的 file change item
+- **THEN** repair 后 Files changed MUST 渲染在两个 agent messages 之间
+- **AND** error 或 completion 事件 MUST NOT 将该 file change 移到 timeline 末尾
+
+### Requirement: Timeline timestamps remain consistent across sources
+snapshot、pagination 和 live timeline 输入 SHALL 使用相同的毫秒时间约定。缺少 item 时间时，系统 MUST 使用稳定 turn 时间或明确的历史 fallback，不得使用接收事件的当前时间覆盖历史语义。
+
+#### Scenario: Same turn arrives from pagination and live sources
+- **WHEN** 同一 turn 的条目分别来自 pagination 与 live event
+- **THEN** 两种来源的时间 MUST 使用同一单位
+- **AND** snapshot merge MUST NOT 将历史条目时间重置为当前时间
+
+#### Scenario: Turn id is not a UUIDv7 identifier
+- **WHEN** 历史 item 没有时间且 turnId 不能解析为 UUIDv7
+- **THEN** adapter SHALL 使用经过单位规范化的调用方 fallback
+- **AND** 系统 MUST 保持条目顺序稳定
+
+### Requirement: Event recovery uses bounded authority sources
+timeline event recovery SHALL 仅使用 metadata、thread-wide latest page、目标 item content page 或目标 turn 的有界页作为权威来源。steer、interrupt、review 和普通 event repair MUST NOT 附带完整 thread timeline。
+
+#### Scenario: Stream gap triggers repair
+- **WHEN** event stream 检测到 gap 或 turn 完成但缺少可见输出
+- **THEN** repair MUST 请求 metadata 和至多一页最新 items
+- **AND** repair MUST merge 到当前窗口而不是 replace 已加载历史
+- **AND** repair failure MUST NOT 触发完整 detail fallback
+
+#### Scenario: Steer succeeds during active turn
+- **WHEN** steer 请求成功并产生新的 item 或 turn identity
+- **THEN** HTTP 响应 MUST 只返回操作 identity 或 metadata
+- **AND** 后续可见内容 MUST 通过 event stream 或有界 repair 到达
+
+#### Scenario: Interrupt resolves turn identity
+- **WHEN** interrupt 请求没有显式 turnId
+- **THEN** 服务端 MUST 使用 metadata-only 状态或已知 active turn identity 解析目标
+- **AND** MUST NOT 为解析 lastTurnId 读取消息 timeline
+

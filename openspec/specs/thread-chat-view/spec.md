@@ -4,12 +4,13 @@
 TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
 ## Requirements
 ### Requirement: 会话聊天页采用单栏 timeline 布局
-会话聊天页 SHALL 使用单栏垂直 timeline 作为主体内容区，timeline 上方是 sticky 头部，下方是 sticky 底部输入区。
+会话聊天页 SHALL 使用单栏垂直 timeline 作为主体内容区，timeline 上方是 sticky 头部，下方是参与正常页面布局的底部输入区。
 
 #### Scenario: 默认布局
 - **WHEN** 用户进入会话聊天页
-- **THEN** 页面 MUST 由「sticky 头部 + 中间 timeline + sticky 底部输入区」三段构成
-- **AND** timeline MUST 占满中间区域
+- **THEN** 页面 MUST 由「sticky 头部 + 可收缩 timeline + 底部输入区」三段构成
+- **AND** timeline MUST 占满头部与输入区之间的剩余区域
+- **AND** 输入区 MUST NOT 通过覆盖 timeline 的固定定位实现
 
 ### Requirement: 头部固定显示返回、会话名、Plan/Build、模型、菜单
 会话头部 SHALL 显示 4 个固定元素：返回按钮、会话名、Plan/Build segmented 控件、`⋮` 次级菜单按钮。模型/思考档位 SHALL 在 composer 底部工具栏中作为发送前状态展示与切换入口。
@@ -215,16 +216,34 @@ Plan/Build 模式 SHALL 用 segmented 控件呈现，每个会话独立保存当
 - **AND** 不要求恢复用户上次阅读位置
 
 ### Requirement: 向上无限滚动加载更早消息
-timeline SHALL 在用户向上滚动到顶部时自动调用分页接口加载更早的消息，使用 `cursor + limit` 分页。
+timeline SHALL 只通过 thread-wide `cursor + limit` 分页渐进加载消息。任何页面、刷新、恢复、修复、重连或后台同步流程 MUST NOT 全量加载会话消息，服务端接口 MUST NOT 返回完整 timeline。
 
-#### Scenario: 触底加载
+#### Scenario: 首次进入只加载最新页
+- **WHEN** 用户首次进入或刷新会话聊天页
+- **THEN** 系统 MUST 只读取不含 turns 的会话元数据和最新一页消息
+- **AND** 消息页 MUST 使用 `thread/items/list` 的 thread-wide cursor
+- **AND** 单次消息响应大小 MUST 不随会话历史总长度线性增长
+
+#### Scenario: 顶部加载更早消息
 - **WHEN** 用户向上滚动接近 timeline 顶部
-- **THEN** 系统 MUST 调用 `GET /api/codex/threads/:threadId/turns?cursor=...&limit=...`
+- **THEN** 系统 MUST 使用当前历史 cursor 请求一页更早消息
 - **AND** 加载期间 MUST 在 timeline 顶部显示细 spinner
+- **AND** 系统 MUST NOT 为获取更早消息重新读取完整 thread detail
 
 #### Scenario: 到达起点
 - **WHEN** 后端返回的下一个 cursor 为空
 - **THEN** timeline 顶部 MUST 显示灰色细线 + 文案「会话开始」
+- **AND** 系统 MUST 停止继续请求更早页
+
+#### Scenario: 分页协议失败
+- **WHEN** 消息分页请求返回协议错误或服务端错误
+- **THEN** 页面 MUST 只展示该页的局部错误和重试路径
+- **AND** 系统 MUST NOT 回退到包含完整 timeline 的读取方式
+
+#### Scenario: 服务端强制分页边界
+- **WHEN** 客户端省略 limit、请求超大 limit 或尝试请求全部消息
+- **THEN** 服务端 MUST 使用受控默认值或上限返回有限消息页
+- **AND** 响应 MUST 同时受条目数量和序列化字节预算限制
 
 ### Requirement: 跳到最新按钮仅在用户向上滚动后出现
 timeline SHALL 在用户曾向上滚动、当前不在底部时显示「跳到最新」浮动按钮，在底部时隐藏。
@@ -875,4 +894,83 @@ Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分�
 - **WHEN** 用户正在阅读历史且尾部收到 live delta 或 full-content 更新
 - **THEN** 当前阅读 anchor MUST 不跳到尾部
 - **AND** jump-to-latest 控件 MUST 继续可用
+
+### Requirement: Virtualized timeline follows tail without blank windows
+长 timeline 的自动贴底 SHALL 由虚拟化 Timeline 在尾部渲染窗口可用后完成。页面 MUST NOT 在虚拟窗口仍指向旧区间时先把滚动容器移动到底部。
+
+#### Scenario: Sending from the bottom of a long thread
+- **WHEN** 用户位于长会话 timeline 底部并发送新消息
+- **THEN** optimistic user message MUST 立即出现在可见尾部窗口
+- **AND** timeline MUST 保持至少一条可见消息
+- **AND** 页面 MUST NOT 显示由旧虚拟窗口和新 scrollTop 组合产生的空白区域
+
+#### Scenario: Stream error arrives after sending
+- **WHEN** 用户发送消息后收到同一 turn 的 stream disconnected error
+- **AND** 用户仍位于 timeline 底部
+- **THEN** error entry MUST 出现在可见尾部
+- **AND** 既有消息、Files changed 和 optimistic user message MUST 保持可见且顺序稳定
+
+#### Scenario: User is reading history
+- **WHEN** 用户不在 timeline 底部并发送前后的 live、repair 或 error 更新到达
+- **THEN** Timeline MUST 保持当前阅读 anchor
+- **AND** 页面 MUST 显示跳到最新入口
+- **AND** 页面 MUST NOT 自动滚到底部或切换为尾部窗口
+
+### Requirement: Historical messages display stable source time
+历史分页消息 SHALL 使用消息或 turn 的稳定时间来源，并统一为 Unix 毫秒。客户端 MUST NOT 使用分页请求发生时间作为历史消息时间。
+
+#### Scenario: Historical page lacks item timestamps
+- **WHEN** 历史分页 item 没有 `createdAt`，但包含可解析的 UUIDv7 turnId
+- **THEN** 客户端 SHALL 从 turnId 恢复 turn 时间
+- **AND** 历史消息 MUST NOT 显示为本次请求产生的“刚刚”
+
+#### Scenario: Snapshot fallback uses Unix seconds
+- **WHEN** snapshot fallback 时间来自 Unix 秒形式的 thread 时间
+- **THEN** 客户端 MUST 在写入 TimelineEntry 前转换为毫秒
+
+### Requirement: Prepending history preserves visible reading progress
+加载上一页后，加载前顶部可见消息 SHALL 保持相同 identity 和 viewport 像素偏移。新加载消息 MUST 只出现在当前内容上方，由用户继续上滑查看。
+
+#### Scenario: User loads an older page at the top
+- **WHEN** 用户滚动到顶部触发历史分页
+- **AND** 新页面 prepend 到现有 timeline
+- **THEN** 加载前顶部消息 MUST 保持在相同屏幕位置
+- **AND** 页面 MUST NOT 自动替用户上移一页内容
+
+#### Scenario: Prepended content changes height after commit
+- **WHEN** prepend 的 Markdown、activity 或图片在初次 commit 后继续改变高度
+- **THEN** Timeline SHALL 按原消息 identity 持续恢复锚点
+- **AND** 可见文字 MUST NOT 因延迟测量发生跳页或抖动
+
+### Requirement: Mutation responses preserve the progressive timeline window
+会话发送、resume、rename、steer、interrupt、review、fork 和 unarchive 等 mutation SHALL 只更新操作结果或 thread metadata，MUST NOT 通过响应中的完整 timeline 扩展或替换当前分页窗口。rollback 如需刷新可见消息，MUST 返回受控最新页和 cursor。
+
+#### Scenario: Send while thread is not loaded
+- **WHEN** 用户在缓存消息可见但 thread 状态为 `notLoaded` 时发送消息
+- **THEN** resume MUST 只 materialize 会话并返回 metadata 或显式有界页
+- **AND** 页面 MUST 保留当前已加载分页窗口
+- **AND** 页面 MUST NOT 使用 `response.thread.turns` replace 当前 timeline
+
+#### Scenario: Mutation response contains unexpected turns
+- **WHEN** 上游忽略 `excludeTurns` 或其他 metadata-only 参数并在 mutation 响应中返回完整 turns
+- **THEN** Web 服务 MUST 在公开 API 边界丢弃这些 turns
+- **AND** 浏览器响应 MUST NOT 包含完整 timeline
+
+#### Scenario: Rollback refreshes a bounded latest page
+- **WHEN** 用户执行 rollback 且成功删除尾部 turns
+- **THEN** 页面 MUST 仅使用 rollback 返回的显式最新消息页重建窗口
+- **AND** 该页 MUST 包含受控 cursor、条目上限和字节预算
+
+### Requirement: Progressive loading fails closed
+消息分页、resume 或 metadata 协议失败时，系统 SHALL 展示局部失败并保持已有分页窗口，MUST NOT 回退到完整 thread detail、metadata 中的 turns 或无 cursor 的历史数组。
+
+#### Scenario: Latest page fails after metadata succeeds
+- **WHEN** metadata 请求成功但最新消息页请求失败
+- **THEN** 页面 MUST 保持已有消息窗口或显示局部重试状态
+- **AND** 页面 MUST NOT 使用 detail timeline 作为消息 fallback
+
+#### Scenario: Resume omits initial page
+- **WHEN** `thread/resume` 响应缺少 `initialTurnsPage`
+- **THEN** 系统 MUST 将其解释为没有可用消息页
+- **AND** 系统 MUST NOT 使用 `response.thread.turns`
 

@@ -4,7 +4,7 @@
 TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
 ## Requirements
 ### Requirement: 底部输入区固定单行 + 半屏编辑器
-会话页底部在 thread 静止时 SHALL 固定显示空闲态 composer。composer SHALL 使用移动端两层卡片结构：上层为自动增高文本输入区，下层为固定工具栏。composer MUST 不再提供半屏编辑入口；文本输入区达到最大高度后 MUST 内部滚动，并保持底部工具栏可见。composer 高度变化时，timeline MUST 为实际 composer 高度保留底部空间，不得遮挡最新消息。
+会话页底部在 thread 静止时 SHALL 显示空闲态 composer。composer SHALL 使用移动端两层结构：上层为自动增高文本输入区，下层为固定工具栏。composer MUST 不再提供半屏编辑入口；文本输入区达到最大高度后 MUST 内部滚动，并保持底部工具栏可见。composer MUST 作为页面 flex 布局中的普通子元素参与尺寸计算，高度变化时 timeline 视口 MUST 同步缩小，不得覆盖消息内容。
 
 #### Scenario: 默认输入
 - **WHEN** thread 静止且用户在会话页打字
@@ -23,11 +23,12 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 已选图片缩略图和 Skill chip MUST 显示在 composer 内部
 - **AND** 它们 MUST 位于文本输入区下方、底部工具栏上方
 
-#### Scenario: Composer height does not cover latest timeline message
+#### Scenario: Composer height resizes timeline
 - **WHEN** 用户输入多行文本或添加上下文导致 composer 高度变高
-- **THEN** timeline 滚动区域底部 MUST 按实际 composer 高度保留空间
+- **THEN** timeline 滚动视口 MUST 按 composer 实际增量同步缩小
 - **AND** 最新消息 MUST NOT 被 composer 遮挡
 - **AND** 如果用户原本停留在 timeline 底部附近，系统 MUST 在高度变化后保持最新消息可见
+- **AND** 如果用户正在查看历史，系统 MUST 保持当前可见内容锚点
 
 ### Requirement: 普通输入框回车不发送
 会话页底部普通输入框 SHALL NOT 使用 `Enter` 触发标准发送流程；`Enter` MUST 保持文本输入行为，不得作为发送快捷键。
@@ -313,3 +314,4 @@ composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册
 - **THEN** 目标编辑面板 MUST 保持打开
 - **AND** 面板内 MUST 显示错误提示
 - **AND** 用户已输入的目标描述 MUST 保留
+

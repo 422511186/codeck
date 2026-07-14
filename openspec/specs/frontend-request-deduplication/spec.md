@@ -4,22 +4,24 @@
 定义移动端 Web 前端在读取请求、副作用动作、发送消息、新建会话和设置变更中的去重、取消、互斥和幂等行为，避免快速点击、滚动、路由切换或并发响应导致重复请求和旧状态覆盖。
 ## Requirements
 ### Requirement: Read Requests Are Deduplicated Or Cancelled
-前端 SHALL 对同一页面生命周期内的高风险读取请求使用稳定 key 去重或取消旧请求，至少覆盖会话详情读取、会话快照修复、历史分页、模型列表、默认设置和 pending request 恢复读取。
+前端 SHALL 对同一页面生命周期内的高风险读取请求使用稳定 key 去重或取消旧请求，至少覆盖会话元数据读取、局部分页修复、历史分页、模型列表、默认设置和 pending request 恢复读取。任何修复流程 MUST NOT 请求完整会话消息历史。
 
-#### Scenario: Opening a thread triggers one effective read
-- **WHEN** 用户打开同一个会话页面且同一 `threadId` 的详情读取已经进行中
+#### Scenario: Opening a thread triggers one effective metadata read
+- **WHEN** 用户打开同一个会话页面且同一 `threadId` 的元数据读取已经进行中
 - **THEN** 前端 MUST 复用进行中的读取结果，或取消旧读取并只允许最新读取结果更新页面和 store
+- **AND** 元数据响应 MUST 不包含完整 timeline
 
 #### Scenario: Stale thread read cannot overwrite newer state
-- **WHEN** 旧的会话详情读取在发送消息、快照修复或路由切换之后才返回
+- **WHEN** 旧的会话元数据或消息页读取在发送消息、局部修复或路由切换之后才返回
 - **THEN** 前端 MUST 丢弃旧读取结果，不得覆盖更新后的 timeline、running 状态或 active turn
 
-#### Scenario: Snapshot repair is not amplified
-- **WHEN** 多个 timeline gap 或修复信号在同一会话修复请求进行中到达
-- **THEN** 前端 SHALL 合并为同一轮修复请求，直到当前修复完成或被新一代请求取代
+#### Scenario: Page repair is not amplified
+- **WHEN** 多个 timeline gap 或修复信号在同一会话同一 cursor 的修复请求进行中到达
+- **THEN** 前端 SHALL 合并为同一轮分页修复请求，直到当前请求完成或被新一代请求取代
+- **AND** 修复失败 MUST NOT 触发完整 thread detail 或完整消息读取
 
 ### Requirement: Scroll Pagination Uses Cursor Level Locking
-前端 SHALL 对历史分页请求按 `threadId` 和 `cursor` 加锁，避免滚动停留在顶部时重复拉取同一页历史。
+前端 SHALL 对历史分页请求按 `threadId` 和 `cursor` 加锁，避免滚动停留在顶部时重复拉取同一页历史；协议错误和服务端错误 SHALL 维持有界请求行为。
 
 #### Scenario: Repeated top scroll while page is loading
 - **WHEN** 用户停留在会话顶部且同一 `cursor` 的历史分页请求尚未完成
@@ -27,7 +29,9 @@
 
 #### Scenario: Pagination failure can be retried
 - **WHEN** 历史分页请求失败
-- **THEN** 前端 SHALL 释放对应 `cursor` 的分页锁，允许用户再次滚动触发重试
+- **THEN** 前端 SHALL 释放对应 `cursor` 的分页锁，允许用户显式重试
+- **AND** 前端 MUST NOT 自动循环请求失败页
+- **AND** 前端 MUST NOT 通过全量会话读取修复失败页
 
 ### Requirement: Mutations Are Guarded By Action Locks
 前端 SHALL 对会产生副作用的用户动作使用动作级 pending 锁或等价互斥机制，至少覆盖发送消息、新建会话、中断、归档、撤销归档、压缩、重命名、模型选择、推理强度选择和 Plan/Build 模式切换。
@@ -84,3 +88,25 @@
 #### Scenario: Stale settings response cannot revert UI
 - **WHEN** 较早的设置请求晚于较新的设置请求返回
 - **THEN** 前端 MUST NOT 使用较早响应回滚当前 UI 选择或本地 store 状态
+
+### Requirement: Recovery requests cannot widen timeline scope
+前端恢复请求 SHALL 按 metadata、latest-page、history-page 和目标 mutation 使用独立稳定 key。任何失败重试 MUST 保持原请求范围，MUST NOT 从有界 page 升级为 resume、完整 detail 或完整 timeline 请求。
+
+#### Scenario: Repeated repair signals during send
+- **WHEN** 发送期间收到多个 `turn-completed`、`timeline-gap` 或 stream recovery signal
+- **THEN** 客户端 MUST 合并等价 metadata/latest-page 请求
+- **AND** 每个有效请求 MUST 只返回有界页或 metadata
+- **AND** 重试 MUST NOT 扩展为完整历史读取
+
+#### Scenario: Stale mutation response arrives after pagination
+- **WHEN** 用户已加载新的历史页后，较早的 resume、rename、steer 或 review 响应才返回
+- **THEN** 该响应 MUST NOT replace、清空或扩展当前 timeline 窗口
+
+### Requirement: Public thread responses enforce negative timeline guarantees
+所有非消息分页公开接口 SHALL 对 timeline 提供负向保证：响应不得包含完整消息数组，即使上游返回非兼容 turns。测试 MUST 对每个相关 route 校验该保证。
+
+#### Scenario: Upstream ignores metadata-only flags
+- **WHEN** 上游在 `includeTurns: false` 或 `excludeTurns: true` 请求后仍返回大量 turns
+- **THEN** metadata 和 mutation route 响应 MUST 不含这些消息
+- **AND** 服务端 MUST NOT 通过裁剪该数组伪造分页结果或 cursor
+
