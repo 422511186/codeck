@@ -19,6 +19,6 @@
 ## 4. 验证与发布
 
 - [x] 4.1 运行相关 Vitest、`npm run verify` 和 OpenSpec 校验
-- [ ] 4.2 运行 `npm run release:verify`，验证长会话发送前后响应条数、字节和 cursor 不扩张
-- [ ] 4.3 提交全部代码，基于 `codex-web:local` 重建镜像并替换 `codex-web-19899`
-- [ ] 4.4 验证健康接口、发送消息、metadata 零 timeline、连续分页和容器日志
+- [x] 4.2 运行 `npm run release:verify`，验证长会话发送前后响应条数、字节和 cursor 不扩张
+- [x] 4.3 提交全部代码，基于 `codex-web:local` 重建镜像并替换 `codex-web-19899`
+- [x] 4.4 验证健康接口、resume、metadata 零 timeline、最新分页和容器日志
