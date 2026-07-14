@@ -19,6 +19,6 @@
 ## 4. 验证与部署
 
 - [x] 4.1 运行相关 Vitest、`npm run verify`、OpenSpec 校验和 `npm run release:verify`
-- [ ] 4.2 使用生产长会话和手机视口验证历史时间、连续分页、顶部消息像素位置及断流失败状态
-- [ ] 4.3 提交全部代码，基于 `codex-web:local` 构建镜像并替换 `codex-web-19899`
-- [ ] 4.4 验证健康接口、metadata 零 timeline、连续四页 cursor 分页和容器日志
+- [x] 4.2 使用生产长会话和手机视口验证历史时间、连续分页、顶部消息像素位置及断流失败状态
+- [x] 4.3 提交全部代码，基于 `codex-web:local` 构建镜像并替换 `codex-web-19899`
+- [x] 4.4 验证健康接口、metadata 零 timeline、连续四页 cursor 分页和容器日志
