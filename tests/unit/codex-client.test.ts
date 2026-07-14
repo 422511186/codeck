@@ -3343,6 +3343,65 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("legacy 多个短 turn 会聚合填满一个 item 页", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        throw new Error("thread/items/list is not supported yet");
+      }
+      if (method === "thread/turns/list") {
+        const cursor = (params as { cursor?: string | null }).cursor ?? null;
+        const pages: Record<string, { ids: string[]; nextCursor: string | null }> = {
+          first: { ids: ["latest-user"], nextCursor: "older-1" },
+          "older-1": { ids: ["older-user", "older-agent"], nextCursor: "older-2" },
+          "older-2": { ids: ["oldest-agent"], nextCursor: "older-3" }
+        };
+        const page = pages[cursor ?? "first"]!;
+        return {
+          data: [{
+            id: `turn-${cursor ?? "latest"}`,
+            itemsView: { type: "complete" },
+            status: { type: "completed" },
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: page.ids.map((id) => id.includes("user")
+              ? {
+                  type: "userMessage",
+                  id,
+                  clientId: `client-${id}`,
+                  content: [{ type: "text", text: id, text_elements: [] }]
+                }
+              : {
+                  type: "agentMessage",
+                  id,
+                  text: id,
+                  phase: "final",
+                  memoryCitation: null
+                })
+          }],
+          nextCursor: page.nextCursor,
+          backwardsCursor: null
+        };
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    const page = await client.listThreadTurns({ threadId: "thread-1", limit: 4 });
+
+    expect(page.items.map((item) => item.id)).toEqual([
+      "oldest-agent",
+      "older-user",
+      "older-agent",
+      "latest-user"
+    ]);
+    expect(page.nextCursor).toBe("older-3");
+    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toHaveLength(3);
+  });
+
   it("legacy 单个 turn 的大量 items 仍按 item limit 分页", async () => {
     const peer = new FakePeer();
     peer.request = async (method, params) => {
@@ -3351,6 +3410,9 @@ describe("CodexAppServerClient", () => {
         throw new Error("thread/items/list is not supported yet");
       }
       if (method === "thread/turns/list") {
+        if ((params as { cursor?: string | null }).cursor === "older-turn") {
+          return { data: [], nextCursor: null, backwardsCursor: null };
+        }
         return {
           data: [{
             id: "turn-large",

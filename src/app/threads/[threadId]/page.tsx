@@ -38,8 +38,15 @@ const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
 const ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS = 3_000;
 const SNAPSHOT_REPAIR_RETRY_DELAY_MS = 3_000;
+const MAX_COMPLETION_REPAIR_ATTEMPTS = 4;
 const DEFAULT_COMPOSER_HEIGHT = 144;
 const COMPACTING_CONTEXT_TEXT = "正在压缩上下文…";
+
+type SnapshotRepairRetryInput = {
+  reason: "turn-completed" | "summary-idle" | "mutation-retry";
+  turnId?: string;
+  generation?: number;
+};
 
 export default function ThreadPage(): JSX.Element {
   const params = useParams<{ threadId: string }>();
@@ -122,6 +129,7 @@ export default function ThreadPage(): JSX.Element {
   const compactActionPendingRef = useRef(false);
   const streamDisconnectedRepairKeysRef = useRef(new Set<string>());
   const repairRetryTimerRef = useRef<number | null>(null);
+  const completionRepairAttemptsRef = useRef(new Map<string, number>());
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -158,17 +166,18 @@ export default function ThreadPage(): JSX.Element {
     }
   }, []);
 
-  const scheduleSnapshotRepairRetry = useCallback(() => {
+  const scheduleSnapshotRepairRetry = useCallback((input: SnapshotRepairRetryInput = { reason: "mutation-retry" }) => {
     clearRepairRetryTimer();
     repairRetryTimerRef.current = window.setTimeout(() => {
       repairRetryTimerRef.current = null;
-      requestSnapshotRepair(threadId, { reason: "mutation-retry" });
+      requestSnapshotRepair(threadId, input);
     }, SNAPSHOT_REPAIR_RETRY_DELAY_MS);
   }, [clearRepairRetryTimer, requestSnapshotRepair, threadId]);
 
   useEffect(() => {
     compactActionPendingRef.current = false;
     streamDisconnectedRepairKeysRef.current.clear();
+    completionRepairAttemptsRef.current.clear();
     setCompactPending(false);
     clearRepairRetryTimer();
     return clearRepairRetryTimer;
@@ -394,6 +403,22 @@ export default function ThreadPage(): JSX.Element {
         const currentThread = useStore.getState().threads[threadId];
         const currentCursor = currentThread ? currentThread.cursor : (page.nextCursor ?? null);
         applyThreadDetail({ ...td, timeline: page.items, nextCursor: currentCursor }, "merge");
+        const completionRetry = completionRepairRetryInput(repairRequest);
+        if (completionRetry && !timelinePageHasVisibleTurnOutput(page.items, completionRetry.turnId)) {
+          const attemptKey = `${completionRetry.turnId}:${completionRetry.generation ?? "legacy"}`;
+          const nextAttempt = (completionRepairAttemptsRef.current.get(attemptKey) ?? 0) + 1;
+          if (nextAttempt <= MAX_COMPLETION_REPAIR_ATTEMPTS) {
+            completionRepairAttemptsRef.current.set(attemptKey, nextAttempt);
+            clearSnapshotRepair(threadId);
+            scheduleSnapshotRepairRetry(completionRetry);
+            return;
+          }
+          completionRepairAttemptsRef.current.delete(attemptKey);
+        } else if (completionRetry) {
+          completionRepairAttemptsRef.current.delete(
+            `${completionRetry.turnId}:${completionRetry.generation ?? "legacy"}`
+          );
+        }
         clearRepairRetryTimer();
         clearSnapshotRepair(threadId);
       } catch (err) {
@@ -2004,6 +2029,33 @@ function approvalsReviewerOrNull(value: unknown): ApprovalsReviewer | null {
 
 function isThreadNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && /thread not found|找不到会话/i.test(error.message);
+}
+
+function completionRepairRetryInput(
+  repairRequest: { reason?: string; turnId?: string; generation?: number } | null | undefined
+): SnapshotRepairRetryInput & { turnId: string } | null {
+  if (
+    !repairRequest?.turnId ||
+    (repairRequest.reason !== "turn-completed" && repairRequest.reason !== "summary-idle")
+  ) {
+    return null;
+  }
+  return {
+    reason: repairRequest.reason,
+    turnId: repairRequest.turnId,
+    ...(typeof repairRequest.generation === "number" ? { generation: repairRequest.generation } : {})
+  };
+}
+
+function timelinePageHasVisibleTurnOutput(
+  items: ThreadDetail["timeline"],
+  turnId: string
+): boolean {
+  const fallbackBase = Date.now() - items.length;
+  return hasVisibleTurnOutput(
+    items.map((item, index) => timelineItemToEntry(item, fallbackBase + index)),
+    turnId
+  );
 }
 
 function isThreadRunningStatus(status: string): boolean {

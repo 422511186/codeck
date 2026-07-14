@@ -2586,25 +2586,52 @@ export class CodexAppServerClient {
       if (!isUnsupportedThreadItemsListError(error)) {
         throw error;
       }
-      const legacyResponse = (await this.peer.request("thread/turns/list", {
-        threadId: input.threadId,
-        cursor: legacyCursor ? legacyCursor.turnCursor : input.cursor,
-        limit: Math.min(timelinePageLimit(input.limit), LEGACY_THREAD_TURN_PAGE_LIMIT),
-        sortDirection: "desc",
-        itemsView: "full"
-      } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
       const pageLimit = timelinePageLimit(input.limit);
-      const itemOffset = legacyCursor?.itemOffset ?? 0;
-      const legacyItems = chronologicalTurnsFromDescPage(legacyResponse.data).flatMap((turn) => timelineItemsForTurn(turn));
-      const pageEnd = Math.max(0, legacyItems.length - itemOffset);
-      const pageStart = Math.max(0, pageEnd - pageLimit);
-      const items = legacyItems.slice(pageStart, pageEnd);
-      const nextOffset = itemOffset + items.length;
+      const chunks: MobileTimelineItem[][] = [];
+      const seenTurnCursors = new Set<string>();
+      let remaining = pageLimit;
+      let turnCursor = legacyCursor ? legacyCursor.turnCursor : (input.cursor ?? null);
+      let itemOffset = legacyCursor?.itemOffset ?? 0;
+      let nextCursor: string | null = turnCursor;
+
+      for (let requestCount = 0; requestCount < pageLimit && remaining > 0; requestCount += 1) {
+        const cursorKey = turnCursor ?? "__latest__";
+        if (seenTurnCursors.has(cursorKey)) {
+          break;
+        }
+        seenTurnCursors.add(cursorKey);
+        const legacyResponse = (await this.peer.request("thread/turns/list", {
+          threadId: input.threadId,
+          cursor: turnCursor,
+          limit: LEGACY_THREAD_TURN_PAGE_LIMIT,
+          sortDirection: "desc",
+          itemsView: "full"
+        } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+        const legacyItems = chronologicalTurnsFromDescPage(legacyResponse.data)
+          .flatMap((turn) => timelineItemsForTurn(turn));
+        const pageEnd = Math.max(0, legacyItems.length - itemOffset);
+        const pageStart = Math.max(0, pageEnd - remaining);
+        const selected = legacyItems.slice(pageStart, pageEnd);
+        if (selected.length) {
+          chunks.unshift(selected);
+          remaining -= selected.length;
+        }
+        if (pageStart > 0) {
+          nextCursor = legacyItemCursor(turnCursor, itemOffset + selected.length);
+          break;
+        }
+
+        nextCursor = legacyResponse.nextCursor ?? null;
+        if (remaining === 0 || !nextCursor) {
+          break;
+        }
+        turnCursor = nextCursor;
+        itemOffset = 0;
+      }
+
       return {
-        items,
-        nextCursor: pageStart > 0
-          ? legacyItemCursor(legacyCursor ? legacyCursor.turnCursor : (input.cursor ?? null), nextOffset)
-          : (legacyResponse.nextCursor ?? null)
+        items: chunks.flat(),
+        nextCursor
       };
     }
 

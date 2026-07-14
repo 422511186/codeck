@@ -703,6 +703,66 @@ describe("ThreadPage", () => {
     );
   });
 
+  it("should retry completion repair when the bounded page still only contains the user message", async () => {
+    vi.useFakeTimers();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      timeline: [],
+      lastTurnId: "turn-lagging",
+      updatedAt: Date.now()
+    });
+    mockListTurnsBefore.mockResolvedValue({
+      items: [{ id: "user-lagging", turnId: "turn-lagging", role: "user", text: "等待回复" }],
+      nextCursor: "older"
+    });
+    mockThreadState.mockReturnValue({
+      entries: [{
+        id: "local-user",
+        turnId: "turn-lagging",
+        createdAt: Date.now(),
+        body: { kind: "user-message", text: "等待回复", status: "sent" }
+      }],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: "turn-lagging",
+      repairRequest: {
+        key: "turn-completed:turn-lagging:7",
+        reason: "turn-completed",
+        turnId: "turn-lagging",
+        generation: 7,
+        requestedAt: 123
+      },
+      repairRequestedAt: 123,
+      plan: [],
+      cursor: "older",
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+    });
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "turn-completed",
+      turnId: "turn-lagging",
+      generation: 7
+    });
+  });
+
   it("should merge bounded snapshot repair while preserving an explicit reached-beginning cursor", async () => {
     const initialDetail = {
       id: "thread-1",
@@ -1572,7 +1632,7 @@ describe("ThreadPage", () => {
     expect(mockListTurnItems).not.toHaveBeenCalled();
   });
 
-  it("should not request a duplicate snapshot repair when summary idle matches a pending completion repair", async () => {
+  it("should retry the pending completion repair without adding a duplicate summary-idle repair", async () => {
     vi.useFakeTimers();
     mockWsState.mockReturnValue("reconnecting");
     mockReadThread.mockResolvedValue({
@@ -1629,7 +1689,12 @@ describe("ThreadPage", () => {
 
     expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledTimes(1);
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "turn-completed",
+      turnId: "turn-running",
+      generation: 0
+    });
   });
 
   it("should not request snapshot repair when summary becomes idle after visible live output", async () => {
