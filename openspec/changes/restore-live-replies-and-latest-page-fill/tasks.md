@@ -11,4 +11,4 @@
 ## 3. 验证部署
 
 - [x] 3.1 运行相关测试、`npm run verify`、OpenSpec 校验和 `npm run release:verify`
-- [ ] 3.2 提交、构建镜像、替换 `codex-web-19899` 并验证生产首屏与实时恢复
+- [x] 3.2 提交、构建镜像、替换 `codex-web-19899` 并验证生产首屏与实时恢复
