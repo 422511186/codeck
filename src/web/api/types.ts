@@ -25,6 +25,7 @@ export type TimelineRole = "user" | "agent" | "reasoning" | "plan" | "tool" | "d
 
 export type TimelineItem = {
   id: string;
+  createdAt?: number;
   turnId?: string;
   turnIndex?: number;
   clientUserMessageId?: string;

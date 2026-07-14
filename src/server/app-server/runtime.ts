@@ -4578,6 +4578,7 @@ function compactTimelineItemForHardBudget(
         : bounded.completeness;
   return {
     id: item.id,
+    ...(typeof item.createdAt === "number" ? { createdAt: item.createdAt } : {}),
     ...(item.turnId ? { turnId: item.turnId } : {}),
     ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {}),
     ...(item.clientUserMessageId ? { clientUserMessageId: item.clientUserMessageId } : {}),

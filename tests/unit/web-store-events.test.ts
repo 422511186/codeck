@@ -2956,6 +2956,75 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("marks the bound user message failed after a final asynchronous turn error", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "local-user-1",
+          clientUserMessageId: "local-user-1",
+          turnId: "turn-1",
+          createdAt: 1000,
+          body: { kind: "user-message", text: "会失败的请求", status: "sent" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        message: "stream disconnected before completion",
+        willRetry: false
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "local-user-1",
+        body: expect.objectContaining({ kind: "user-message", status: "failed" })
+      }),
+      expect.objectContaining({
+        id: "turn-1-error",
+        body: { kind: "error", text: "stream disconnected before completion" }
+      })
+    ]);
+  });
+
+  it("keeps the bound user message sent while app-server will retry", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "local-user-1",
+          clientUserMessageId: "local-user-1",
+          turnId: "turn-1",
+          createdAt: 1000,
+          body: { kind: "user-message", text: "等待重试", status: "sent" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        message: "temporary disconnect",
+        willRetry: true
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries[0]?.body).toEqual(
+      expect.objectContaining({ kind: "user-message", status: "sent" })
+    );
+  });
+
   it("upserts completed timeline items from websocket events", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",

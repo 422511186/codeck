@@ -227,7 +227,7 @@ export function Timeline({
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!root || allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS) {
+    if (!root || allBlocks.length === 0) {
       return;
     }
     if (measureVisibleTimelineRows(root, rowHeightCacheRef.current)) {
@@ -239,7 +239,7 @@ export function Timeline({
     const root = rootRef.current;
     if (
       !root ||
-      allBlocks.length <= MAX_INITIAL_TIMELINE_ROWS ||
+      allBlocks.length === 0 ||
       typeof ResizeObserver === "undefined"
     ) {
       return;

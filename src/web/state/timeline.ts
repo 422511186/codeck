@@ -171,13 +171,14 @@ export function diffEntryFromText(
 export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: number): TimelineEntry {
   const id = item.id;
   const meta = timelineEntryMeta(item);
+  const createdAt = timelineItemCreatedAt(item, fallbackCreatedAt);
   switch (item.role as TimelineRole) {
     case "user": {
       const normalized = normalizeUserTextAndImages(item.text, item.imagePaths);
       return {
         id,
         ...meta,
-        createdAt: fallbackCreatedAt,
+        createdAt,
         body: {
           kind: "user-message",
           text: normalized.text,
@@ -188,18 +189,18 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
       };
     }
     case "agent":
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "agent-message", text: item.text } };
+      return { id, ...meta, createdAt, body: { kind: "agent-message", text: item.text } };
     case "reasoning":
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "reasoning", text: item.text, done: item.done ?? true } };
+      return { id, ...meta, createdAt, body: { kind: "reasoning", text: item.text, done: item.done ?? true } };
     case "plan":
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
+      return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
     case "system":
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
+      return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
     case "error":
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "error", text: item.text } };
+      return { id, ...meta, createdAt, body: { kind: "error", text: item.text } };
     case "diff":
       return {
-        ...diffEntryFromText(id, item.text, fallbackCreatedAt, item.diffPath ?? "工作区变更", {
+        ...diffEntryFromText(id, item.text, createdAt, item.diffPath ?? "工作区变更", {
         added: item.added,
         removed: item.removed
         }),
@@ -209,7 +210,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
       return {
         id,
         ...meta,
-        createdAt: fallbackCreatedAt,
+        createdAt,
         body: {
           kind: "tool",
           toolKind: item.toolKind,
@@ -226,8 +227,48 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
         }
       };
     default:
-      return { id, ...meta, createdAt: fallbackCreatedAt, body: { kind: "system", text: item.text } };
+      return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
   }
+}
+
+const MIN_REAL_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
+const MAX_REAL_TIMESTAMP_MS = Date.UTC(3000, 0, 1);
+
+function timelineItemCreatedAt(item: TimelineItem, fallbackCreatedAt: number): number {
+  const itemCreatedAt = normalizeTimelineTimestamp(item.createdAt);
+  if (itemCreatedAt !== null) {
+    return itemCreatedAt;
+  }
+
+  const turnCreatedAt = uuidV7Timestamp(item.turnId);
+  if (turnCreatedAt !== null) {
+    return turnCreatedAt;
+  }
+
+  return normalizeTimelineTimestamp(fallbackCreatedAt) ?? fallbackCreatedAt;
+}
+
+function normalizeTimelineTimestamp(value: number | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value >= MIN_REAL_TIMESTAMP_MS && value < MAX_REAL_TIMESTAMP_MS) {
+    return value;
+  }
+  const milliseconds = value * 1000;
+  if (milliseconds >= MIN_REAL_TIMESTAMP_MS && milliseconds < MAX_REAL_TIMESTAMP_MS) {
+    return milliseconds;
+  }
+  return value;
+}
+
+function uuidV7Timestamp(value: string | undefined): number | null {
+  const match = value?.match(/^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  if (!match) {
+    return null;
+  }
+  const timestamp = Number.parseInt(`${match[1]}${match[2]}`, 16);
+  return timestamp >= MIN_REAL_TIMESTAMP_MS && timestamp < MAX_REAL_TIMESTAMP_MS ? timestamp : null;
 }
 
 function timelineEntryMeta(

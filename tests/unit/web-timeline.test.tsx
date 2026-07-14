@@ -784,6 +784,87 @@ describe("Timeline", () => {
     expect(screen.getByText("历史回复 125")).toBeInTheDocument();
   });
 
+  it("短列表 prepend 后动态高度变化仍保持原消息 identity 锚点", () => {
+    let resizeCallback: ResizeObserverCallback | null = null;
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe(): void {}
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    let expanded = false;
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        const height = this.dataset.timelineBlockId?.startsWith("older-") && expanded ? 200 : 72;
+        return {
+          x: 0,
+          y: 0,
+          width: 360,
+          height,
+          top: 0,
+          right: 360,
+          bottom: height,
+          left: 0,
+          toJSON: () => ({})
+        };
+      });
+    const entries = Array.from({ length: 40 }, (_value, index) => ({
+      id: `agent-short-${index}`,
+      turnId: `turn-short-${index}`,
+      createdAt: index,
+      body: { kind: "agent-message" as const, text: `短列表回复 ${index}` }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={entries} />
+      </div>
+    );
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    let scrollTop = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 600 });
+    act(() => {
+      fireEvent.scroll(scroller);
+    });
+
+    const olderEntries = Array.from({ length: 3 }, (_value, index) => ({
+      id: `older-${index}`,
+      turnId: `older-turn-${index}`,
+      createdAt: -3 + index,
+      body: { kind: "agent-message" as const, text: `新加载历史 ${index}` }
+    }));
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline entries={[...olderEntries, ...entries]} />
+      </div>
+    );
+
+    expect(scrollTop).toBe(246);
+    expanded = true;
+    act(() => {
+      resizeCallback?.([], {} as ResizeObserver);
+    });
+
+    expect(scrollTop).toBe(630);
+    expect(screen.getByText("短列表回复 0")).toBeInTheDocument();
+
+    getBoundingClientRect.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("长 Markdown、图片和 activity 混合滚动时每个 viewport 都挂载真实 block", () => {
     const entries = [
       ...Array.from({ length: 160 }, (_value, index) => ({

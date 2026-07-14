@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoints";
@@ -79,7 +79,6 @@ export default function ThreadPage(): JSX.Element {
   const threadContextUsage = useStore((s) => s.threads[threadId]?.contextUsage ?? null);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
-  const lastEntry = useStore((s) => s.threads[threadId]?.entries.at(-1) ?? null);
   const compactCompletionSeen = useStore((s) => threadHasCompactCompletion(s.threads[threadId]));
   const repairRequest = useStore((s) => s.threads[threadId]?.repairRequest ?? null);
   const wsState = useStore((s) => s.wsState);
@@ -118,7 +117,6 @@ export default function ThreadPage(): JSX.Element {
   const requestCoordinatorRef = useRef(createRequestCoordinator());
   const invalidatedRepairSignalsRef = useRef(new Set<string>());
   const loadingPageCursorsRef = useRef(new Set<string>());
-  const pendingPrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
@@ -495,15 +493,6 @@ export default function ThreadPage(): JSX.Element {
     setCompactPending(false);
   }, [compactPending, compactCompletionSeen]);
 
-  useLayoutEffect(() => {
-    const scroller = scrollerRef.current;
-    const anchor = pendingPrependAnchorRef.current;
-    if (!scroller || !anchor) return;
-    if (restorePrependScrollAnchor(scroller, anchor.scrollHeight, anchor.scrollTop)) {
-      pendingPrependAnchorRef.current = null;
-    }
-  }, [lastEntry]);
-
   useEffect(() => {
     let cancelled = false;
     requestCoordinatorRef.current.dedupeRequest("pendingRequests:list", () => codex.listPendingRequests())
@@ -534,8 +523,6 @@ export default function ThreadPage(): JSX.Element {
         const pageKey = `${threadId}\u0001${cursor}`;
         if (loadingPageCursorsRef.current.has(pageKey)) return;
         loadingPageCursorsRef.current.add(pageKey);
-        const previousScrollHeight = el.scrollHeight;
-        const previousScrollTop = el.scrollTop;
         try {
           const page = await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:turns:${cursor}`,
@@ -548,13 +535,7 @@ export default function ThreadPage(): JSX.Element {
             ),
             "pagination"
           );
-          pendingPrependAnchorRef.current = extra.length
-            ? { scrollHeight: previousScrollHeight, scrollTop: previousScrollTop }
-            : null;
           prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
-          if (extra.length && restorePrependScrollAnchor(el, previousScrollHeight, previousScrollTop)) {
-            pendingPrependAnchorRef.current = null;
-          }
         } catch {
           // ignore page load failure
         } finally {
@@ -2186,22 +2167,6 @@ function cachedThreadDetailFromState(
     nextCursor: null,
     timeline: []
   };
-}
-
-function restorePrependScrollAnchor(
-  scroller: HTMLDivElement,
-  previousScrollHeight: number,
-  previousScrollTop: number
-): boolean {
-  if (scroller.dataset.timelineAnchorManaged === "true") {
-    return true;
-  }
-  const addedHeight = scroller.scrollHeight - previousScrollHeight;
-  if (addedHeight > 0) {
-    scroller.scrollTop = previousScrollTop + addedHeight;
-    return true;
-  }
-  return false;
 }
 
 function uniqueTimelineId(prefix: string): string {

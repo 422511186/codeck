@@ -937,6 +937,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             body: { kind: "error", text: message }
           }, undefined, eventId ?? undefined);
           if (ev.willRetry !== true) {
+            get().finishLiveTurnEntries(threadId, turnId, "failed");
             get().setRunning(threadId, false);
           }
           break;

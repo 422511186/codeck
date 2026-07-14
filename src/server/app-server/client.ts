@@ -917,6 +917,20 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
   };
 }
 
+function threadItemTimelineMeta(item: ThreadItem): Pick<MobileTimelineItem, "turnId" | "createdAt"> {
+  const raw = item as ThreadItem & { turnId?: unknown; createdAt?: unknown; createdAtMs?: unknown };
+  const turnId = typeof raw.turnId === "string" ? raw.turnId : undefined;
+  const createdAt = typeof raw.createdAtMs === "number"
+    ? raw.createdAtMs
+    : typeof raw.createdAt === "number"
+      ? raw.createdAt
+      : undefined;
+  return {
+    ...(turnId ? { turnId } : {}),
+    ...(typeof createdAt === "number" ? { createdAt } : {})
+  };
+}
+
 function commandActionKind(actions: Array<{ type: string }> | null | undefined): "read" | "list" | "search" | "command" {
   if (!actions?.length) {
     return "command";
@@ -2608,7 +2622,7 @@ export class CodexAppServerClient {
     return {
       items: response.data.flatMap((item) => {
         const mapped = timelineItem(item);
-        return mapped ? [mapped] : [];
+        return mapped ? [{ ...mapped, ...threadItemTimelineMeta(item) }] : [];
       }).reverse(),
       nextCursor: response.nextCursor ?? null
     };

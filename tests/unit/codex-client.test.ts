@@ -3320,11 +3320,19 @@ describe("CodexAppServerClient", () => {
         return {
           data: [
             {
-              type: "agentMessage", id: "item-new", text: "新回复", phase: "final", memoryCitation: null
+              type: "agentMessage",
+              id: "item-new",
+              turnId: "019f5e2a-80c2-72a2-9b84-e9b54ec7a26e",
+              createdAtMs: 1_783_991_271_618,
+              text: "新回复",
+              phase: "final",
+              memoryCitation: null
             },
             {
               type: "userMessage",
               id: "item-old",
+              turnId: "019f5e29-7cfd-7431-887f-ac891cfdcc60",
+              createdAtMs: 1_783_991_229_693,
               clientId: "client-old",
               content: [{ type: "text", text: "旧请求", text_elements: [] }]
             }
@@ -3340,8 +3348,21 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
       items: [
-        { id: "item-old", role: "user", text: "旧请求", clientUserMessageId: "client-old" },
-        { id: "item-new", role: "agent", text: "新回复" }
+        {
+          id: "item-old",
+          createdAt: 1_783_991_229_693,
+          turnId: "019f5e29-7cfd-7431-887f-ac891cfdcc60",
+          role: "user",
+          text: "旧请求",
+          clientUserMessageId: "client-old"
+        },
+        {
+          id: "item-new",
+          createdAt: 1_783_991_271_618,
+          turnId: "019f5e2a-80c2-72a2-9b84-e9b54ec7a26e",
+          role: "agent",
+          text: "新回复"
+        }
       ],
       nextCursor: "older"
     });

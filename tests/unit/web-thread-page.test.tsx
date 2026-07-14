@@ -1984,7 +1984,7 @@ describe("ThreadPage", () => {
     });
   });
 
-  it("should keep scroll anchor when older history is prepended", async () => {
+  it("should leave prepend scroll anchoring to Timeline without moving the viewport", async () => {
     const animationFrames: FrameRequestCallback[] = [];
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       animationFrames.push(callback);
@@ -2049,7 +2049,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(scroller.scrollTop).toBe(400);
+    expect(scroller.scrollTop).toBe(0);
     expect(animationFrames).toHaveLength(0);
   });
 

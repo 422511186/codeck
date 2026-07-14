@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   repairReconstructedTimelineEntries,
+  threadDetailEntries,
   threadDetailEntriesWithTurnItems
 } from "../../src/web/state/timeline-adapter";
 import type { ThreadDetail } from "../../src/web/api/types";
@@ -11,6 +12,32 @@ function entry(id: string, turnId: string, createdAt: number, body: TimelineEntr
 }
 
 describe("timeline adapter", () => {
+  it("normalizes Unix-second snapshot timestamps to milliseconds", () => {
+    const updatedAtSeconds = 1_783_991_271;
+    const detail = {
+      id: "thread-seconds",
+      title: "历史会话",
+      preview: "",
+      cwd: "/repo",
+      modelProvider: "custom",
+      status: "idle",
+      updatedAt: updatedAtSeconds,
+      lastTurnId: "turn-old",
+      nextCursor: null,
+      timeline: [
+        { id: "history-user", turnId: "turn-old", role: "user" as const, text: "历史问题" },
+        { id: "history-agent", turnId: "turn-old", role: "agent" as const, text: "历史回答" }
+      ]
+    } satisfies ThreadDetail;
+
+    const entries = threadDetailEntries(detail);
+
+    expect(entries.map((item) => item.createdAt)).toEqual([
+      (updatedAtSeconds - 2) * 1000,
+      (updatedAtSeconds - 1) * 1000
+    ]);
+  });
+
   it("preserves source order without moving trailing activity or rewriting timestamps", () => {
     const repaired = repairReconstructedTimelineEntries([
       entry("user-1", "turn-1", 1, { kind: "user-message", text: "分析 bug", status: "sent" }),

@@ -619,6 +619,7 @@ export type MobileExperimentalFeatureView = {
 
 export type MobileTimelineItem = {
   id: string;
+  createdAt?: number;
   turnId?: string;
   turnIndex?: number;
   clientUserMessageId?: string;

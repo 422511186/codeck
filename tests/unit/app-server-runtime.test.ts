@@ -1629,7 +1629,9 @@ describe("createAppServerGateway", () => {
     });
 
     page.items.forEach((item) => {
+      item.createdAt = 1_783_991_271_618;
       item.arguments = "参".repeat(500_000);
+      item.imagePaths = ["/preview/" + "图".repeat(100_000)];
       item.completeness = {
         status: "truncated",
         reason: "item-budget",
@@ -1644,6 +1646,7 @@ describe("createAppServerGateway", () => {
 
     expect(Buffer.byteLength(JSON.stringify(rebudgeted), "utf8")).toBeLessThanOrEqual(1024 * 1024);
     expect(rebudgeted.items.every((item) => item.arguments === undefined)).toBe(true);
+    expect(rebudgeted.items.every((item) => item.createdAt === 1_783_991_271_618)).toBe(true);
   });
 
   it("session rollout path 必须通过 workspace path validator", async () => {

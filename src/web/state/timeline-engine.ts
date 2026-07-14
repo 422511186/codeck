@@ -1208,13 +1208,18 @@ function removeEmptyReasoning(state: TimelineEngineState, turnId: string | null,
 
 function finishTurnEntries(state: TimelineEngineState, turnId: string, status: string): TimelineEngineState {
   const failed = /fail|error|cancel|interrupt/i.test(status);
+  const userFailed = /fail|error/i.test(status);
   const completedStatus: "failed" | "success" = failed ? "failed" : "success";
   let changed = false;
-  const entries = state.entries.flatMap((entry) => {
+  const entries: TimelineEntry[] = state.entries.flatMap<TimelineEntry>((entry) => {
     if (entry.turnId !== turnId) return [entry];
     if (entry.body.kind === "reasoning" && entry.body.done === false) {
       changed = true;
       return entry.body.text.trim() ? [{ ...entry, body: { ...entry.body, done: true } }] : [];
+    }
+    if (userFailed && entry.body.kind === "user-message" && entry.body.status !== "failed") {
+      changed = true;
+      return [{ ...entry, body: { ...entry.body, status: "failed" as const } }];
     }
     if (entry.body.kind === "tool" && entry.body.status === "running") {
       changed = true;

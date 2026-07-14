@@ -22,6 +22,37 @@ describe("timeline conversion", () => {
     expect((entry.body as any).imagePaths).toEqual(["C:/shot.png"]);
   });
 
+  it("uses UUIDv7 turn time instead of the pagination request time", () => {
+    const turnId = "019f5e2a-80c2-72a2-9b84-e9b54ec7a26e";
+    const turnCreatedAt = Number.parseInt("019f5e2a80c2", 16);
+    const requestCreatedAt = Date.parse("2026-07-14T02:00:00.000Z");
+
+    const user = timelineItemToEntry(
+      { id: "history-user", turnId, role: "user", text: "历史问题" },
+      requestCreatedAt
+    );
+    const agent = timelineItemToEntry(
+      { id: "history-agent", turnId, role: "agent", text: "历史回答" },
+      requestCreatedAt + 1
+    );
+
+    expect(user.createdAt).toBe(turnCreatedAt);
+    expect(agent.createdAt).toBe(turnCreatedAt);
+    expect(user.createdAt).not.toBe(requestCreatedAt);
+  });
+
+  it("normalizes Unix-second fallbacks without changing synthetic ordering values", () => {
+    const unixSeconds = 1_783_991_271;
+
+    expect(
+      timelineItemToEntry({ id: "history-seconds", role: "agent", text: "历史回答" }, unixSeconds).createdAt
+    ).toBe(unixSeconds * 1000);
+    expect(
+      timelineItemToEntry({ id: "synthetic-order", turnId: "turn-old", role: "agent", text: "排序值" }, 1000)
+        .createdAt
+    ).toBe(1000);
+  });
+
   it("should preserve user message skill references", () => {
     const item: TimelineItem = {
       id: "1-skill",
