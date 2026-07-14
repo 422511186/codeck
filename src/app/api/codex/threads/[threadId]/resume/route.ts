@@ -15,7 +15,10 @@ export async function POST(
     const { threadId } = await context.params;
     await audit("thread.resume", { threadId });
     const thread = await getAppServerGateway().resumeThread(threadId);
-    return NextResponse.json({ ok: true, thread });
+    return NextResponse.json({
+      ok: true,
+      thread: { ...thread, timeline: [], nextCursor: null }
+    });
   } catch (error) {
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : "无法恢复会话" },

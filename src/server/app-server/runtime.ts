@@ -3549,7 +3549,9 @@ export class AppServerGateway {
   async resumeThread(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
     const detail = await this.applySessionTimelineSupplement(await this.client.resumeThread(threadId));
-    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
+    return this.timelineThreadWithinBudget(
+      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+    );
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
@@ -3598,13 +3600,15 @@ export class AppServerGateway {
     if (!deletedTurnIds.length && numTurns > 0) {
       this.bumpTimelineGeneration(threadId);
     }
-    return this.withTimelineGeneration(this.applyTimelineOverlay(detail));
+    return this.timelineThreadWithinBudget(
+      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+    );
   }
 
   async setThreadName(threadId: string, name: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
     await this.client.setThreadName(threadId, name);
-    return this.client.readThread(threadId);
+    return this.client.readThreadMetadata(threadId);
   }
 
   async archiveThread(threadId: string): Promise<void> {

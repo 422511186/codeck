@@ -15,7 +15,7 @@ export async function POST(
     const { threadId } = await context.params;
     await audit("review.start", { threadId, target: "uncommittedChanges", delivery: "inline" });
     const review = await getAppServerGateway().startReview(threadId);
-    const thread = await getAppServerGateway().readThread(review.reviewThreadId);
+    const thread = await getAppServerGateway().readThreadMetadata(review.reviewThreadId);
     return NextResponse.json({ ok: true, thread });
   } catch (error) {
     return NextResponse.json(

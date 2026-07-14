@@ -33,8 +33,7 @@ export async function POST(
       expectedTurnId,
       text
     });
-    const thread = await getAppServerGateway().readThread(threadId);
-    return ok({ ...result, thread });
+    return ok(result);
   } catch (error) {
     return serverError(error, "无法 steer turn");
   }

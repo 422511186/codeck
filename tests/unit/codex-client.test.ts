@@ -1610,6 +1610,43 @@ describe("CodexAppServerClient", () => {
     expect(detail.nextCursor).toBe("turn-older");
   });
 
+  it("metadata flags 被上游忽略时不使用 response.thread.turns 作为分页 fallback", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/read") {
+        const response = await originalRequest(method, params) as { thread: { turns?: unknown[] } };
+        const turnPage = await originalRequest("thread/turns/list", {
+          threadId: "thread-1",
+          limit: 30,
+          sortDirection: "desc",
+          itemsView: "full"
+        }) as { data: unknown[] };
+        return {
+          ...response,
+          thread: {
+            ...response.thread,
+            turns: Array.from({ length: 40 }, (_, index) => ({
+              ...(turnPage.data[0] as object),
+              id: `unexpected-turn-${index}`
+            }))
+          }
+        };
+      }
+      if (method === "thread/turns/list") {
+        return { data: [], nextCursor: null, backwardsCursor: null };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    const detail = await client.readThread("thread-1");
+
+    expect(detail.timeline).toEqual([]);
+    expect(detail.nextCursor).toBeNull();
+  });
+
   it("分页读取 turns 时不返回页内重置的 turnIndex", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -1830,6 +1867,44 @@ describe("CodexAppServerClient", () => {
         }
       }
     });
+  });
+
+  it("thread/resume 缺少 initialTurnsPage 时丢弃非兼容 response.thread.turns", async () => {
+    const peer = new FakePeer();
+    const originalRequest = peer.request.bind(peer);
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/resume") {
+        const response = await originalRequest(method, params) as {
+          thread: { turns?: unknown[] };
+          initialTurnsPage?: unknown;
+        };
+        const turnPage = await originalRequest("thread/turns/list", {
+          threadId: "thread-1",
+          limit: 30,
+          sortDirection: "desc",
+          itemsView: "full"
+        }) as { data: unknown[] };
+        return {
+          ...response,
+          initialTurnsPage: undefined,
+          thread: {
+            ...response.thread,
+            turns: Array.from({ length: 40 }, (_, index) => ({
+              ...(turnPage.data[0] as object),
+              id: `unexpected-resume-turn-${index}`
+            }))
+          }
+        };
+      }
+      return originalRequest(method, params);
+    };
+    const client = new CodexAppServerClient(peer);
+
+    const detail = await client.resumeThread("thread-1");
+
+    expect(detail.timeline).toEqual([]);
+    expect(detail.nextCursor).toBeNull();
   });
 
   it("thread/resume 会把 desc 初始 turns 页转换为会话正序", async () => {

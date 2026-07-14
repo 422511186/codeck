@@ -205,14 +205,14 @@ export type StartTurnInput = {
   collaborationMode?: CollaborationModePayload;
 };
 
-export type StartTurnResult = { turnId: string; thread?: ThreadDetail };
+export type StartTurnResult = { turnId: string };
 
 export async function startTurn(input: StartTurnInput): Promise<StartTurnResult> {
   const data = await api<StartTurnResult>("/api/codex/turns/start", {
     method: "POST",
     body: input
   });
-  return { turnId: data.turnId, thread: data.thread };
+  return { turnId: data.turnId };
 }
 
 export async function interruptTurn(threadId: string, turnId?: string): Promise<void> {

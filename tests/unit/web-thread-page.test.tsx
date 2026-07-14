@@ -406,15 +406,15 @@ describe("ThreadPage", () => {
     });
   });
 
-  it("should keep metadata usable when the initial message page fails", async () => {
+  it("should fail closed when the initial message page fails", async () => {
     mockListTurnsBefore.mockRejectedValue(new Error("message page unavailable"));
 
     render(<ThreadPage />);
 
     await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenCalledWith("thread-1", [], null);
+      expect(screen.getByText("message page unavailable")).toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
   });
 
   it("should preserve trailing snapshot activity source order and timestamps", async () => {
@@ -3905,7 +3905,7 @@ describe("ThreadPage", () => {
     expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("reasoningEffort");
   });
 
-  it("should refresh timeline from idle startTurn response after sending", async () => {
+  it("should ignore an unexpected idle thread snapshot in startTurn response", async () => {
     const user = userEvent.setup();
     const now = Date.now();
     mockStartTurn.mockResolvedValue({
@@ -3930,21 +3930,15 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
+    mockSetThreadEntries.mockClear();
+    mockMergeThreadEntries.mockClear();
 
     await user.type(screen.getByPlaceholderText("输入消息"), "hello from mobile");
     await user.click(screen.getByLabelText("发送"));
 
-    await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenCalledWith(
-        "thread-1",
-        expect.arrayContaining([
-          expect.objectContaining({ id: "user-2" }),
-          expect.objectContaining({ id: "agent-2" })
-        ]),
-        null
-      );
-    });
-    expect(mockSetThreadStatus).toHaveBeenLastCalledWith("thread-1", "idle", null);
+    await waitFor(() => expect(mockStartTurn).toHaveBeenCalled());
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+    expect(mockMergeThreadEntries).not.toHaveBeenCalled();
   });
 
   it("should preserve selected skill references when idle startTurn snapshot omits them", async () => {
@@ -3996,24 +3990,21 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "重试" }));
 
     await waitFor(() => {
-      expect(mockSetThreadEntries).toHaveBeenCalledWith(
+      expect(mockReplaceOrAddEntry).toHaveBeenCalledWith(
         "thread-1",
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "server-user-skill",
-            body: expect.objectContaining({
-              kind: "user-message",
-              text: "retry with skill",
-              skillReferences
-            })
+        expect.objectContaining({
+          body: expect.objectContaining({
+            kind: "user-message",
+            text: "retry with skill",
+            skillReferences,
+            status: "sent"
           })
-        ]),
-        null
+        })
       );
     });
   });
 
-  it("should merge running startTurn snapshots without clearing streamed entries", async () => {
+  it("should ignore an unexpected running thread snapshot in startTurn response", async () => {
     const user = userEvent.setup();
     mockStartTurn.mockResolvedValue({
       turnId: "turn-2",
@@ -4034,18 +4025,16 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
+    mockSetThreadEntries.mockClear();
+    mockMergeThreadEntries.mockClear();
 
     await user.type(screen.getByPlaceholderText("输入消息"), "hello from mobile");
     await user.click(screen.getByLabelText("发送"));
 
-    await waitFor(() => {
-      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
-        "thread-1",
-        expect.arrayContaining([expect.objectContaining({ id: "user-2" })]),
-        null
-      );
-    });
-    expect(mockSetThreadStatus).toHaveBeenLastCalledWith("thread-1", "active", "turn-2");
+    await waitFor(() => expect(mockStartTurn).toHaveBeenCalled());
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+    expect(mockMergeThreadEntries).not.toHaveBeenCalled();
+    expect(mockSetThreadStatus).toHaveBeenLastCalledWith("thread-1", "active");
   });
 
   it("should resize the timeline through flex layout when composer height changes", async () => {
@@ -4186,6 +4175,52 @@ describe("ThreadPage", () => {
         imagePaths: []
       })
     );
+  });
+
+  it("should not replace the progressive window with timeline returned by resume before send", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "custom",
+      status: "notLoaded",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+    mockResumeThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: Array.from({ length: 80 }, (_, index) => ({
+        id: `unexpected-history-${index}`,
+        turnId: `turn-${index}`,
+        role: index % 2 ? "agent" : "user",
+        text: `history ${index}`
+      })),
+      lastTurnId: "turn-79",
+      nextCursor: null,
+      updatedAt: Date.now()
+    });
+    mockStartTurn.mockResolvedValueOnce({ turnId: "turn-new" });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+    mockSetThreadEntries.mockClear();
+    mockMergeThreadEntries.mockClear();
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "keep current page");
+    await user.click(screen.getByLabelText("发送"));
+
+    await waitFor(() => expect(mockStartTurn).toHaveBeenCalled());
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+    expect(mockMergeThreadEntries).not.toHaveBeenCalled();
   });
 
   it("should not retry start turn when it reports thread not found", async () => {

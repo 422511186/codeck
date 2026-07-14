@@ -579,6 +579,7 @@ class SnapshotContextCompactionPeer extends NotificationOverlayPeer {
 class PartialRollbackPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+  private currentTurnIds = ["turn-1", "turn-2"];
 
   async connect(): Promise<void> {
     this.status = { state: "ready" };
@@ -626,7 +627,12 @@ class PartialRollbackPeer implements ManagedAppServerPeer {
     }
 
     if (method === "thread/read") {
-      return { thread: threadWithTurns(["turn-1", "turn-2"]) };
+      return { thread: threadWithTurns(this.currentTurnIds) };
+    }
+
+    if (method === "thread/turns/list") {
+      const thread = threadWithTurns(this.currentTurnIds) as { turns: unknown[] };
+      return { data: thread.turns, nextCursor: null, backwardsCursor: null };
     }
 
     if (method === "thread/goal/get") {
@@ -634,7 +640,8 @@ class PartialRollbackPeer implements ManagedAppServerPeer {
     }
 
     if (method === "thread/rollback") {
-      return { thread: threadWithTurns(["turn-1"]) };
+      this.currentTurnIds = ["turn-1"];
+      return { thread: threadWithTurns(this.currentTurnIds) };
     }
 
     throw new Error(`unexpected method ${method}`);
@@ -721,6 +728,11 @@ class SnapshotReasoningPeer implements ManagedAppServerPeer {
           ]
         }
       };
+    }
+
+    if (method === "thread/turns/list") {
+      const response = await this.request("thread/read") as { thread: { turns: unknown[] } };
+      return { data: response.thread.turns, nextCursor: null, backwardsCursor: null };
     }
 
     if (method === "thread/goal/get") {

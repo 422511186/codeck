@@ -1002,10 +1002,6 @@ function isUnsupportedThreadItemsListError(error: unknown): boolean {
   return /thread\/items\/list/i.test(message) && (/not supported/i.test(message) || /unknown variant/i.test(message));
 }
 
-function threadWithTurns(thread: Thread): Thread {
-  return { ...thread, turns: Array.isArray(thread.turns) ? thread.turns : [] };
-}
-
 function threadWithRecentTurns(thread: Thread, turns: Thread["turns"]): Thread {
   return { ...thread, turns };
 }
@@ -1487,7 +1483,7 @@ export class CodexAppServerClient {
         threadId,
         includeTurns: false
     })) as ThreadReadResponse;
-    const initialPage = await this.readInitialThreadTurns(threadId, response.thread);
+    const initialPage = await this.readInitialThreadTurns(threadId);
     const goal = await goalPromise;
 
     return {
@@ -1518,8 +1514,7 @@ export class CodexAppServerClient {
   }
 
   private async readInitialThreadTurns(
-    threadId: string,
-    metadataThread: Thread
+    threadId: string
   ): Promise<{ turns: Thread["turns"]; nextCursor: string | null }> {
     try {
       const response = (await this.peer.request("thread/turns/list", {
@@ -1528,16 +1523,8 @@ export class CodexAppServerClient {
         sortDirection: "desc",
         itemsView: "full"
       } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
-      const fallbackTurns = threadWithTurns(metadataThread).turns;
-      if (!response.data.length && fallbackTurns.length) {
-        return { turns: fallbackTurns, nextCursor: null };
-      }
       return { turns: chronologicalTurnsFromDescPage(response.data), nextCursor: response.nextCursor };
     } catch (error) {
-      const fallbackTurns = threadWithTurns(metadataThread).turns;
-      if (fallbackTurns.length) {
-        return { turns: fallbackTurns, nextCursor: null };
-      }
       if (isUnmaterializedThreadReadError(error)) {
         return { turns: [], nextCursor: null };
       }
@@ -1561,7 +1548,7 @@ export class CodexAppServerClient {
     ]);
     const thread = response.initialTurnsPage
       ? { ...response.thread, turns: chronologicalTurnsFromDescPage(response.initialTurnsPage.data) }
-      : response.thread;
+      : { ...response.thread, turns: [] };
 
     return {
       ...threadDetail(thread, {
@@ -1630,7 +1617,7 @@ export class CodexAppServerClient {
       numTurns
     };
     const response = (await this.peer.request("thread/rollback", params)) as ThreadRollbackResponse;
-    const page = await this.readInitialThreadTurns(threadId, response.thread);
+    const page = await this.readInitialThreadTurns(threadId);
     return threadDetail(threadWithRecentTurns(response.thread, page.turns), { nextCursor: page.nextCursor });
   }
 

@@ -24,7 +24,7 @@ export async function POST(
     let turnId = optionalStrictNonEmptyString(body.turnId, "turnId") ?? "";
 
     if (!turnId) {
-      const thread = await gateway.readThread(threadId);
+      const thread = await gateway.readThreadMetadata(threadId);
       turnId = thread.lastTurnId ?? "";
     }
 

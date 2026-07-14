@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockReadThread = vi.fn();
+const mockReadThreadMetadata = vi.fn();
 const mockInterruptTurn = vi.fn();
 const mockAudit = vi.fn();
 
@@ -14,7 +14,7 @@ vi.mock("../../src/server/security", () => ({
 
 vi.mock("../../src/server/app-server/runtime", () => ({
   getAppServerGateway: () => ({
-    readThread: (...args: unknown[]) => mockReadThread(...args),
+    readThreadMetadata: (...args: unknown[]) => mockReadThreadMetadata(...args),
     interruptTurn: (...args: unknown[]) => mockInterruptTurn(...args)
   })
 }));
@@ -22,10 +22,10 @@ vi.mock("../../src/server/app-server/runtime", () => ({
 describe("codex turn interrupt route", () => {
   beforeEach(() => {
     vi.resetModules();
-    mockReadThread.mockReset();
+    mockReadThreadMetadata.mockReset();
     mockInterruptTurn.mockReset();
     mockAudit.mockReset();
-    mockReadThread.mockResolvedValue({
+    mockReadThreadMetadata.mockResolvedValue({
       id: "thread-1",
       title: "会话",
       preview: "",
@@ -52,7 +52,7 @@ describe("codex turn interrupt route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockReadThread).toHaveBeenCalledWith("thread-1");
+    expect(mockReadThreadMetadata).toHaveBeenCalledWith("thread-1");
     expect(mockInterruptTurn).toHaveBeenCalledWith("thread-1", "turn-running");
     expect(mockAudit).toHaveBeenCalledWith("turn.interrupt", {
       threadId: "thread-1",

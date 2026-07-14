@@ -340,13 +340,13 @@ export default function ThreadPage(): JSX.Element {
         const initialPage = await requestCoordinatorRef.current.dedupeRequest(
           `thread:${threadId}:turns:initial`,
           () => codex.listTurnsBefore(threadId, null)
-        ).catch(() => null);
+        );
         if (cancelled) return;
         if (requestEpoch !== mutationEpochRef.current) return;
         applyThreadDetail({
           ...td,
-          timeline: initialPage ? initialPage.items : td.timeline,
-          nextCursor: initialPage ? (initialPage.nextCursor ?? null) : td.nextCursor
+          timeline: initialPage.items,
+          nextCursor: initialPage.nextCursor ?? null
         }, "replace");
       } catch (err) {
         if (isRequestAbort(err)) return;
@@ -577,11 +577,10 @@ export default function ThreadPage(): JSX.Element {
       try {
         const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
         if (currentStatus === "notLoaded") {
-          const resumed = await requestCoordinatorRef.current.dedupeRequest(
+          await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:resume`,
             () => codex.resumeThread(threadId)
           );
-          applyThreadDetail(resumed, "replace");
         }
         const currentMode = useStore.getState().threads[threadId]?.mode ?? "build";
         const collaborationMode =
@@ -603,54 +602,27 @@ export default function ThreadPage(): JSX.Element {
         };
         const started = await codex.startTurn(startInput);
         bindLocalUserMessageTurn(threadId, clientUserMessageId, started.turnId);
-        if (started.thread) {
-          const threadWithLocalContext = mergeSentUserContextIntoThreadDetail(started.thread, {
-            clientUserMessageId,
-            turnId: started.turnId,
+        const currentThread = useStore.getState().threads[threadId];
+        if (currentThread?.running) {
+          setActiveTurnId(threadId, started.turnId);
+        } else if (!threadHasVisibleOutput(currentThread, started.turnId)) {
+          requestSnapshotRepair(threadId, {
+            reason: "turn-completed",
+            turnId: started.turnId
+          });
+        }
+        replaceOrAddEntry(threadId, {
+          ...optimisticEntry,
+          turnId: started.turnId,
+          clientUserMessageId,
+          body: {
+            kind: "user-message",
             text,
-            imagePaths,
-            skillReferences
-          });
-          applyThreadDetail(
-            threadWithLocalContext,
-            isThreadRunningStatus(threadWithLocalContext.status) ? "merge" : "replace"
-          );
-          setActiveTurnId(threadId, isThreadRunningStatus(threadWithLocalContext.status) ? started.turnId : null);
-        } else {
-          const currentThread = useStore.getState().threads[threadId];
-          if (currentThread?.running) {
-            setActiveTurnId(threadId, started.turnId);
-          } else if (!threadHasVisibleOutput(currentThread, started.turnId)) {
-            requestSnapshotRepair(threadId, {
-              reason: "turn-completed",
-              turnId: started.turnId
-            });
+            ...(imagePaths.length ? { imagePaths } : {}),
+            ...(skillReferences.length ? { skillReferences } : {}),
+            status: "sent"
           }
-        }
-        const serverHasUserMessage = started.thread?.timeline.some(
-          (item) => item.role === "user" && item.text.trim() === text.trim()
-        ) ?? false;
-        if (!serverHasUserMessage) {
-          replaceOrAddEntry(threadId, {
-            ...optimisticEntry,
-            turnId: started.turnId,
-            clientUserMessageId,
-            body: {
-              kind: "user-message",
-              text,
-              ...(imagePaths.length ? { imagePaths } : {}),
-              ...(skillReferences.length ? { skillReferences } : {}),
-              status: "sent"
-            }
-          });
-        }
-        if (started.thread) {
-          setThreadStatus(
-            threadId,
-            started.thread.status,
-            isThreadRunningStatus(started.thread.status) ? started.turnId : null
-          );
-        }
+        });
         // Auto-name thread after first user message
         if ((!currentDetail.title || currentDetail.title === "新会话") && text.trim()) {
           try {
@@ -2098,55 +2070,6 @@ function sendPayloadKey(text: string, imagePaths: string[], skillReferences: Ski
   const images = [...imagePaths].sort().join("\u0000");
   const skills = [...skillReferences].map((skill) => `${skill.name}\u0000${skill.path}`).sort().join("\u0000");
   return `${text.trim()}\u0001${images}\u0001${skills}`;
-}
-
-function mergeSentUserContextIntoThreadDetail(
-  thread: ThreadDetail,
-  context: {
-    clientUserMessageId: string;
-    turnId: string;
-    text: string;
-    imagePaths: string[];
-    skillReferences: SkillReference[];
-  }
-): ThreadDetail {
-  if (!context.imagePaths.length && !context.skillReferences.length) {
-    return thread;
-  }
-
-  const userIndexes = thread.timeline
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.role === "user");
-  const text = context.text.trim();
-  const byClientId = userIndexes.find(
-    ({ item }) => item.clientUserMessageId && item.clientUserMessageId === context.clientUserMessageId
-  );
-  const byTurnId = byClientId
-    ? null
-    : userIndexes.find(({ item }) => item.turnId && item.turnId === context.turnId && item.text.trim() === text);
-  const textMatches =
-    byClientId || byTurnId ? [] : userIndexes.filter(({ item }) => item.text.trim() === text);
-  const match = byClientId ?? byTurnId ?? (textMatches.length === 1 ? textMatches[0] : null);
-  if (!match) {
-    return thread;
-  }
-
-  return {
-    ...thread,
-    timeline: thread.timeline.map((item, index) => {
-      if (index !== match.index) {
-        return item;
-      }
-      return {
-        ...item,
-        clientUserMessageId: item.clientUserMessageId ?? context.clientUserMessageId,
-        ...(item.imagePaths?.length || !context.imagePaths.length ? {} : { imagePaths: context.imagePaths }),
-        ...(item.skillReferences?.length || !context.skillReferences.length
-          ? {}
-          : { skillReferences: context.skillReferences })
-      };
-    })
-  };
 }
 
 function cachedThreadDetailFromState(
