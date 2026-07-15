@@ -199,6 +199,7 @@ import type { ThreadApproveGuardianDeniedActionParams } from "../../../docs/gene
 import type { ThreadInjectItemsParams } from "../../../docs/generated/app-server-ts/v2/ThreadInjectItemsParams";
 import type { TurnError } from "../../../docs/generated/app-server-ts/v2/TurnError";
 import type { TurnInterruptParams } from "../../../docs/generated/app-server-ts/v2/TurnInterruptParams";
+import type { TurnStatus } from "../../../docs/generated/app-server-ts/v2/TurnStatus";
 import type { TurnStartParams } from "../../../docs/generated/app-server-ts/v2/TurnStartParams";
 import type { ReasoningSummary } from "../../../docs/generated/app-server-ts/ReasoningSummary";
 import type { TurnStartResponse } from "../../../docs/generated/app-server-ts/v2/TurnStartResponse";
@@ -367,6 +368,11 @@ export type StartTurnInput = {
   approvalsReviewer?: TurnStartParams["approvalsReviewer"];
   additionalContext?: TurnStartParams["additionalContext"];
   collaborationMode?: TurnStartParams["collaborationMode"];
+};
+
+export type ThreadTurnExecutionState = {
+  turnId: string;
+  status: TurnStatus;
 };
 
 export type ExecCommandInput = {
@@ -989,11 +995,11 @@ function threadDetail(
   };
 }
 
-function isUnmaterializedThreadReadError(error: unknown): boolean {
+function isUnmaterializedThreadTimelinePageError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     /not materialized yet|not loaded/i.test(message) &&
-    (/includeTurns/i.test(message) || /thread\/turns\/list/i.test(message) || /before first user message/i.test(message))
+    /(?:before|until) (?:the )?first user message/i.test(message)
   );
 }
 
@@ -1513,6 +1519,25 @@ export class CodexAppServerClient {
     return threadSummary(response.thread);
   }
 
+  async readLatestThreadTurnState(threadId: string): Promise<ThreadTurnExecutionState | null> {
+    let response: ThreadTurnsListResponse;
+    try {
+      response = (await this.peer.request("thread/turns/list", {
+        threadId,
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded"
+      } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+    } catch (error) {
+      if (isUnmaterializedThreadTimelinePageError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    const latestTurn = response.data[0];
+    return latestTurn ? { turnId: latestTurn.id, status: latestTurn.status } : null;
+  }
+
   private async readInitialThreadTurns(
     threadId: string
   ): Promise<{ turns: Thread["turns"]; nextCursor: string | null }> {
@@ -1525,7 +1550,7 @@ export class CodexAppServerClient {
       } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
       return { turns: chronologicalTurnsFromDescPage(response.data), nextCursor: response.nextCursor };
     } catch (error) {
-      if (isUnmaterializedThreadReadError(error)) {
+      if (isUnmaterializedThreadTimelinePageError(error)) {
         return { turns: [], nextCursor: null };
       }
       throw error;
@@ -2583,6 +2608,9 @@ export class CodexAppServerClient {
       }
       response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
     } catch (error) {
+      if (isUnmaterializedThreadTimelinePageError(error)) {
+        return { items: [], nextCursor: null };
+      }
       if (!isUnsupportedThreadItemsListError(error)) {
         throw error;
       }
@@ -2600,13 +2628,21 @@ export class CodexAppServerClient {
           break;
         }
         seenTurnCursors.add(cursorKey);
-        const legacyResponse = (await this.peer.request("thread/turns/list", {
-          threadId: input.threadId,
-          cursor: turnCursor,
-          limit: LEGACY_THREAD_TURN_PAGE_LIMIT,
-          sortDirection: "desc",
-          itemsView: "full"
-        } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+        let legacyResponse: ThreadTurnsListResponse;
+        try {
+          legacyResponse = (await this.peer.request("thread/turns/list", {
+            threadId: input.threadId,
+            cursor: turnCursor,
+            limit: LEGACY_THREAD_TURN_PAGE_LIMIT,
+            sortDirection: "desc",
+            itemsView: "full"
+          } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+        } catch (error) {
+          if (isUnmaterializedThreadTimelinePageError(error)) {
+            return { items: [], nextCursor: null };
+          }
+          throw error;
+        }
         const legacyItems = chronologicalTurnsFromDescPage(legacyResponse.data)
           .flatMap((turn) => timelineItemsForTurn(turn));
         const pageEnd = Math.max(0, legacyItems.length - itemOffset);

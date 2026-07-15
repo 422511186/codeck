@@ -288,7 +288,7 @@ export default function ThreadPage(): JSX.Element {
           });
         }
       }
-      setThreadStatus(targetThreadId, td.status, isThreadRunningStatus(td.status) ? td.lastTurnId : null);
+      setThreadStatus(targetThreadId, td.status, isThreadRunningStatus(td.status) ? (td.lastTurnId || undefined) : null);
     },
     [
       threadId,

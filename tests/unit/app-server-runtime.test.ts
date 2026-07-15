@@ -106,6 +106,117 @@ class AlreadyInitializedPeer implements ManagedAppServerPeer {
   }
 }
 
+class ActiveTurnPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(handler: (message: AppServerNotificationMessage) => void): () => void {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
+  }
+
+  onServerRequest(_handler: (message: AppServerServerRequestMessage) => void): () => void {
+    return () => undefined;
+  }
+
+  emitNotification(message: AppServerNotificationMessage): void {
+    for (const handler of this.notificationHandlers) {
+      handler(message);
+    }
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string): Promise<unknown> {
+    if (method === "initialize") {
+      return {
+        userAgent: "codex-test",
+        codexHome: "/tmp/.codex",
+        platformFamily: "unix",
+        platformOs: "linux"
+      };
+    }
+    if (method === "turn/start") {
+      return { turn: { id: "turn-from-start" } };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class DelayedActiveTurnPeer extends ActiveTurnPeer {
+  private resolveStartRequest: ((value: unknown) => void) | null = null;
+  private markStartRequested: (() => void) | null = null;
+  readonly startRequested = new Promise<void>((resolve) => {
+    this.markStartRequested = resolve;
+  });
+
+  override async request(method: string): Promise<unknown> {
+    if (method !== "turn/start") {
+      return super.request(method);
+    }
+    this.markStartRequested?.();
+    return new Promise((resolve) => {
+      this.resolveStartRequest = resolve;
+    });
+  }
+
+  resolveStart(): void {
+    this.resolveStartRequest?.({ turn: { id: "turn-from-start" } });
+  }
+}
+
+class StaleActiveThreadPeer extends ActiveTurnPeer {
+  constructor(private readonly latestTurnStatus: "completed" | "interrupted" | "failed" | "inProgress") {
+    super();
+  }
+
+  override async request(method: string): Promise<unknown> {
+    if (method === "thread/read") {
+      return {
+        thread: {
+          id: "thread-1",
+          name: "Stale active thread",
+          preview: "",
+          cwd: "/repo",
+          modelProvider: "custom",
+          status: { type: "active", activeFlags: [] },
+          updatedAt: 1,
+          turns: []
+        }
+      };
+    }
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+    if (method === "thread/turns/list") {
+      return {
+        data: [{ id: "turn-latest", status: this.latestTurnStatus, itemsView: "notLoaded", items: [] }],
+        nextCursor: null,
+        backwardsCursor: null
+      };
+    }
+    return super.request(method);
+  }
+}
+
 class UnsupportedTurnItemsPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   calls: Array<{ method: string; params?: unknown }> = [];
@@ -1404,6 +1515,72 @@ describe("createAppServerGateway", () => {
     expect(peer.connectCount).toBe(1);
     expect(peer.initializeCount).toBe(1);
     expect(peer.notifications).toEqual([]);
+  });
+
+  it("维护 start 响应和 lifecycle 事件提供的 active turn identity", async () => {
+    const peer = new ActiveTurnPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.startTurn({ threadId: "thread-1", text: "开始" });
+    expect(gateway.getActiveTurnId("thread-1")).toBe("turn-from-start");
+
+    peer.emitNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-from-event" } }
+    });
+    expect(gateway.getActiveTurnId("thread-1")).toBe("turn-from-event");
+
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-from-start", status: "completed" } }
+    });
+    expect(gateway.getActiveTurnId("thread-1")).toBe("turn-from-event");
+
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-from-event", status: "interrupted" } }
+    });
+    expect(gateway.getActiveTurnId("thread-1")).toBeNull();
+  });
+
+  it("迟到的 start 响应不会复活已经终态的 turn identity", async () => {
+    const peer = new DelayedActiveTurnPeer();
+    const gateway = new AppServerGateway(peer);
+    const startPromise = gateway.startTurn({ threadId: "thread-1", text: "快速完成" });
+    await peer.startRequested;
+
+    peer.emitNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-from-start" } }
+    });
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-from-start", status: "failed" } }
+    });
+    peer.resolveStart();
+
+    await startPromise;
+    expect(gateway.getActiveTurnId("thread-1")).toBeNull();
+  });
+
+  it("用有界最新终态校正 stale active metadata 和 summary", async () => {
+    const peer = new StaleActiveThreadPeer("completed");
+    const gateway = new AppServerGateway(peer);
+    peer.emitNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-latest" } }
+    });
+
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({ status: "idle" });
+    await expect(gateway.readThreadMetadata("thread-1")).resolves.toMatchObject({ status: "idle" });
+    expect(gateway.getActiveTurnId("thread-1")).toBeNull();
+  });
+
+  it("从有界最新 inProgress turn 恢复 active identity", async () => {
+    const gateway = new AppServerGateway(new StaleActiveThreadPeer("inProgress"));
+
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({ status: "active" });
+    expect(gateway.getActiveTurnId("thread-1")).toBe("turn-latest");
   });
 
   it("刷新读取会合并尚未 materialized 的实时工具输出", async () => {

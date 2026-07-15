@@ -396,6 +396,37 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should preserve the known active turn when active metadata omits lastTurnId", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      status: "active",
+      running: true,
+      activeTurnId: "turn-known",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "active", undefined);
+    });
+    expect(mockSetThreadStatus).not.toHaveBeenCalledWith("thread-1", "active", null);
+  });
+
   it("should preserve the message page cursor when the first page has no visible items", async () => {
     mockListTurnsBefore.mockResolvedValue({ items: [], nextCursor: "older-hidden-items" });
 

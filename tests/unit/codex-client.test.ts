@@ -2783,6 +2783,38 @@ describe("CodexAppServerClient", () => {
     ]);
   });
 
+  it("能在不读取 items 的情况下有界读取最新 turn 状态", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/turns/list") {
+        return {
+          data: [{ id: "turn-latest", status: "completed", itemsView: "notLoaded", items: [] }],
+          nextCursor: "older",
+          backwardsCursor: null
+        };
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.readLatestThreadTurnState("thread-1")).resolves.toEqual({
+      turnId: "turn-latest",
+      status: "completed"
+    });
+    expect(peer.calls).toEqual([
+      {
+        method: "thread/turns/list",
+        params: {
+          threadId: "thread-1",
+          limit: 1,
+          sortDirection: "desc",
+          itemsView: "notLoaded"
+        }
+      }
+    ]);
+  });
+
   it("能按 cwd 读取 Skill 列表", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
@@ -3341,6 +3373,55 @@ describe("CodexAppServerClient", () => {
         itemsView: "full"
       }
     });
+  });
+
+  it.each([
+    ["thread/items/list", "thread empty-thread is not materialized yet; unavailable before first user message"],
+    ["thread/turns/list", "thread empty-thread is not materialized yet; thread/turns/list is unavailable before first user message"]
+  ])("%s 对未 materialized 空会话返回标准空页", async (unavailableMethod, message) => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        if (unavailableMethod === method) {
+          throw new Error(message);
+        }
+        throw new Error("thread/items/list is not supported yet");
+      }
+      if (method === "thread/turns/list") {
+        throw new Error(message);
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "empty-thread", limit: 30 })).resolves.toEqual({
+      items: [],
+      nextCursor: null
+    });
+  });
+
+  it.each([
+    ["thread/items/list", "thread not loaded; includeTurns failed: permission denied"],
+    ["thread/turns/list", "thread not loaded; thread/turns/list failed: permission denied"]
+  ])("%s 空会话分页不会吞掉未知错误", async (failedMethod, message) => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        if (failedMethod === method) {
+          throw new Error(message);
+        }
+        throw new Error("thread/items/list is not supported yet");
+      }
+      if (method === "thread/turns/list") {
+        throw new Error(message);
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "empty-thread", limit: 30 })).rejects.toThrow("permission denied");
   });
 
   it("legacy 多个短 turn 会聚合填满一个 item 页", async () => {

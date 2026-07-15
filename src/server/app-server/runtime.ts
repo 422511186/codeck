@@ -2756,6 +2756,8 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
   }
 }
 
+const MAX_TERMINAL_TURN_IDS_PER_THREAD = 32;
+
 export class AppServerGateway {
   private initialized: Promise<void> | null = null;
   private readonly client: CodexAppServerClient;
@@ -2771,6 +2773,8 @@ export class AppServerGateway {
   private readonly timelineContentSources = new Map<string, TimelineContentSource>();
   private readonly timelineContentCursors = new Map<string, TimelineContentCursorState>();
   private readonly timelineContentCursorByPosition = new Map<string, string>();
+  private readonly activeTurnIds = new Map<string, string>();
+  private readonly terminalTurnIdsByThread = new Map<string, Set<string>>();
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
@@ -2796,6 +2800,7 @@ export class AppServerGateway {
         this.emitBrowserEvent(event);
         return;
       }
+      this.recordActiveTurnIdentity(event);
       if (this.isDeletedTurnEvent(event)) {
         return;
       }
@@ -2815,6 +2820,10 @@ export class AppServerGateway {
 
   getStatus(): AppServerStatus {
     return this.peer.getStatus();
+  }
+
+  getActiveTurnId(threadId: string): string | null {
+    return this.activeTurnIds.get(threadId) ?? null;
   }
 
   onBrowserEvent(handler: (event: BrowserTimelineEvent) => void): () => void {
@@ -2972,6 +2981,39 @@ export class AppServerGateway {
     }
     const turnId = typeof event.turnId === "string" ? event.turnId : null;
     return Boolean(turnId && this.deletedTurnIdsByThread.get(event.threadId)?.has(turnId));
+  }
+
+  private recordActiveTurnIdentity(envelope: BrowserCodexEventEnvelope): void {
+    const event = envelope.event;
+    if (event.kind === "turn_started") {
+      if (!this.isTerminalTurn(event.threadId, event.turnId)) {
+        this.activeTurnIds.set(event.threadId, event.turnId);
+      }
+      return;
+    }
+    if (event.kind === "turn_completed") {
+      this.markTerminalTurn(event.threadId, event.turnId);
+      if (this.activeTurnIds.get(event.threadId) === event.turnId) {
+        this.activeTurnIds.delete(event.threadId);
+      }
+    }
+  }
+
+  private isTerminalTurn(threadId: string, turnId: string): boolean {
+    return this.terminalTurnIdsByThread.get(threadId)?.has(turnId) ?? false;
+  }
+
+  private markTerminalTurn(threadId: string, turnId: string): void {
+    const turnIds = this.terminalTurnIdsByThread.get(threadId) ?? new Set<string>();
+    turnIds.add(turnId);
+    while (turnIds.size > MAX_TERMINAL_TURN_IDS_PER_THREAD) {
+      const oldestTurnId = turnIds.values().next().value;
+      if (typeof oldestTurnId !== "string") {
+        break;
+      }
+      turnIds.delete(oldestTurnId);
+    }
+    this.terminalTurnIdsByThread.set(threadId, turnIds);
   }
 
   private markDeletedTurns(threadId: string, turnIds: string[]): void {
@@ -3341,7 +3383,8 @@ export class AppServerGateway {
 
   async readThreadMetadata(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    return this.withTimelineGeneration(await this.client.readThreadMetadata(threadId));
+    const detail = await this.reconcileThreadExecutionStatus(await this.client.readThreadMetadata(threadId));
+    return this.withTimelineGeneration(detail);
   }
 
   private timelineThreadWithinBudget(detail: MobileThreadDetail): MobileThreadDetail {
@@ -3409,7 +3452,38 @@ export class AppServerGateway {
 
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     await this.ensureReady();
-    return this.withTimelineSummaryVersion(threadId, await this.client.readThreadSummary(threadId));
+    const summary = await this.reconcileThreadExecutionStatus(await this.client.readThreadSummary(threadId));
+    return this.withTimelineSummaryVersion(threadId, summary);
+  }
+
+  private async reconcileThreadExecutionStatus<T extends MobileThreadSummary>(thread: T): Promise<T> {
+    if (thread.status !== "active") {
+      return thread;
+    }
+    let latestTurn: Awaited<ReturnType<CodexAppServerClient["readLatestThreadTurnState"]>>;
+    try {
+      latestTurn = await this.client.readLatestThreadTurnState(thread.id);
+    } catch {
+      return thread;
+    }
+    if (!latestTurn) {
+      return thread;
+    }
+    if (latestTurn.status === "inProgress") {
+      if (!this.isTerminalTurn(thread.id, latestTurn.turnId)) {
+        this.activeTurnIds.set(thread.id, latestTurn.turnId);
+      }
+      return thread;
+    }
+    const activeTurnId = this.activeTurnIds.get(thread.id) ?? null;
+    if (activeTurnId && activeTurnId !== latestTurn.turnId) {
+      return thread;
+    }
+    this.markTerminalTurn(thread.id, latestTurn.turnId);
+    if (activeTurnId === latestTurn.turnId) {
+      this.activeTurnIds.delete(thread.id);
+    }
+    return { ...thread, status: "idle" };
   }
 
   private async readSessionTimelineSupplement(
@@ -3561,7 +3635,11 @@ export class AppServerGateway {
 
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
     await this.ensureReady();
-    return this.client.startTurn(input);
+    const result = await this.client.startTurn(input);
+    if (!this.isTerminalTurn(input.threadId, result.turnId)) {
+      this.activeTurnIds.set(input.threadId, result.turnId);
+    }
+    return result;
   }
 
   async forkThread(threadId: string): Promise<MobileThreadDetail> {
