@@ -76,12 +76,14 @@ describe("timeline adapter", () => {
     expect(details[0]?.sourceOrder).toEqual({
       sourceKind: "turn-detail",
       ordinal: 0,
-      beforeEntryId: "cmd-1"
+      beforeEntryId: "cmd-1",
+      beforeTurnId: "turn-1"
     });
     expect(details[1]?.sourceOrder).toEqual({
       sourceKind: "turn-detail",
       ordinal: 1,
-      afterEntryId: "agent-1"
+      afterEntryId: "agent-1",
+      afterTurnId: "turn-1"
     });
   });
 
@@ -210,6 +212,87 @@ describe("timeline adapter", () => {
     );
 
     expect(result.detailEntries).toEqual([]);
-    expect(result.detailCompleteness).toEqual({ status: "repair-required", reason: "source-gap" });
+    expect(result.detailCompleteness).toEqual({
+      status: "repair-required",
+      reason: "source-gap",
+      nextCursor: "expired-cursor"
+    });
+  });
+
+  it("keeps successful turn-detail pages when a later page fails", async () => {
+    const detail = {
+      id: "thread-partial",
+      title: "partial",
+      preview: "",
+      cwd: "/repo",
+      modelProvider: "openai",
+      status: "idle",
+      updatedAt: 100,
+      lastTurnId: "turn-partial",
+      nextCursor: null,
+      timeline: []
+    } satisfies ThreadDetail;
+    let requests = 0;
+
+    const result = await threadDetailEntriesWithTurnItems(detail, "thread-partial", async (_threadId, turnId) => {
+      requests += 1;
+      if (requests === 2) throw new Error("temporary page failure");
+      return {
+        items: [{ id: "agent-first", turnId, role: "agent", text: "第一页成功" }],
+        nextCursor: "page-2"
+      };
+    });
+
+    expect(result.detailEntries.map((entry) => entry.id)).toEqual(["agent-first"]);
+    expect(result.detailCompleteness).toEqual(expect.objectContaining({
+      status: "repair-required",
+      reason: "source-gap",
+      nextCursor: "page-2"
+    }));
+  });
+
+  it("selects the more complete duplicate identity from later detail pages", async () => {
+    const detail = {
+      id: "thread-duplicate",
+      title: "duplicate",
+      preview: "",
+      cwd: "/repo",
+      modelProvider: "openai",
+      status: "idle",
+      updatedAt: 100,
+      lastTurnId: "turn-duplicate",
+      nextCursor: null,
+      timeline: []
+    } satisfies ThreadDetail;
+    let requests = 0;
+
+    const result = await threadDetailEntriesWithTurnItems(detail, "thread-duplicate", async (_threadId, turnId) => {
+      requests += 1;
+      return requests === 1
+        ? {
+            items: [{
+              id: "agent-1",
+              turnId,
+              role: "agent",
+              text: "preview",
+              completeness: { status: "truncated", reason: "item-budget" }
+            }],
+            nextCursor: "next"
+          }
+        : {
+            items: [{
+              id: "agent-1",
+              turnId,
+              role: "agent",
+              text: "preview with complete body",
+              completeness: { status: "complete" }
+            }],
+            nextCursor: null
+          };
+    });
+
+    expect(result.detailEntries).toEqual([
+      expect.objectContaining({ body: { kind: "agent-message", text: "preview with complete body" } })
+    ]);
   });
 });

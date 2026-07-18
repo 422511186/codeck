@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { CommandCard } from "../../src/web/components/cards/CommandCard";
 import { DiffCard } from "../../src/web/components/cards/DiffCard";
 import { ReasoningCard } from "../../src/web/components/cards/ReasoningCard";
 import { ToolCard } from "../../src/web/components/cards/ToolCard";
-import { imagePreviewSrc } from "../../src/web/components/ImagePreview";
+import { ImagePreviewDialog, ImageThumb, imagePreviewSrc } from "../../src/web/components/ImagePreview";
 
 describe("CommandCard", () => {
   it("should render command text", () => {
@@ -154,7 +154,7 @@ describe("DiffCard", () => {
     });
   });
 
-  it("should use one compact line number gutter for mobile diffs", async () => {
+  it("should use compact old/new line number gutters inside the mobile diff scroller", async () => {
     const user = userEvent.setup();
     render(
       <DiffCard
@@ -171,7 +171,9 @@ describe("DiffCard", () => {
 
     const row = screen.getByText("old").closest("div");
     expect(row).not.toBeNull();
-    expect(row!.style.gridTemplateColumns).toBe("32px 16px minmax(0, 1fr)");
+    expect(row!.style.gridTemplateColumns).toBe("32px 32px 16px minmax(0, 1fr)");
+    expect(row!.querySelector("[data-diff-old-line='true']")).not.toBeNull();
+    expect(row!.querySelector("[data-diff-new-line='true']")).not.toBeNull();
   });
 
   it("should cap expanded long diff and copy the complete diff", async () => {
@@ -286,6 +288,33 @@ describe("imagePreviewSrc", () => {
     expect(imagePreviewSrc("data:image/png;base64,abc")).toBe("data:image/png;base64,abc");
     expect(imagePreviewSrc("http://example.test/shot.png")).toBe("http://example.test/shot.png");
     expect(imagePreviewSrc("https://example.test/shot.png")).toBe("https://example.test/shot.png");
+  });
+
+  it("图片加载失败后隐藏破图并允许原位重试", async () => {
+    const user = userEvent.setup();
+    const onPreview = vi.fn();
+    render(<ImageThumb src="/missing.png" onPreview={onPreview} />);
+
+    fireEvent.error(screen.getByRole("img", { name: "预览图片" }));
+
+    expect(screen.queryByRole("img", { name: "预览图片" })).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "图片加载失败，点击重试" });
+    expect(retry).toHaveStyle({ width: "80px", height: "80px" });
+    await user.click(retry);
+
+    expect(screen.getByRole("img", { name: "预览图片" })).toBeInTheDocument();
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
+  it("图片弹层加载失败时显示占位并保留关闭入口", () => {
+    const onClose = vi.fn();
+    render(<ImagePreviewDialog src="/missing.png" onClose={onClose} />);
+
+    fireEvent.error(screen.getByRole("img", { name: "图片预览" }));
+
+    expect(screen.queryByRole("img", { name: "图片预览" })).not.toBeInTheDocument();
+    expect(screen.getByText("图片加载失败")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关闭预览" })).toBeInTheDocument();
   });
 });
 

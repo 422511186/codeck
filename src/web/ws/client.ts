@@ -10,7 +10,19 @@ export type WsHelloEvent = { type: "hello"; status: "connected" };
 export type WsHealthEvent = { type: "health"; appServer: AppServerHealth; detail?: string };
 export type WsCodexEvent = {
   type: "codex-event";
-  event: { kind: string; threadId?: string; turnId?: string; eventId?: string; revision?: number; sequence?: number; [k: string]: unknown };
+  event: {
+    kind: string;
+    threadId?: string;
+    turnId?: string;
+    eventId?: string;
+    bootId?: string;
+    generation?: number;
+    revision?: number;
+    streamSequence?: number;
+    fragmentSequence?: number;
+    sequence?: number;
+    [k: string]: unknown;
+  };
   deliveryEpoch?: number;
 };
 export type WsCodexEventBatch = {
@@ -35,6 +47,9 @@ export type WsServerRequestResolvedEvent = {
 export type WsTimelineGapEvent = {
   type: "timeline-gap";
   threadId?: string | null;
+  affectedThreadIds?: string[];
+  scope?: "threads" | "all-tracked";
+  bootId?: string;
   lastEventId?: string;
 };
 

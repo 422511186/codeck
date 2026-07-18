@@ -2,9 +2,12 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import { isValidElement, type CSSProperties, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { ImageOff, RotateCcw } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ImagePreviewDialog, imagePreviewSrc } from "./ImagePreview";
 
 type Props = { text: string; cacheKey?: string };
 
@@ -31,6 +34,7 @@ function MarkdownImpl({ text }: Props): JSX.Element {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
+        urlTransform={markdownUrlTransform}
         components={{
           code({ inline, className, children }) {
             const lang = (className ?? "").replace(/^language-/, "");
@@ -53,6 +57,9 @@ function MarkdownImpl({ text }: Props): JSX.Element {
                 <table style={markdownTableStyle}>{children}</table>
               </div>
             );
+          },
+          img({ src, alt }) {
+            return <MarkdownImage src={typeof src === "string" ? src : ""} alt={alt ?? "图片"} />;
           }
         }}
       >
@@ -63,6 +70,152 @@ function MarkdownImpl({ text }: Props): JSX.Element {
 }
 
 export const Markdown = memo(MarkdownImpl);
+
+export function markdownUrlTransform(url: string, key: string): string {
+  const decoded = decodeUrlOnce(url);
+  if (key === "src" && isAbsoluteLocalPath(decoded)) {
+    return imagePreviewSrc(decoded);
+  }
+  if (key === "src" && (/^blob:/i.test(url) || /^data:image\/(?:png|jpe?g|webp|gif)[;,]/i.test(url))) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+}
+
+function isAbsoluteLocalPath(value: string): boolean {
+  return /^\/(?!\/)/.test(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function decodeUrlOnce(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function MarkdownImage({ src, alt }: { src: string; alt: string }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setRetry(0);
+    setPreviewOpen(false);
+  }, [src]);
+
+  function retryLoad(): void {
+    setFailed(false);
+    setRetry((value) => value + 1);
+  }
+
+  function activate(): void {
+    if (failed) {
+      retryLoad();
+      return;
+    }
+    setPreviewOpen(true);
+  }
+
+  return (
+    <>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={failed ? "图片加载失败，点击重试" : `预览图片：${alt}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          activate();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            activate();
+          }
+        }}
+        style={markdownImageFrameStyle}
+      >
+        {failed ? (
+          <span style={markdownImageFailureStyle}>
+            <ImageOff aria-hidden="true" size={22} strokeWidth={1.6} />
+            <span>图片加载失败</span>
+            <span style={markdownImageRetryStyle}>
+              <RotateCcw aria-hidden="true" size={14} strokeWidth={1.8} />
+              重试
+            </span>
+          </span>
+        ) : (
+          <img
+            key={retry}
+            src={retryMarkdownImageSrc(src, retry)}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailed(true)}
+            style={markdownImageStyle}
+          />
+        )}
+      </span>
+      {previewOpen
+        ? createPortal(<ImagePreviewDialog src={src} onClose={() => setPreviewOpen(false)} />, document.body)
+        : null}
+    </>
+  );
+}
+
+function retryMarkdownImageSrc(src: string, retry: number): string {
+  if (retry === 0 || src.startsWith("data:") || src.startsWith("blob:")) {
+    return src;
+  }
+  return `${src}${src.includes("?") ? "&" : "?"}cw_retry=${retry}`;
+}
+
+const markdownImageFrameStyle: CSSProperties = {
+  display: "block",
+  width: "fit-content",
+  maxWidth: "100%",
+  minWidth: 0,
+  margin: "8px 0",
+  cursor: "zoom-in",
+  outlineOffset: 3
+};
+
+const markdownImageStyle: CSSProperties = {
+  display: "block",
+  maxWidth: "100%",
+  height: "auto",
+  borderRadius: 6
+};
+
+const markdownImageFailureStyle: CSSProperties = {
+  width: "min(100%, 360px)",
+  minWidth: 180,
+  minHeight: 112,
+  boxSizing: "border-box",
+  padding: 16,
+  border: "1px solid var(--cw-border)",
+  borderRadius: 6,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 7,
+  color: "var(--cw-fg-muted)",
+  background: "var(--cw-bg-elevated)",
+  fontSize: 12,
+  lineHeight: 1.4,
+  cursor: "pointer"
+};
+
+const markdownImageRetryStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  color: "var(--cw-fg)"
+};
 
 const markdownRootStyle: CSSProperties = {
   maxWidth: "100%",

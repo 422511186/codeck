@@ -1,3 +1,5 @@
+import type { CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
+
 export type ApiOk<T> = { ok: true } & T;
 export type ApiErr = { ok: false; error?: string };
 export type ApiResponse<T = unknown> = ApiOk<T> | ApiErr;
@@ -11,6 +13,8 @@ export type ThreadSummary = {
   status: string;
   updatedAt: number;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalsReviewer?: ApprovalsReviewer | null;
@@ -30,13 +34,20 @@ export type TimelineItem = {
   turnIndex?: number;
   clientUserMessageId?: string;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  streamSequence?: number;
+  fragmentSequence?: number;
+  baselineWatermark?: number;
+  sourceLocator?: CanonicalSourceLocator;
   role: TimelineRole;
   text: string;
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: SkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  systemKind?: "context-compaction";
   actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
@@ -52,6 +63,8 @@ export type ThreadDetail = ThreadSummary & {
   lastTurnId: string | null;
   nextCursor: string | null;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
   timeline: TimelineItem[];
   model?: string | null;
@@ -87,6 +100,13 @@ export type ThreadContextUsage = {
 export type TimelinePage = {
   items: TimelineItem[];
   nextCursor: string | null;
+  bootId?: string;
+  generation?: number;
+  historyStamp?: HistoryStamp;
+  pageWatermark?: number;
+  windowStartAnchor?: string;
+  windowEndAnchor?: string;
+  preservedThrough?: string;
   completeness?: TimelineCompleteness;
   includedBytes?: number;
 };

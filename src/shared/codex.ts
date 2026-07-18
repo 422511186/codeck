@@ -1,3 +1,5 @@
+import type { CanonicalSourceLocator, HistoryStamp } from "./timeline-protocol";
+
 export type AppServerStatusView = {
   state: "disabled" | "idle" | "starting" | "connecting" | "ready" | "error";
   message?: string;
@@ -18,6 +20,8 @@ export type MobileThreadSummary = {
   status: string;
   updatedAt: number;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
   activePermissionProfile?: MobileActivePermissionProfile | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
@@ -624,13 +628,20 @@ export type MobileTimelineItem = {
   turnIndex?: number;
   clientUserMessageId?: string;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  streamSequence?: number;
+  fragmentSequence?: number;
+  baselineWatermark?: number;
+  sourceLocator?: CanonicalSourceLocator;
   role: "user" | "agent" | "reasoning" | "plan" | "tool" | "diff" | "system" | "error";
   text: string;
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
+  systemKind?: "context-compaction";
   actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
@@ -666,6 +677,8 @@ export type MobileThreadDetail = MobileThreadSummary & {
   lastTurnId: string | null;
   nextCursor: string | null;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
   timeline: MobileTimelineItem[];
   model?: string | null;
@@ -682,6 +695,13 @@ export type MobileThreadDetail = MobileThreadSummary & {
 export type MobileTimelinePage = {
   items: MobileTimelineItem[];
   nextCursor: string | null;
+  bootId?: string;
+  generation?: number;
+  historyStamp?: HistoryStamp;
+  pageWatermark?: number;
+  windowStartAnchor?: string;
+  windowEndAnchor?: string;
+  preservedThrough?: string;
   completeness?: TimelineCompleteness;
   includedBytes?: number;
 };

@@ -20,6 +20,12 @@ import {
   type TimelineInput
 } from "./timeline-engine";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
+import {
+  historyStampFrom,
+  timelineGapScopeFrom,
+  type HistoryStamp,
+  type TimelineRepairWindow
+} from "../../shared/timeline-protocol";
 import type { WsCodexEvent, WsEvent, WsConnectionState } from "../ws/client";
 
 export type { WsConnectionState };
@@ -70,6 +76,8 @@ type TimelineDiagnostics = {
   batchFlushes: number;
   barrierRevalidations: number;
   droppedDeliveryEpochEvents: number;
+  agentAliasReconciliations: number;
+  agentAliasAmbiguities: number;
 };
 
 const timelineDiagnostics: TimelineDiagnostics = {
@@ -83,7 +91,9 @@ const timelineDiagnostics: TimelineDiagnostics = {
   indexRebuildEntries: 0,
   batchFlushes: 0,
   barrierRevalidations: 0,
-  droppedDeliveryEpochEvents: 0
+  droppedDeliveryEpochEvents: 0,
+  agentAliasReconciliations: 0,
+  agentAliasAmbiguities: 0
 };
 
 export type ThreadState = {
@@ -119,6 +129,7 @@ export type ThreadState = {
 
 type State = {
   wsState: WsConnectionState | "idle";
+  reconnectAttempt: number;
   appServer: AppServerStatus | null;
   threads: Record<string, ThreadState>;
   activeThreadId: string | null;
@@ -127,6 +138,7 @@ type State = {
 
 type Actions = {
   setWsState: (s: WsConnectionState) => void;
+  setReconnectAttempt: (attempt: number) => void;
   setAppServer: (s: AppServerStatus) => void;
   setActiveThread: (threadId: string | null) => void;
   ensureThread: (threadId: string, init?: Partial<ThreadState>) => void;
@@ -137,6 +149,12 @@ type Actions = {
     detailEntries?: TimelineEntry[]
   ) => void;
   mergeThreadEntries: (threadId: string, entries: TimelineEntry[], cursor: string | null) => void;
+  replaceLatestWindow: (
+    threadId: string,
+    entries: TimelineEntry[],
+    cursor: string | null,
+    window: TimelineRepairWindow
+  ) => boolean;
   prependEntries: (
     threadId: string,
     entries: TimelineEntry[],
@@ -270,11 +288,13 @@ function snapshotRepairKey(input: {
 
 export const useStore = create<State & Actions>((set, get) => ({
   wsState: "idle",
+  reconnectAttempt: 0,
   appServer: null,
   threads: {},
   activeThreadId: null,
   skillsCacheVersion: 0,
   setWsState: (s) => set({ wsState: s }),
+  setReconnectAttempt: (attempt) => set({ reconnectAttempt: Math.max(0, Math.min(5, attempt)) }),
   setAppServer: (s) => set({ appServer: s }),
   setActiveThread: (id) => set({ activeThreadId: id }),
   ensureThread: (threadId, init) =>
@@ -342,6 +362,37 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  replaceLatestWindow: (threadId, entries, cursor, window) => {
+    let applied = false;
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const replacement = replaceLatestTimelineWindow(prev.entries, entries, window);
+      if (!replacement) return state;
+      const timelineEngine = applyTimelineInput(currentTimelineEngine(prev), {
+        kind: "snapshot-window",
+        entries: replacement,
+        cursor,
+        generation: window.historyStamp.generation
+      });
+      applied = true;
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState({
+            ...prev,
+            timelineEngine,
+            cursor,
+            reachedBeginning: cursor === null,
+            timelineGeneration: window.historyStamp.generation,
+            processedEventIds: timelineEngine.processedEventIds,
+            itemRevisions: timelineEngine.itemRevisions,
+            snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions
+          }, timelineEngine.entries)
+        }
+      };
+    });
+    return applied;
+  },
   prependEntries: (threadId, entries, cursor, reachedBeginning) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -612,32 +663,22 @@ export const useStore = create<State & Actions>((set, get) => ({
   markTurnInterrupted: (threadId, turnId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const interruptedTurnIds = new Set(prev.interruptedTurnIds);
-      interruptedTurnIds.add(turnId);
+      const timelineEngine = reduceThreadTimelineState(prev, { kind: "mark-turn-interrupted", turnId });
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            timelineEngine: { ...currentTimelineEngine(prev), interruptedTurnIds },
-            interruptedTurnIds
-          }
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
         }
       };
     }),
   markTurnDeleted: (threadId, turnId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const deletedTurnIds = new Set(prev.deletedTurnIds);
-      deletedTurnIds.add(turnId);
+      const timelineEngine = reduceThreadTimelineState(prev, { kind: "mark-turn-deleted", turnId });
       return {
         threads: {
           ...state.threads,
-          [threadId]: {
-            ...prev,
-            timelineEngine: { ...currentTimelineEngine(prev), deletedTurnIds },
-            deletedTurnIds
-          }
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
         }
       };
     }),
@@ -755,8 +796,13 @@ export const useStore = create<State & Actions>((set, get) => ({
     }),
   dispatchEvent: (event) => {
     if (event.type === "timeline-gap") {
-      const threadId = typeof event.threadId === "string" && event.threadId ? event.threadId : null;
-      if (threadId) {
+      const gapScope = timelineGapScopeFrom(event);
+      const threadIds = gapScope?.scope === "all-tracked"
+        ? Object.keys(get().threads)
+        : gapScope?.scope === "threads"
+          ? gapScope.affectedThreadIds
+          : [];
+      for (const threadId of threadIds) {
         get().ensureThread(threadId);
         get().invalidateTimelineDelivery(threadId);
         get().requestSnapshotRepair(threadId, {
@@ -870,15 +916,15 @@ export const useStore = create<State & Actions>((set, get) => ({
           break;
         }
         case "reasoning_started": {
-          const itemId = liveItemId(ev, threadId, generation, "reasoning");
-          if (!itemId) {
+          const identity = liveItemIdentity(ev, threadId, generation, "reasoning");
+          if (!identity) {
             get().requestSnapshotRepair(threadId, { reason: "timeline-gap", eventId });
             break;
           }
           get().startReasoningEntry(
             threadId,
             typeof ev.turnId === "string" ? ev.turnId : null,
-            itemId,
+            identity.id,
             eventId ?? undefined,
             generation ?? undefined
           );
@@ -974,11 +1020,11 @@ export const useStore = create<State & Actions>((set, get) => ({
           if (entry) {
             get().replaceOrAddEntry(
               threadId,
-              {
+              withCodexEventMetadata({
                 ...entry,
                 ...(typeof ev.turnId === "string" && !entry.turnId ? { turnId: ev.turnId } : {}),
                 ...(generation !== null && typeof entry.generation !== "number" ? { generation } : {})
-              },
+              }, ev),
               typeof ev.revision === "number" ? ev.revision : undefined,
               eventId ?? undefined
             );
@@ -991,11 +1037,11 @@ export const useStore = create<State & Actions>((set, get) => ({
             get().replaceOrAddEntry(
               threadId,
               timelineItemToEntry(
-                {
+                withCodexEventMetadata({
                   ...item,
                   ...(typeof ev.turnId === "string" && !item.turnId ? { turnId: ev.turnId } : {}),
                   ...(generation !== null && typeof item.generation !== "number" ? { generation } : {})
-                },
+                }, ev),
                 createdAt
               ),
               revision ?? undefined,
@@ -1045,16 +1091,22 @@ export const useStore = create<State & Actions>((set, get) => ({
     let fastPathCommits = 0;
     let structuralNormalizations = 0;
     let indexRebuildEntries = 0;
+    let agentAliasReconciliations = 0;
+    let agentAliasAmbiguities = 0;
     for (const thread of Object.values(get().threads)) {
       fastPathCommits += thread.timelineEngine.diagnostics.fastPathCommits;
       structuralNormalizations += thread.timelineEngine.diagnostics.structuralNormalizations;
       indexRebuildEntries += thread.timelineEngine.diagnostics.indexRebuildEntries;
+      agentAliasReconciliations += thread.timelineEngine.diagnostics.agentAliasReconciliations;
+      agentAliasAmbiguities += thread.timelineEngine.diagnostics.agentAliasAmbiguities;
     }
     return {
       ...timelineDiagnostics,
       fastPathCommits,
       structuralNormalizations,
-      indexRebuildEntries
+      indexRebuildEntries,
+      agentAliasReconciliations,
+      agentAliasAmbiguities
     };
   },
   __resetTimelineDiagnostics: () => {
@@ -1066,6 +1118,8 @@ export const useStore = create<State & Actions>((set, get) => ({
     timelineDiagnostics.batchFlushes = 0;
     timelineDiagnostics.barrierRevalidations = 0;
     timelineDiagnostics.droppedDeliveryEpochEvents = 0;
+    timelineDiagnostics.agentAliasReconciliations = 0;
+    timelineDiagnostics.agentAliasAmbiguities = 0;
   }
 }));
 
@@ -1109,6 +1163,8 @@ function currentTimelineEngine(prev: ThreadState): TimelineEngineState {
     processedEventIds: prev.processedEventIds,
     itemRevisions: prev.itemRevisions,
     snapshotDeltaSuppressions: prev.snapshotDeltaSuppressions,
+    provisionalAgentLedger: prev.timelineEngine.provisionalAgentLedger,
+    agentMessageAliases: prev.timelineEngine.agentMessageAliases,
     deliveryEpoch: prev.deliveryEpoch,
     diagnostics: prev.timelineEngine.diagnostics
   });
@@ -1155,6 +1211,8 @@ function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): Thread
           processedEventIds: prev.processedEventIds,
           itemRevisions: prev.itemRevisions,
           snapshotDeltaSuppressions: prev.snapshotDeltaSuppressions,
+          provisionalAgentLedger: prev.timelineEngine.provisionalAgentLedger,
+          agentMessageAliases: prev.timelineEngine.agentMessageAliases,
           deliveryEpoch: prev.deliveryEpoch,
           diagnostics: prev.timelineEngine.diagnostics
         });
@@ -1300,7 +1358,12 @@ function applyCodexDeltaInputs(
           entry,
           ...(typeof event.eventId === "string" ? { eventId: event.eventId } : {}),
           ...(typeof event.revision === "number" ? { revision: event.revision } : {}),
-          ...(typeof event.sequence === "number" ? { sequence: event.sequence } : {}),
+          ...(typeof event.streamSequence === "number"
+            ? { streamSequence: event.streamSequence }
+            : typeof event.sequence === "number"
+              ? { sequence: event.sequence }
+              : {}),
+          ...(typeof event.fragmentSequence === "number" ? { fragmentSequence: event.fragmentSequence } : {}),
           deliveryEpoch: deliveryEpoch ?? prev.deliveryEpoch
         }
       ];
@@ -1371,6 +1434,149 @@ function replaceMapContents<K, V>(target: Map<K, V>, source: Map<K, V>): void {
   }
 }
 
+function replaceLatestTimelineWindow(
+  current: TimelineEntry[],
+  authoritative: TimelineEntry[],
+  window: TimelineRepairWindow
+): TimelineEntry[] | null {
+  if (!authoritative.length) return null;
+  const firstAnchor = timelineEntryWindowAnchor(window.historyStamp, authoritative[0]!);
+  const lastAnchor = timelineEntryWindowAnchor(window.historyStamp, authoritative.at(-1)!);
+  if (firstAnchor !== window.windowStartAnchor || lastAnchor !== window.windowEndAnchor) return null;
+  if (authoritative.some((entry) => !entryHasHistoryStamp(entry, window.historyStamp))) return null;
+
+  const currentStamp = lastEntryHistoryStamp(current);
+  let prefix: TimelineEntry[] = [];
+  if (current.length && currentStamp && sameTimelineHistoryStamp(currentStamp, window.historyStamp)) {
+    const startIndexes = matchingAnchorIndexes(current, window.windowStartAnchor);
+    if (startIndexes.length !== 1) return null;
+    prefix = current.slice(0, startIndexes[0]);
+  } else if (current.length && window.preservedThrough) {
+    const preservedIndexes = matchingAnchorIndexes(current, window.preservedThrough);
+    if (preservedIndexes.length !== 1) return null;
+    prefix = current.slice(0, preservedIndexes[0]! + 1).map((entry) => ({
+      ...entry,
+      bootId: window.historyStamp.bootId,
+      generation: window.historyStamp.generation,
+      historyStamp: window.historyStamp
+    }));
+  }
+
+  const postWatermark = current.filter((entry) =>
+    (entryHasHistoryStamp(entry, window.historyStamp) &&
+      typeof entry.streamSequence === "number" &&
+      entry.streamSequence > window.pageWatermark) ||
+    (entry.body.kind === "user-message" && Boolean(entry.clientUserMessageId) && entry.body.status !== "sent")
+  );
+  return dedupeTimelineWindowEntries([...prefix, ...authoritative, ...postWatermark]);
+}
+
+function timelineEntryWindowAnchor(stamp: HistoryStamp, entry: TimelineEntry): string {
+  return JSON.stringify([stamp.bootId, stamp.generation, entry.turnId ?? null, entry.id]);
+}
+
+function matchingAnchorIndexes(entries: TimelineEntry[], anchor: string): number[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(anchor);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 4) return [];
+  const [bootId, generation, turnId, itemId] = parsed;
+  return entries.flatMap((entry, index) =>
+    entry.id === itemId &&
+    (entry.turnId ?? null) === turnId &&
+    (entry.historyStamp?.bootId ?? entry.bootId) === bootId &&
+    (entry.historyStamp?.generation ?? entry.generation) === generation
+      ? [index]
+      : []
+  );
+}
+
+function entryHasHistoryStamp(entry: TimelineEntry, stamp: HistoryStamp): boolean {
+  return (
+    (entry.historyStamp?.bootId ?? entry.bootId) === stamp.bootId &&
+    (entry.historyStamp?.generation ?? entry.generation) === stamp.generation
+  );
+}
+
+function lastEntryHistoryStamp(entries: TimelineEntry[]): HistoryStamp | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.historyStamp) return entry.historyStamp;
+    if (entry.bootId && typeof entry.generation === "number") {
+      return { bootId: entry.bootId, generation: entry.generation };
+    }
+  }
+  return null;
+}
+
+function sameTimelineHistoryStamp(left: HistoryStamp, right: HistoryStamp): boolean {
+  return left.bootId === right.bootId && left.generation === right.generation;
+}
+
+function dedupeTimelineWindowEntries(entries: TimelineEntry[]): TimelineEntry[] {
+  const result: TimelineEntry[] = [];
+  const indexes = new Map<string, number>();
+  for (const entry of entries) {
+    const key = entry.clientUserMessageId
+      ? `client:${entry.clientUserMessageId}`
+      : `${entry.historyStamp?.bootId ?? entry.bootId ?? "legacy"}\u0000${entry.historyStamp?.generation ?? entry.generation ?? "legacy"}\u0000${entry.turnId ?? "none"}\u0000${entry.id}`;
+    const existingIndex = indexes.get(key);
+    if (typeof existingIndex === "number") {
+      result[existingIndex] = entry;
+    } else {
+      indexes.set(key, result.length);
+      result.push(entry);
+    }
+  }
+  return result;
+}
+
+function withCodexEventMetadata<T extends {
+  bootId?: string;
+  generation?: number;
+  historyStamp?: HistoryStamp;
+  streamSequence?: number;
+  fragmentSequence?: number;
+}>(value: T, event: Record<string, unknown>): T {
+  const eventBootId = typeof event.bootId === "string" && event.bootId ? event.bootId : undefined;
+  const eventGeneration = typeof event.generation === "number" ? event.generation : undefined;
+  const bootId = value.bootId || eventBootId;
+  const generation = typeof value.generation === "number" ? value.generation : eventGeneration;
+  const eventHistoryStamp = historyStampFrom(event.historyStamp);
+  const compatibleEventHistoryStamp = eventHistoryStamp &&
+    (!value.bootId || value.bootId === eventHistoryStamp.bootId) &&
+    (typeof value.generation !== "number" || value.generation === eventHistoryStamp.generation)
+    ? eventHistoryStamp
+    : undefined;
+  const historyStamp = value.historyStamp ?? compatibleEventHistoryStamp ?? (
+    bootId && typeof generation === "number" ? { bootId, generation } : undefined
+  );
+  const streamSequence =
+    typeof value.streamSequence === "number"
+      ? value.streamSequence
+      : typeof event.streamSequence === "number"
+        ? event.streamSequence
+        : undefined;
+  const fragmentSequence =
+    typeof value.fragmentSequence === "number"
+      ? value.fragmentSequence
+      : typeof event.fragmentSequence === "number"
+        ? event.fragmentSequence
+        : undefined;
+
+  return {
+    ...value,
+    ...(value.bootId || !bootId ? {} : { bootId }),
+    ...(typeof value.generation === "number" || typeof generation !== "number" ? {} : { generation }),
+    ...(value.historyStamp || !historyStamp ? {} : { historyStamp }),
+    ...(typeof value.streamSequence === "number" || typeof streamSequence !== "number" ? {} : { streamSequence }),
+    ...(typeof value.fragmentSequence === "number" || typeof fragmentSequence !== "number" ? {} : { fragmentSequence })
+  } as T;
+}
+
 function lastTimelineEventId(events: BatchableTimelineDeltaEvent[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const eventId = events[index]?.eventId;
@@ -1381,20 +1587,43 @@ function lastTimelineEventId(events: BatchableTimelineDeltaEvent[]): string | nu
   return null;
 }
 
-function liveItemId(
+let unresolvedLiveItemSequence = 0;
+
+function liveItemIdentity(
   event: { [key: string]: unknown },
   threadId: string,
   generation: number | null,
   kind: string
-): string | null {
+): { id: string; sourceLocator?: TimelineEntry["sourceLocator"]; repairRequired?: true } | null {
   if (typeof event.itemId === "string" && event.itemId) {
-    return event.itemId;
+    return { id: event.itemId };
   }
   const turnId = typeof event.turnId === "string" && event.turnId ? event.turnId : null;
   if (!turnId) {
     return null;
   }
-  return `${threadId}:${generation ?? "legacy"}:${turnId}:${kind}:live`;
+  if (
+    typeof event.bootId === "string" &&
+    event.bootId &&
+    typeof event.eventId === "string" &&
+    event.eventId
+  ) {
+    const sourceLocator = {
+      sourceKind: "event" as const,
+      bootId: event.bootId,
+      eventId: event.eventId,
+      field: kind
+    };
+    return {
+      id: `synthetic:${encodeURIComponent(event.bootId)}:${encodeURIComponent(event.eventId)}:${kind}`,
+      sourceLocator
+    };
+  }
+  unresolvedLiveItemSequence += 1;
+  return {
+    id: `unresolved:${threadId}:${generation ?? "legacy"}:${turnId}:${kind}:${unresolvedLiveItemSequence}`,
+    repairRequired: true
+  };
 }
 
 function timelineDeltaEntry(
@@ -1404,16 +1633,27 @@ function timelineDeltaEntry(
   sourceOrder: number
 ): TimelineEntry | null {
   const generation = typeof event.generation === "number" ? event.generation : fallbackGeneration;
-  const itemId = liveItemId(event, threadId, generation, event.kind);
+  const identity = liveItemIdentity(event, threadId, generation, event.kind);
   const turnId = typeof event.turnId === "string" && event.turnId ? event.turnId : null;
   const delta = typeof event.delta === "string" ? event.delta : "";
-  if (!itemId || !turnId || !delta) {
+  if (!identity || !turnId || !delta) {
     return null;
   }
   const base = {
-    id: itemId,
+    id: identity.id,
     turnId,
     generation,
+    ...(typeof event.bootId === "string" ? { bootId: event.bootId } : {}),
+    ...(typeof event.bootId === "string" ? { historyStamp: { bootId: event.bootId, generation } } : {}),
+    ...(typeof event.streamSequence === "number" ? { streamSequence: event.streamSequence } : {}),
+    ...(typeof event.fragmentSequence === "number" ? { fragmentSequence: event.fragmentSequence } : {}),
+    ...(typeof event.revision === "number" ? { revision: event.revision } : {}),
+    ...(identity.sourceLocator ? { sourceLocator: identity.sourceLocator } : {}),
+    ...(identity.repairRequired
+      ? { completeness: { status: "repair-required" as const, reason: "source-gap" as const } }
+      : event.capReached === true
+        ? { completeness: { status: "truncated" as const, reason: "event-budget" as const } }
+      : {}),
     sourceOrder: {
       sourceKind: "live" as const,
       ordinal: sourceOrder,
@@ -1469,6 +1709,12 @@ function timelineContentReferenceEntry(
     id: itemId,
     turnId,
     ...(generation !== null ? { generation } : {}),
+    ...(typeof event.bootId === "string" ? { bootId: event.bootId } : {}),
+    ...(typeof event.bootId === "string" && generation !== null
+      ? { historyStamp: { bootId: event.bootId, generation } }
+      : {}),
+    ...(typeof event.streamSequence === "number" ? { streamSequence: event.streamSequence } : {}),
+    ...(event.sourceLocator ? { sourceLocator: event.sourceLocator as TimelineEntry["sourceLocator"] } : {}),
     ...(completeness ? { completeness } : {}),
     sourceOrder: {
       sourceKind: "live" as const,

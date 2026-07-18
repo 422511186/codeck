@@ -64,20 +64,23 @@ export function DiffView({
     [cacheKey, preview.preview]
   );
   const gutterWidth = lineNumberGutterWidth(rows);
-  const gridTemplateColumns = `${gutterWidth}px 16px minmax(0, 1fr)`;
+  const gridTemplateColumns = `${gutterWidth}px ${gutterWidth}px 16px minmax(0, 1fr)`;
 
   return (
     <>
       <div
         style={{
           marginTop: 10,
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
           border: "1px solid var(--cw-border)",
           borderRadius: 8,
           overflowX: "auto",
           background: "var(--cw-bg-elevated)"
         }}
       >
-        <div style={{ minWidth: 520, fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.65 }}>
+        <div style={{ minWidth: 520, width: "max-content", fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.65 }}>
           {rows.map((row, idx) => (
             <DiffRow key={`${idx}-${row.text}`} row={row} gridTemplateColumns={gridTemplateColumns} />
           ))}
@@ -105,7 +108,8 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
           color: row.kind === "hunk" ? "var(--cw-accent)" : "var(--cw-fg-muted)"
         }}
       >
-        <span style={gutterStyle} />
+        <span data-diff-old-line="true" style={gutterStyle} />
+        <span data-diff-new-line="true" style={gutterStyle} />
         <span style={markerStyle} />
         <span style={codeStyle}>{row.text || " "}</span>
       </div>
@@ -114,7 +118,6 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
 
   const isAdd = row.kind === "add";
   const isRemove = row.kind === "remove";
-  const lineNumber = row.kind === "add" ? row.newLine : row.kind === "remove" ? row.oldLine : row.newLine ?? row.oldLine;
   return (
     <div
       style={{
@@ -123,7 +126,8 @@ function DiffRow({ row, gridTemplateColumns }: { row: DiffRow; gridTemplateColum
         background: isAdd ? "rgba(34,197,94,0.12)" : isRemove ? "rgba(239,68,68,0.12)" : "transparent"
       }}
     >
-      <span style={gutterStyle}>{lineNumber ?? ""}</span>
+      <span data-diff-old-line="true" style={gutterStyle}>{row.oldLine ?? ""}</span>
+      <span data-diff-new-line="true" style={gutterStyle}>{row.newLine ?? ""}</span>
       <span style={{ ...markerStyle, color: isAdd ? "var(--cw-success)" : isRemove ? "var(--cw-danger)" : "var(--cw-fg-muted)" }}>
         {row.marker}
       </span>
@@ -227,5 +231,5 @@ const markerStyle: React.CSSProperties = {
 const codeStyle: React.CSSProperties = {
   padding: "0 10px",
   whiteSpace: "pre",
-  overflow: "hidden"
+  overflow: "visible"
 };

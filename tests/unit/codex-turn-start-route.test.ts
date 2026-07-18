@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockStartTurn = vi.fn();
 const mockReadThread = vi.fn();
 const mockReadThreadSummary = vi.fn();
+const mockListThreadTurns = vi.fn();
 const mockListSkills = vi.fn();
 const mockAudit = vi.fn();
+let mockBootId = "boot-a";
 
 vi.mock("../../src/server/auth", () => ({
   isRequestAuthenticated: () => true
@@ -24,8 +26,10 @@ vi.mock("../../src/server/security", () => ({
 vi.mock("../../src/server/app-server/runtime", () => ({
   getAppServerGateway: () => ({
     startTurn: (...args: unknown[]) => mockStartTurn(...args),
+    getTimelineBootId: () => mockBootId,
     readThread: (...args: unknown[]) => mockReadThread(...args),
     readThreadSummary: (...args: unknown[]) => mockReadThreadSummary(...args),
+    listThreadTurns: (...args: unknown[]) => mockListThreadTurns(...args),
     listSkills: (...args: unknown[]) => mockListSkills(...args)
   })
 }));
@@ -36,8 +40,10 @@ describe("codex turn start route", () => {
     mockStartTurn.mockReset();
     mockReadThread.mockReset();
     mockReadThreadSummary.mockReset();
+    mockListThreadTurns.mockReset();
     mockListSkills.mockReset();
     mockAudit.mockReset();
+    mockBootId = "boot-a";
     mockStartTurn.mockResolvedValue({ turnId: "turn-1" });
     mockListSkills.mockResolvedValue({
       skills: [
@@ -73,6 +79,7 @@ describe("codex turn start route", () => {
       status: "active",
       updatedAt: 1
     });
+    mockListThreadTurns.mockResolvedValue({ items: [], nextCursor: null });
   });
 
   it("把 additionalContext 从 HTTP body 转发给 app-server", async () => {
@@ -308,7 +315,7 @@ describe("codex turn start route", () => {
     await expect(second.json()).resolves.toMatchObject({ turnId: "turn-1" });
   });
 
-  it("同一个 clientUserMessageId 启动失败后释放缓存并允许重试", async () => {
+  it("同一个 clientUserMessageId 模糊失败后查询已持久化 turn 且不重复启动", async () => {
     const { POST } = await import("../../src/app/api/codex/turns/start/route");
     mockStartTurn
       .mockRejectedValueOnce(new Error("start failed"))
@@ -328,10 +335,81 @@ describe("codex turn start route", () => {
 
     const failed = await request();
     const retried = await request();
+    mockListThreadTurns.mockResolvedValueOnce({
+      items: [{
+        id: "user-recovered",
+        turnId: "turn-after-persistence",
+        role: "user",
+        text: "失败后重试",
+        clientUserMessageId: "local-user-retry"
+      }],
+      nextCursor: null
+    });
+    const recovered = await request();
 
     expect(failed.status).toBe(502);
-    expect(retried.status).toBe(200);
-    expect(mockStartTurn).toHaveBeenCalledTimes(2);
-    await expect(retried.json()).resolves.toMatchObject({ turnId: "turn-after-retry" });
+    expect(retried.status).toBe(502);
+    expect(recovered.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+    expect(mockListThreadTurns).toHaveBeenCalledTimes(2);
+    await expect(recovered.json()).resolves.toMatchObject({ turnId: "turn-after-persistence" });
+  });
+
+  it("gateway boot 改变后对未决发送动作失败关闭而不再次启动", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    mockStartTurn.mockRejectedValueOnce(new Error("response timeout"));
+    const request = () => POST(new Request("http://localhost/api/codex/turns/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId: "thread-1",
+        text: "可能已经发送",
+        clientUserMessageId: "local-user-cross-boot"
+      })
+    }));
+
+    expect((await request()).status).toBe(502);
+    mockBootId = "boot-b";
+    const retried = await request();
+
+    expect(retried.status).toBe(502);
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+    expect(mockListThreadTurns).toHaveBeenCalledTimes(1);
+    await expect(retried.json()).resolves.toMatchObject({
+      error: expect.stringContaining("ambiguous-start-unresolved")
+    });
+  });
+
+  it("gateway boot 改变后可从 bounded latest page 唯一恢复原 turn", async () => {
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    mockStartTurn.mockRejectedValueOnce(new Error("response timeout"));
+    const request = () => POST(new Request("http://localhost/api/codex/turns/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId: "thread-1",
+        text: "可恢复发送",
+        clientUserMessageId: "local-user-cross-boot-recovered"
+      })
+    }));
+
+    expect((await request()).status).toBe(502);
+    mockBootId = "boot-b";
+    mockListThreadTurns.mockResolvedValueOnce({
+      items: [{
+        id: "persisted-user",
+        turnId: "turn-persisted",
+        role: "user",
+        text: "可恢复发送",
+        clientUserMessageId: "local-user-cross-boot-recovered"
+      }],
+      nextCursor: null
+    });
+
+    const recovered = await request();
+
+    expect(recovered.status).toBe(200);
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+    await expect(recovered.json()).resolves.toMatchObject({ turnId: "turn-persisted" });
   });
 });

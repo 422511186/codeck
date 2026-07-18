@@ -233,6 +233,236 @@ describe("app-server session timeline merge", () => {
     });
   });
 
+  it("recovers a hidden rollout Skill for the preceding user message without retaining its body", () => {
+    const skillBody = [
+      "<skill>",
+      "<name>skill-installer</name>",
+      "<path>C:\\Users\\hzy\\.codex\\skills\\.system\\skill-installer\\SKILL.md</path>",
+      "---",
+      "name: skill-installer",
+      "private instructions that must not enter the timeline",
+      "</skill>"
+    ].join("\n");
+    const jsonl = [
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "这个技能是干嘛的呢" }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: skillBody }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "这是技能安装器。" }]
+      })
+    ].join("\n");
+    const baseItems: MobileTimelineItem[] = [
+      { id: "user-1", turnId: "turn-1", role: "user", text: "这个技能是干嘛的呢" },
+      { id: "agent-1", turnId: "turn-1", role: "agent", text: "这是技能安装器。" }
+    ];
+
+    const supplement = scanSessionTimelineSupplement(jsonl.split("\n"), {
+      allowedTurnIds: new Set(["turn-1"])
+    });
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(supplement.records).toContainEqual({
+      kind: "skill-reference",
+      turnId: "turn-1",
+      anchorText: "这个技能是干嘛的呢",
+      skillReferences: [
+        {
+          name: "skill-installer",
+          path: "C:\\Users\\hzy\\.codex\\skills\\.system\\skill-installer\\SKILL.md"
+        }
+      ],
+      sequence: 2
+    });
+    expect(JSON.stringify(supplement.records)).not.toContain("private instructions");
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({
+      id: "user-1",
+      text: "这个技能是干嘛的呢",
+      skillReferences: [
+        {
+          name: "skill-installer",
+          path: "C:\\Users\\hzy\\.codex\\skills\\.system\\skill-installer\\SKILL.md"
+        }
+      ]
+    });
+  });
+
+  it("recovers and deduplicates multiple hidden rollout Skills in their original order", () => {
+    const hiddenSkill = (name: string) => [
+      "<skill>",
+      `<name>${name}</name>`,
+      `<path>C:\\Users\\hzy\\.codex\\skills\\.system\\${name}\\SKILL.md</path>`,
+      "---",
+      `name: ${name}`,
+      "</skill>"
+    ].join("\n");
+    const jsonl = [
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "他们做什么？" }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: hiddenSkill("plugin-creator") }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: hiddenSkill("openai-docs") }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: hiddenSkill("plugin-creator") }]
+      })
+    ].join("\n");
+    const merged = mergeSessionTimelineItems(
+      [{ id: "user-1", turnId: "turn-1", role: "user", text: "他们做什么？" }],
+      jsonl
+    );
+
+    expect(merged[0]?.skillReferences).toEqual([
+      {
+        name: "plugin-creator",
+        path: "C:\\Users\\hzy\\.codex\\skills\\.system\\plugin-creator\\SKILL.md"
+      },
+      {
+        name: "openai-docs",
+        path: "C:\\Users\\hzy\\.codex\\skills\\.system\\openai-docs\\SKILL.md"
+      }
+    ]);
+  });
+
+  it("keeps structured history Skill references authoritative over rollout recovery", () => {
+    const jsonl = [
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "介绍技能" }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: [
+            "<skill>",
+            "<name>rollout-skill</name>",
+            "<path>C:\\skills\\rollout-skill\\SKILL.md</path>",
+            "</skill>"
+          ].join("\n")
+        }]
+      })
+    ].join("\n");
+    const structured = {
+      name: "structured-skill",
+      path: "C:\\skills\\structured-skill\\SKILL.md"
+    };
+    const merged = mergeSessionTimelineItems(
+      [{
+        id: "user-1",
+        turnId: "turn-1",
+        role: "user",
+        text: "介绍技能",
+        skillReferences: [structured]
+      }],
+      jsonl
+    );
+
+    expect(merged[0]?.skillReferences).toEqual([structured]);
+  });
+
+  it("rejects incomplete hidden Skill envelopes and ambiguous user anchors", () => {
+    const incompleteJsonl = [
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "介绍技能" }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: [
+            "<skill>",
+            "<name>skill-installer</name>",
+            "<path>C:\\skills\\skill-installer\\SKILL.md</path>",
+            "missing closing tag"
+          ].join("\n")
+        }]
+      })
+    ].join("\n");
+    const incomplete = mergeSessionTimelineItems(
+      [{ id: "user-1", turnId: "turn-1", role: "user", text: "介绍技能" }],
+      incompleteJsonl
+    );
+    const relativePath = mergeSessionTimelineItems(
+      [{ id: "user-1", turnId: "turn-1", role: "user", text: "介绍技能" }],
+      [
+        sessionLine({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "介绍技能" }]
+        }),
+        sessionLine({
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: [
+              "<skill>",
+              "<name>skill-installer</name>",
+              "<path>skills/skill-installer/SKILL.md</path>",
+              "</skill>"
+            ].join("\n")
+          }]
+        })
+      ].join("\n")
+    );
+    const ambiguous = mergeSessionTimelineItems(
+      [
+        { id: "user-1", turnId: "turn-1", role: "user", text: "重复问题" },
+        { id: "user-2", turnId: "turn-1", role: "user", text: "重复问题" }
+      ],
+      [
+        sessionLine({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "重复问题" }]
+        }),
+        sessionLine({
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: [
+              "<skill>",
+              "<name>skill-installer</name>",
+              "<path>C:\\skills\\skill-installer\\SKILL.md</path>",
+              "</skill>"
+            ].join("\n")
+          }]
+        })
+      ].join("\n")
+    );
+
+    expect(incomplete[0]?.skillReferences).toBeUndefined();
+    expect(relativePath[0]?.skillReferences).toBeUndefined();
+    expect(ambiguous.every((item) => item.skillReferences === undefined)).toBe(true);
+  });
+
   it("places unanchored JSONL tool activity before the final assistant message", () => {
     const baseItems: MobileTimelineItem[] = [
       {
@@ -281,6 +511,305 @@ describe("app-server session timeline merge", () => {
       tool: "rg timeline src",
       status: "success"
     });
+  });
+
+  it("recovers a direct nested exec_command from functions exec", () => {
+    const lines = [
+      sessionLine({
+        type: "custom_tool_call",
+        id: "functions-exec-1",
+        call_id: "call-functions-exec-1",
+        name: "exec",
+        status: "completed",
+        input: [
+          "const result = await tools.exec_command({",
+          '  cmd: "sed -n \'1,80p\' src/app.ts",',
+          '  workdir: "/repo",',
+          "  yield_time_ms: 10000",
+          "});",
+          "text(result.output);"
+        ].join("\n")
+      }),
+      sessionLine({
+        type: "custom_tool_call_output",
+        call_id: "call-functions-exec-1",
+        output: [
+          { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+          { type: "input_text", text: "const app = true;\n" }
+        ]
+      })
+    ];
+
+    const supplement = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"])
+    });
+
+    expect(supplement.records).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        callId: "call-functions-exec-1",
+        item: expect.objectContaining({
+          id: "functions-exec-1:nested:0",
+          role: "tool",
+          toolKind: "command",
+          actionKind: "read",
+          server: "/repo",
+          tool: "sed -n '1,80p' src/app.ts",
+          text: "const app = true;\n",
+          status: "success"
+        })
+      })
+    ]);
+  });
+
+  it("recovers multiple nested commands in order when output parts align", () => {
+    const lines = [
+      sessionLine({
+        type: "custom_tool_call",
+        id: "functions-exec-many",
+        call_id: "call-functions-exec-many",
+        name: "exec",
+        status: "completed",
+        input: [
+          "const results = await Promise.all([",
+          '  tools.exec_command({ cmd: "rg timeline src", workdir: "/repo" }),',
+          '  tools.exec_command({ cmd: "npm test", workdir: "/repo" })',
+          "]);",
+          "for (const result of results) text(result.output);"
+        ].join("\n")
+      }),
+      sessionLine({
+        type: "custom_tool_call_output",
+        call_id: "call-functions-exec-many",
+        output: [
+          { type: "input_text", text: "Script completed\nWall time 0.3 seconds\nOutput:\n" },
+          { type: "input_text", text: "src/web/components/Timeline.tsx\n" },
+          { type: "input_text", text: "53 tests passed\n" }
+        ]
+      })
+    ];
+
+    const supplement = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"])
+    });
+    const tools = supplement.records
+      .filter((record) => record.kind === "tool")
+      .map((record) => record.item);
+
+    expect(tools).toEqual([
+      expect.objectContaining({
+        id: "functions-exec-many:nested:0",
+        actionKind: "search",
+        tool: "rg timeline src",
+        text: "src/web/components/Timeline.tsx\n"
+      }),
+      expect.objectContaining({
+        id: "functions-exec-many:nested:1",
+        actionKind: "command",
+        tool: "npm test",
+        text: "53 tests passed\n"
+      })
+    ]);
+  });
+
+  it("keeps dynamic nested exec arguments as a generic tool without evaluating them", () => {
+    const lines = [
+      sessionLine({
+        type: "custom_tool_call",
+        id: "functions-exec-dynamic",
+        call_id: "call-functions-exec-dynamic",
+        name: "exec",
+        status: "completed",
+        input: [
+          'const command = "npm test";',
+          "const result = await tools.exec_command({ cmd: command, workdir: `/repo/${project}` });",
+          "text(result.output);"
+        ].join("\n")
+      })
+    ];
+
+    const supplement = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"])
+    });
+
+    expect(supplement.records).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        item: expect.objectContaining({
+          id: "functions-exec-dynamic",
+          toolKind: "dynamic",
+          tool: "exec"
+        })
+      })
+    ]);
+  });
+
+  it("fails closed for unsupported nested exec object syntax", () => {
+    const unsafeInputs = [
+      'tools.exec_command({ cmd: "npm test", ...dynamic })',
+      'tools.exec_command({ cmd: "npm test", ["workdir"]: "/repo" })',
+      'tools.exec_command({ cmd: "npm test", workdir })',
+      'tools.exec_command({ cmd: "npm test", cmd: "npm run build" })'
+    ];
+
+    for (const [index, input] of unsafeInputs.entries()) {
+      const supplement = scanSessionTimelineSupplement(
+        [
+          sessionLine({
+            type: "custom_tool_call",
+            id: `functions-exec-unsafe-${index}`,
+            call_id: `call-functions-exec-unsafe-${index}`,
+            name: "exec",
+            status: "completed",
+            input
+          })
+        ],
+        { allowedTurnIds: new Set(["turn-1"]) }
+      );
+
+      expect(supplement.records).toEqual([
+        expect.objectContaining({
+          kind: "tool",
+          item: expect.objectContaining({
+            id: `functions-exec-unsafe-${index}`,
+            toolKind: "dynamic",
+            tool: "exec"
+          })
+        })
+      ]);
+    }
+  });
+
+  it("把真实 spawn/followup 调用规范化为可聚合的 Subagent 活动", () => {
+    const lines = [
+      sessionLine({
+        type: "function_call",
+        id: "spawn-1",
+        call_id: "call-spawn-1",
+        name: "spawn_agent",
+        arguments: JSON.stringify({ task_name: "audit", fork_turns: "all", message: "encrypted" })
+      }),
+      sessionLine({
+        type: "function_call_output",
+        call_id: "call-spawn-1",
+        output: JSON.stringify({ task_name: "/root/audit" })
+      }),
+      sessionLine({
+        type: "function_call",
+        id: "followup-1",
+        call_id: "call-followup-1",
+        name: "followup_task",
+        arguments: JSON.stringify({ target: "audit", message: "encrypted" })
+      }),
+      sessionLine({
+        type: "function_call_output",
+        call_id: "call-followup-1",
+        output: "{}"
+      })
+    ];
+
+    const tools = scanSessionTimelineSupplement(lines, {
+      allowedTurnIds: new Set(["turn-1"])
+    }).records.flatMap((record) => record.kind === "tool" ? [record.item] : []);
+
+    expect(tools).toHaveLength(2);
+    expect(tools).toEqual([
+      expect.objectContaining({
+        id: "spawn-1",
+        server: "sub-agent",
+        tool: "spawn_agent",
+        text: JSON.stringify({
+          agentThreadId: "",
+          agentPath: "/root/audit",
+          kind: "started"
+        })
+      }),
+      expect.objectContaining({
+        id: "followup-1",
+        server: "sub-agent",
+        tool: "followup_task",
+        text: JSON.stringify({
+          agentThreadId: "",
+          agentPath: "/root/audit",
+          kind: "updated"
+        })
+      })
+    ]);
+    expect(tools.map((item) => item.arguments).join("\n")).not.toContain("encrypted");
+  });
+
+  it("外层 exec 未包含可恢复命令时不再重复展示编排工具", () => {
+    const lines = [
+      sessionLine({
+        type: "custom_tool_call",
+        id: "functions-browser-only",
+        call_id: "call-functions-browser-only",
+        name: "exec",
+        status: "completed",
+        input: "const result = await tools.mcp__node_repl__js({ code: 'inspect' }); text(result);"
+      })
+    ];
+
+    expect(
+      scanSessionTimelineSupplement(lines, { allowedTurnIds: new Set(["turn-1"]) }).records
+    ).toEqual([]);
+  });
+
+  it("命令正文仅提到 failed 时不误判为执行失败", () => {
+    const lines = [
+      sessionLine({
+        type: "function_call",
+        id: "read-status-source",
+        call_id: "call-read-status-source",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "sed -n '1,20p' status.ts", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "function_call_output",
+        call_id: "call-read-status-source",
+        output: "const failed = false;\nconst error = undefined;"
+      })
+    ];
+
+    expect(
+      scanSessionTimelineSupplement(lines, { allowedTurnIds: new Set(["turn-1"]) }).records
+    ).toEqual([
+      expect.objectContaining({
+        kind: "tool",
+        item: expect.objectContaining({ status: "success" })
+      })
+    ]);
+  });
+
+  it("consumes equivalent base tools one-to-one when the same command runs twice", () => {
+    const baseItems: MobileTimelineItem[] = [
+      { id: "user-1", turnId: "turn-1", role: "user", text: "运行两次" },
+      {
+        id: "tool-base",
+        turnId: "turn-1",
+        role: "tool",
+        text: "first",
+        toolKind: "command",
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success"
+      },
+      { id: "agent-final", turnId: "turn-1", role: "agent", text: "done" }
+    ];
+    const jsonl = ["tool-rollout-1", "tool-rollout-2"].map((id) => sessionLine({
+      type: "function_call",
+      id,
+      call_id: `call-${id}`,
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+    })).join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(merged.filter((item) => item.role === "tool").map((item) => item.id)).toEqual([
+      "tool-base",
+      "tool-rollout-2"
+    ]);
   });
 
   it("only supplements records for the allowed timeline window turns", () => {

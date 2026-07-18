@@ -3,6 +3,9 @@
 import type { WsCodexEvent, WsConnectionState, WsEvent } from "../ws/client";
 
 type Listener<T> = (event: T) => void;
+type ConnectionStateListener = (state: WsConnectionState, reconnectAttempt: number) => void;
+
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 export interface TimelineEventStreamOptions {
   url?: string;
@@ -15,23 +18,34 @@ export interface TimelineEventStreamOptions {
 const DEFAULT_MAX_PENDING_EVENTS = 200;
 const DEFAULT_DELTA_BATCH_WINDOW_MS = 16;
 
+type PendingDelta = {
+  threadId: string;
+  event: WsCodexEvent["event"];
+  eventId?: string;
+  deliveryEpoch: number;
+};
+
+type PendingDelivery =
+  | { kind: "event"; event: WsEvent }
+  | { kind: "delta"; delta: PendingDelta };
+
 export class TimelineEventStreamClient {
   private source: EventSource | null = null;
   private state: WsConnectionState = "closed";
   private closedByCaller = false;
   private readonly eventListeners = new Set<Listener<WsEvent>>();
-  private readonly stateListeners = new Set<Listener<WsConnectionState>>();
-  private pendingEvents: WsEvent[] = [];
+  private readonly stateListeners = new Set<ConnectionStateListener>();
+  private reconnectAttempt = 0;
+  private pendingDeliveries: PendingDelivery[] = [];
   private readonly createSource: (url: string) => EventSource;
   private readonly maxPendingEvents: number;
   private readonly batchWindowMs: number;
   private readonly url: string;
-  private readonly pendingDeltaBatches = new Map<
-    string,
-    { events: WsCodexEvent["event"][]; eventIds: Set<string>; deliveryEpoch: number }
-  >();
+  private readonly pendingDeltaEventIds = new Set<string>();
   private readonly deliveryEpochs = new Map<string, number>();
   private deltaBatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private drainingPendingEvents = false;
+  private currentBootId: string | null = null;
 
   constructor(options: TimelineEventStreamOptions = {}) {
     this.url = options.url ?? "/api/codex/events";
@@ -60,11 +74,14 @@ export class TimelineEventStreamClient {
 
   close(): void {
     this.closedByCaller = true;
+    this.reconnectAttempt = 0;
     if (this.deltaBatchTimer) {
       clearTimeout(this.deltaBatchTimer);
       this.deltaBatchTimer = null;
     }
-    this.pendingDeltaBatches.clear();
+    this.pendingDeliveries = [];
+    this.pendingDeltaEventIds.clear();
+    this.currentBootId = null;
     if (this.source) {
       this.source.removeEventListener("open", this.handleOpen);
       this.source.removeEventListener("message", this.handleMessage);
@@ -78,36 +95,39 @@ export class TimelineEventStreamClient {
   onEvent(listener: Listener<WsEvent>): () => void {
     this.eventListeners.add(listener);
     this.flushDeltaBatches();
-    this.flushPendingEvents();
     return () => this.eventListeners.delete(listener);
   }
 
-  onState(listener: Listener<WsConnectionState>): () => void {
+  onState(listener: ConnectionStateListener): () => void {
     this.stateListeners.add(listener);
-    listener(this.state);
+    listener(this.state, this.reconnectAttempt);
     return () => this.stateListeners.delete(listener);
   }
 
   invalidateThread(threadId: string): number {
     const nextEpoch = (this.deliveryEpochs.get(threadId) ?? 0) + 1;
     this.deliveryEpochs.set(threadId, nextEpoch);
-    this.pendingDeltaBatches.delete(threadId);
-    if (!this.pendingDeltaBatches.size && this.deltaBatchTimer) {
+    this.pendingDeliveries = this.pendingDeliveries.flatMap((delivery) =>
+      invalidatePendingDeliveryForThread(delivery, threadId)
+    );
+    this.rebuildPendingDeltaEventIds();
+    if (!this.pendingDeliveries.some((delivery) => delivery.kind === "delta") && this.deltaBatchTimer) {
       clearTimeout(this.deltaBatchTimer);
       this.deltaBatchTimer = null;
     }
     return nextEpoch;
   }
 
-  private setState(next: WsConnectionState): void {
-    if (this.state === next) return;
+  private setState(next: WsConnectionState, forceNotify = false): void {
+    if (this.state === next && !forceNotify) return;
     this.state = next;
     for (const listener of this.stateListeners) {
-      listener(next);
+      listener(next, this.reconnectAttempt);
     }
   }
 
   private handleOpen = (): void => {
+    this.reconnectAttempt = 0;
     this.setState("open");
   };
 
@@ -118,11 +138,29 @@ export class TimelineEventStreamClient {
     } catch {
       return;
     }
+    const bootId = timelineEventBootId(event);
+    if (bootId) {
+      if (this.currentBootId && this.currentBootId !== bootId) {
+        this.currentBootId = bootId;
+        this.clearPendingDeltaBatches();
+        this.pendingDeliveries = this.pendingDeliveries.filter(
+          (pending) => pending.kind === "event" && pending.event.type !== "codex-event" && pending.event.type !== "codex-event-batch"
+        );
+        if (event.type !== "timeline-gap") {
+          this.emitEvent({ type: "timeline-gap", scope: "all-tracked", bootId });
+          return;
+        }
+      } else {
+        this.currentBootId = bootId;
+      }
+    }
     if (this.bufferTextDeltaEvent(event)) {
       return;
     }
     if (isRepairBarrierEvent(event)) {
-      this.dropPendingDeltaBatchesForThread(event.threadId);
+      this.applyRepairBarrier(event);
+    } else if (isTimelineGenerationBarrier(event)) {
+      this.invalidateThread(event.event.threadId!);
     } else {
       this.flushDeltaBatches();
     }
@@ -131,15 +169,17 @@ export class TimelineEventStreamClient {
 
   private handleError = (): void => {
     if (this.closedByCaller) {
+      this.reconnectAttempt = 0;
       this.setState("closed");
       return;
     }
-    this.setState("reconnecting");
+    this.reconnectAttempt = Math.min(MAX_RECONNECT_ATTEMPTS, this.reconnectAttempt + 1);
+    this.setState("reconnecting", true);
   };
 
   private emitEvent(event: WsEvent): void {
-    if (!this.eventListeners.size) {
-      this.bufferPendingEvent(event);
+    if (!this.eventListeners.size || this.drainingPendingEvents) {
+      this.bufferPendingDelivery({ kind: "event", event });
       return;
     }
     for (const listener of this.eventListeners) {
@@ -157,28 +197,33 @@ export class TimelineEventStreamClient {
       return false;
     }
 
-    if (!this.eventListeners.size && this.pendingDeltaEventCount() >= this.maxPendingEvents) {
-      this.clearPendingDeltaBatches();
-      const gap = timelineGapForBufferedEvent(event);
-      this.pendingEvents = gap ? [gap] : [event];
+    if (!this.eventListeners.size && this.pendingEventCount() >= this.maxPendingEvents) {
+      const affectedThreadIds = [...new Set([...pendingDeliveryThreadIds(this.pendingDeliveries), threadId])];
+      this.clearPendingDeliveries();
+      this.pendingDeliveries = [{
+        kind: "event",
+        event: timelineGapForThreads(affectedThreadIds, event.event.eventId)
+      }];
       return true;
     }
 
-    const batch = this.pendingDeltaBatches.get(threadId) ?? {
-      events: [],
-      eventIds: new Set<string>(),
-      deliveryEpoch: this.deliveryEpochs.get(threadId) ?? 0
-    };
-    if (typeof event.event.eventId === "string") {
-      if (batch.eventIds.has(event.event.eventId)) {
-        this.pendingDeltaBatches.set(threadId, batch);
+    const eventId = typeof event.event.eventId === "string" ? event.event.eventId : undefined;
+    if (eventId) {
+      if (this.pendingDeltaEventIds.has(eventId)) {
         this.scheduleDeltaBatchFlush();
         return true;
       }
-      batch.eventIds.add(event.event.eventId);
+      this.pendingDeltaEventIds.add(eventId);
     }
-    batch.events.push(event.event);
-    this.pendingDeltaBatches.set(threadId, batch);
+    this.pendingDeliveries.push({
+      kind: "delta",
+      delta: {
+        threadId,
+        event: event.event,
+        ...(eventId ? { eventId } : {}),
+        deliveryEpoch: this.deliveryEpochs.get(threadId) ?? 0
+      }
+    });
     this.scheduleDeltaBatchFlush();
     return true;
   }
@@ -190,12 +235,11 @@ export class TimelineEventStreamClient {
     this.deltaBatchTimer = setTimeout(() => this.flushDeltaBatches(), this.batchWindowMs);
   }
 
-  private pendingDeltaEventCount(): number {
-    let count = 0;
-    for (const batch of this.pendingDeltaBatches.values()) {
-      count += batch.events.length;
-    }
-    return count;
+  private pendingEventCount(): number {
+    return this.pendingDeliveries.reduce((count, delivery) => {
+      if (delivery.kind === "delta") return count + 1;
+      return count + (delivery.event.type === "codex-event-batch" ? delivery.event.events.length : 1);
+    }, 0);
   }
 
   private clearPendingDeltaBatches(): void {
@@ -203,7 +247,17 @@ export class TimelineEventStreamClient {
       clearTimeout(this.deltaBatchTimer);
       this.deltaBatchTimer = null;
     }
-    this.pendingDeltaBatches.clear();
+    this.pendingDeliveries = this.pendingDeliveries.filter((delivery) => delivery.kind !== "delta");
+    this.pendingDeltaEventIds.clear();
+  }
+
+  private clearPendingDeliveries(): void {
+    if (this.deltaBatchTimer) {
+      clearTimeout(this.deltaBatchTimer);
+      this.deltaBatchTimer = null;
+    }
+    this.pendingDeliveries = [];
+    this.pendingDeltaEventIds.clear();
   }
 
   private dropPendingDeltaBatchesForThread(threadId: string | null | undefined): void {
@@ -213,48 +267,104 @@ export class TimelineEventStreamClient {
     this.invalidateThread(threadId);
   }
 
+  private applyRepairBarrier(event: Extract<WsEvent, { type: "timeline-gap" }>): void {
+    const affectedThreadIds = event.scope === "all-tracked"
+      ? [...new Set([...this.deliveryEpochs.keys(), ...pendingDeliveryThreadIds(this.pendingDeliveries)])]
+      : event.affectedThreadIds?.length
+        ? event.affectedThreadIds
+        : event.threadId
+          ? [event.threadId]
+          : [];
+    for (const threadId of affectedThreadIds) {
+      this.dropPendingDeltaBatchesForThread(threadId);
+    }
+  }
+
   private flushDeltaBatches(): void {
     if (this.deltaBatchTimer) {
       clearTimeout(this.deltaBatchTimer);
       this.deltaBatchTimer = null;
     }
-    if (!this.pendingDeltaBatches.size) {
-      return;
+    const pending = this.pendingDeliveries;
+    this.pendingDeliveries = [];
+    this.pendingDeltaEventIds.clear();
+    for (let index = 0; index < pending.length; ) {
+      const first = pending[index]!;
+      if (first.kind === "event") {
+        this.pendingDeliveries.push(first);
+        index += 1;
+        continue;
+      }
+      const events = [first.delta.event];
+      let nextIndex = index + 1;
+      while (nextIndex < pending.length) {
+        const next = pending[nextIndex]!;
+        if (
+          next.kind !== "delta" ||
+          next.delta.threadId !== first.delta.threadId ||
+          next.delta.deliveryEpoch !== first.delta.deliveryEpoch
+        ) {
+          break;
+        }
+        events.push(next.delta.event);
+        nextIndex += 1;
+      }
+      const epochMeta = first.delta.deliveryEpoch > 0 ? { deliveryEpoch: first.delta.deliveryEpoch } : {};
+      this.pendingDeliveries.push({
+        kind: "event",
+        event: events.length === 1
+          ? { type: "codex-event", event: events[0]!, ...epochMeta }
+          : { type: "codex-event-batch", events, ...epochMeta }
+      });
+      index = nextIndex;
     }
+    this.flushPendingEvents();
+  }
 
-    const batches = [...this.pendingDeltaBatches.entries()];
-    this.pendingDeltaBatches.clear();
-    for (const [, batch] of batches) {
-      const epochMeta = batch.deliveryEpoch > 0 ? { deliveryEpoch: batch.deliveryEpoch } : {};
-      if (batch.events.length === 1) {
-        this.emitEvent({ type: "codex-event", event: batch.events[0]!, ...epochMeta });
-      } else if (batch.events.length > 1) {
-        this.emitEvent({ type: "codex-event-batch", events: batch.events, ...epochMeta });
+  private rebuildPendingDeltaEventIds(): void {
+    this.pendingDeltaEventIds.clear();
+    for (const pending of this.pendingDeliveries) {
+      if (pending.kind === "delta" && pending.delta.eventId) {
+        this.pendingDeltaEventIds.add(pending.delta.eventId);
       }
     }
   }
 
-  private bufferPendingEvent(event: WsEvent): void {
-    if (this.pendingEvents.length < this.maxPendingEvents) {
-      this.pendingEvents.push(event);
+  private bufferPendingDelivery(delivery: PendingDelivery): void {
+    if (this.pendingEventCount() < this.maxPendingEvents) {
+      this.pendingDeliveries.push(delivery);
       return;
     }
 
-    const gap = timelineGapForBufferedEvent(event);
-    this.pendingEvents = gap ? [gap] : [event];
+    const event = delivery.kind === "event" ? delivery.event : { type: "codex-event", event: delivery.delta.event } as WsEvent;
+    const affectedThreadIds = [...new Set([...pendingDeliveryThreadIds(this.pendingDeliveries), ...pendingDeliveryThreadIds([delivery])])];
+    const gap = affectedThreadIds.length ? timelineGapForThreads(affectedThreadIds) : timelineGapForBufferedEvent(event);
+    this.clearPendingDeliveries();
+    this.pendingDeliveries = [{ kind: "event", event: gap ?? event }];
   }
 
   private flushPendingEvents(): void {
-    if (!this.pendingEvents.length || !this.eventListeners.size) {
+    if (!this.pendingDeliveries.length || !this.eventListeners.size || this.drainingPendingEvents) {
       return;
     }
 
-    const pending = this.pendingEvents;
-    this.pendingEvents = [];
-    for (const event of pending) {
-      for (const listener of this.eventListeners) {
-        listener(event);
+    this.drainingPendingEvents = true;
+    try {
+      while (this.pendingDeliveries.length && this.eventListeners.size) {
+        const delivery = this.pendingDeliveries.shift();
+        if (!delivery) {
+          continue;
+        }
+        if (delivery.kind === "delta") {
+          this.pendingDeliveries.unshift(delivery);
+          break;
+        }
+        for (const listener of this.eventListeners) {
+          listener(delivery.event);
+        }
       }
+    } finally {
+      this.drainingPendingEvents = false;
     }
   }
 }
@@ -277,6 +387,67 @@ function isRepairBarrierEvent(event: WsEvent): event is Extract<WsEvent, { type:
   return event.type === "timeline-gap";
 }
 
+function isTimelineGenerationBarrier(
+  event: WsEvent
+): event is WsCodexEvent & { event: WsCodexEvent["event"] & { threadId: string } } {
+  return (
+    event.type === "codex-event" &&
+    event.event.kind === "timeline_generation_changed" &&
+    typeof event.event.threadId === "string" &&
+    Boolean(event.event.threadId)
+  );
+}
+
+function timelineEventBootId(event: WsEvent): string | null {
+  if (event.type === "codex-event") {
+    return typeof event.event.bootId === "string" && event.event.bootId ? event.event.bootId : null;
+  }
+  if (event.type === "timeline-gap") {
+    return typeof event.bootId === "string" && event.bootId ? event.bootId : null;
+  }
+  return null;
+}
+
+function pendingDeliveryThreadIds(deliveries: PendingDelivery[]): string[] {
+  const threadIds: string[] = [];
+  for (const delivery of deliveries) {
+    if (delivery.kind === "delta") {
+      threadIds.push(delivery.delta.threadId);
+      continue;
+    }
+    if (delivery.event.type === "codex-event") {
+      if (delivery.event.event.threadId) threadIds.push(delivery.event.event.threadId);
+      continue;
+    }
+    if (delivery.event.type === "codex-event-batch") {
+      for (const event of delivery.event.events) {
+        if (event.threadId) threadIds.push(event.threadId);
+      }
+    }
+  }
+  return threadIds;
+}
+
+function invalidatePendingDeliveryForThread(delivery: PendingDelivery, threadId: string): PendingDelivery[] {
+  if (delivery.kind === "delta") {
+    return delivery.delta.threadId === threadId ? [] : [delivery];
+  }
+  if (delivery.event.type === "codex-event") {
+    return delivery.event.event.threadId === threadId ? [] : [delivery];
+  }
+  if (delivery.event.type !== "codex-event-batch") {
+    return [delivery];
+  }
+  const events = delivery.event.events.filter((event) => event.threadId !== threadId);
+  if (!events.length) return [];
+  return [{
+    kind: "event",
+    event: events.length === 1
+      ? { type: "codex-event", event: events[0]!, ...(delivery.event.deliveryEpoch ? { deliveryEpoch: delivery.event.deliveryEpoch } : {}) }
+      : { ...delivery.event, events }
+  }];
+}
+
 function timelineGapForBufferedEvent(event: WsEvent): WsEvent | null {
   if (event.type === "codex-event") {
     const threadId = typeof event.event.threadId === "string" ? event.event.threadId : null;
@@ -284,14 +455,27 @@ function timelineGapForBufferedEvent(event: WsEvent): WsEvent | null {
       return null;
     }
     const lastEventId = typeof event.event.eventId === "string" ? event.event.eventId : undefined;
-    return {
-      type: "timeline-gap",
-      threadId,
-      ...(lastEventId ? { lastEventId } : {})
-    };
+    return timelineGapForThreads([threadId], lastEventId);
   }
 
   return null;
+}
+
+function timelineGapForThreads(threadIds: string[], lastEventId?: string): Extract<WsEvent, { type: "timeline-gap" }> {
+  const affectedThreadIds = [...new Set(threadIds.filter(Boolean))];
+  if (affectedThreadIds.length === 1) {
+    return {
+      type: "timeline-gap",
+      threadId: affectedThreadIds[0],
+      ...(lastEventId ? { lastEventId } : {})
+    };
+  }
+  return {
+    type: "timeline-gap",
+    scope: "threads",
+    affectedThreadIds,
+    ...(lastEventId ? { lastEventId } : {})
+  };
 }
 
 let singleton: TimelineEventStreamClient | null = null;
@@ -315,7 +499,7 @@ export function invalidateTimelineEventThread(threadId: string): number {
 }
 
 export type BrowserEventStreamConnectOptions = {
-  onState: (state: WsConnectionState) => void;
+  onState: (state: WsConnectionState, reconnectAttempt: number) => void;
   onMessage: (event: WsEvent) => void;
 };
 

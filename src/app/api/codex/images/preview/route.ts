@@ -19,13 +19,11 @@ export async function GET(request: Request): Promise<Response> {
     return new Response(body, {
       headers: {
         "content-type": image.mimeType,
-        "cache-control": "private, max-age=300"
+        "cache-control": "private, max-age=300",
+        "x-content-type-options": "nosniff"
       }
     });
-  } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : "无法读取图片" },
-      { status: 404 }
-    );
+  } catch {
+    return NextResponse.json({ ok: false, error: "无法读取图片" }, { status: 404 });
   }
 }

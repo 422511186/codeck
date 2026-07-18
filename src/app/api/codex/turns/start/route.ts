@@ -22,8 +22,17 @@ type StartTurnRouteResult = {
   turnId: string;
 };
 
-const START_TURN_CACHE_TTL_MS = 60_000;
-const startTurnCache = new Map<string, { expiresAt: number; promise: Promise<StartTurnRouteResult> }>();
+const START_TURN_CACHE_TTL_MS = 10 * 60_000;
+type StartTurnOperation = {
+  expiresAt: number;
+  bootId: string;
+  payloadFingerprint: string;
+  state: "pending" | "resolved" | "ambiguous";
+  inFlight: Promise<StartTurnRouteResult> | null;
+  result?: StartTurnRouteResult;
+};
+
+const startTurnCache = new Map<string, StartTurnOperation>();
 
 export async function POST(request: Request): Promise<Response> {
   const auth = unauthorized(request);
@@ -66,7 +75,7 @@ export async function POST(request: Request): Promise<Response> {
       additionalContext,
       collaborationMode
     });
-    const start = () => startTurnOnly({
+    const startInput: StartTurnInput = {
       threadId,
       text,
       imagePaths,
@@ -79,9 +88,21 @@ export async function POST(request: Request): Promise<Response> {
       approvalsReviewer,
       additionalContext,
       collaborationMode
-    });
+    };
+    const start = () => startTurnOnly(startInput);
     const cacheKey = startTurnCacheKey(threadId, clientUserMessageId);
-    const { turnId } = cacheKey ? await cachedStartTurn(cacheKey, start) : await start();
+    const gateway = getAppServerGateway();
+    const bootId = typeof gateway.getTimelineBootId === "function" ? gateway.getTimelineBootId() : "legacy-gateway";
+    const payloadFingerprint = startTurnPayloadFingerprint(startInput);
+    const { turnId } = cacheKey
+      ? await cachedStartTurn(
+          cacheKey,
+          bootId,
+          payloadFingerprint,
+          start,
+          () => findTurnByClientUserMessageId(threadId, clientUserMessageId!)
+        )
+      : await start();
 
     return ok({ turnId });
   } catch (error) {
@@ -97,28 +118,122 @@ async function startTurnOnly(input: StartTurnInput): Promise<StartTurnRouteResul
 
 async function cachedStartTurn(
   cacheKey: string,
-  start: () => Promise<StartTurnRouteResult>
+  bootId: string,
+  payloadFingerprint: string,
+  start: () => Promise<StartTurnRouteResult>,
+  recover: () => Promise<StartTurnRouteResult | null>
 ): Promise<StartTurnRouteResult> {
   purgeExpiredStartTurns();
   const existing = startTurnCache.get(cacheKey);
   if (existing) {
-    return existing.promise;
+    if (existing.payloadFingerprint !== payloadFingerprint) {
+      throw new Error("clientUserMessageId payload 不一致");
+    }
+    if (existing.result) {
+      return existing.result;
+    }
+    if (existing.inFlight) {
+      return existing.inFlight;
+    }
+    return recoverAmbiguousStart(existing, bootId, recover);
   }
 
+  const operation: StartTurnOperation = {
+    expiresAt: Number.POSITIVE_INFINITY,
+    bootId,
+    payloadFingerprint,
+    state: "pending",
+    inFlight: null
+  };
   const promise = start()
     .then((result) => {
-      const cached = startTurnCache.get(cacheKey);
-      if (cached) {
-        cached.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
-      }
+      operation.state = "resolved";
+      operation.result = result;
+      operation.inFlight = null;
+      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
       return result;
     })
     .catch((error) => {
-      startTurnCache.delete(cacheKey);
+      operation.state = "ambiguous";
+      operation.inFlight = null;
+      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
       throw error;
     });
-  startTurnCache.set(cacheKey, { expiresAt: Number.POSITIVE_INFINITY, promise });
+  operation.inFlight = promise;
+  startTurnCache.set(cacheKey, operation);
   return promise;
+}
+
+function recoverAmbiguousStart(
+  operation: StartTurnOperation,
+  currentBootId: string,
+  recover: () => Promise<StartTurnRouteResult | null>
+): Promise<StartTurnRouteResult> {
+  let recoveryPromise: Promise<StartTurnRouteResult>;
+  recoveryPromise = recover()
+    .then((result) => {
+      if (!result) {
+        const reason = operation.bootId === currentBootId
+          ? "尚无法确认原发送动作是否已创建 turn"
+          : "服务已重启，无法确认原发送动作是否已创建 turn";
+        throw new Error(`ambiguous-start-unresolved：${reason}`);
+      }
+      operation.state = "resolved";
+      operation.result = result;
+      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+      return result;
+    })
+    .catch((error) => {
+      operation.state = "ambiguous";
+      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+      throw error;
+    })
+    .finally(() => {
+      if (operation.inFlight === recoveryPromise) {
+        operation.inFlight = null;
+      }
+    });
+  operation.inFlight = recoveryPromise;
+  return recoveryPromise;
+}
+
+async function findTurnByClientUserMessageId(
+  threadId: string,
+  clientUserMessageId: string
+): Promise<StartTurnRouteResult | null> {
+  const gateway = getAppServerGateway();
+  let page: Awaited<ReturnType<typeof gateway.listThreadTurns>>;
+  try {
+    page = await gateway.listThreadTurns({ threadId, limit: 50 });
+  } catch {
+    return null;
+  }
+  const turnIds = new Set(
+    page.items.flatMap((item) =>
+      item.role === "user" &&
+      item.clientUserMessageId === clientUserMessageId &&
+      typeof item.turnId === "string" &&
+      item.turnId
+        ? [item.turnId]
+        : []
+    )
+  );
+  return turnIds.size === 1 ? { turnId: [...turnIds][0]! } : null;
+}
+
+function startTurnPayloadFingerprint(input: StartTurnInput): string {
+  return JSON.stringify({
+    text: input.text,
+    imagePaths: input.imagePaths ?? [],
+    skillReferences: input.skillReferences ?? [],
+    model: input.model ?? null,
+    reasoningEffort: input.reasoningEffort ?? null,
+    reasoningSummary: input.reasoningSummary ?? null,
+    permissions: input.permissions ?? null,
+    approvalsReviewer: input.approvalsReviewer ?? null,
+    additionalContext: input.additionalContext ?? null,
+    collaborationMode: input.collaborationMode ?? null
+  });
 }
 
 function purgeExpiredStartTurns(): void {

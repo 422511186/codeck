@@ -37,6 +37,7 @@ vi.mock("../../src/web/storage/settings", () => ({
 }));
 
 const mockSetWsState = vi.fn();
+const mockSetReconnectAttempt = vi.fn();
 const mockSetAppServer = vi.fn();
 const mockDispatchEvent = vi.fn();
 const mockResolvePendingRequest = vi.fn();
@@ -46,10 +47,12 @@ vi.mock("../../src/web/state/store", () => ({
   useStore: (selector: (state: unknown) => unknown) =>
     selector({
       setWsState: mockSetWsState,
+      setReconnectAttempt: mockSetReconnectAttempt,
       setAppServer: mockSetAppServer,
       dispatchEvent: mockDispatchEvent,
       resolvePendingRequest: mockResolvePendingRequest,
-      wsState: mockWsState()
+      wsState: mockWsState(),
+      reconnectAttempt: 1
     })
 }));
 
@@ -64,6 +67,7 @@ describe("AppProviders", () => {
     mockLoad.mockReturnValue({ defaultMode: "build", defaultModel: null, theme: "system" });
     mockApplyTheme.mockClear();
     mockSetWsState.mockClear();
+    mockSetReconnectAttempt.mockClear();
     mockSetAppServer.mockClear();
     mockDispatchEvent.mockClear();
     mockResolvePendingRequest.mockClear();
@@ -114,7 +118,7 @@ describe("AppProviders", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("should show offline banner when wsState is reconnecting", () => {
+  it("should show a lightweight reconnect row when wsState is reconnecting", () => {
     mockWsState.mockReturnValue("reconnecting");
 
     render(
@@ -123,8 +127,11 @@ describe("AppProviders", () => {
       </AppProviders>
     );
 
-    expect(screen.getByRole("status")).toBeInTheDocument();
-    expect(screen.getByText(/网络已断开，重连中/)).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("data-reconnect-status", "true");
+    expect(status).toHaveTextContent("正在重新连接 1/5");
+    expect(status.querySelector("svg")).toBeInTheDocument();
+    expect(status).not.toHaveTextContent("网络已断开");
   });
 
   it("should redirect to login when websocket disconnect reveals an invalid session", async () => {
@@ -168,7 +175,7 @@ describe("AppProviders", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("should animate dots in offline banner", async () => {
+  it("should not append animated dots to reconnect status", () => {
     mockWsState.mockReturnValue("reconnecting");
     vi.useFakeTimers();
 
@@ -178,11 +185,9 @@ describe("AppProviders", () => {
       </AppProviders>
     );
 
-    const banner = screen.getByRole("status");
-    expect(banner.textContent).toMatch(/网络已断开，重连中/);
-
-    // Just verify the banner exists and has the base text
-    // Animation dots are implementation detail
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("正在重新连接 1/5");
+    expect(status).not.toHaveTextContent("...");
     expect(container).toBeTruthy();
 
     vi.useRealTimers();

@@ -11,6 +11,7 @@ import { hasVisibleTurnOutput, rollbackMetadataForEntry, timelineItemToEntry, ty
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
+import { ReconnectStatus } from "../../../web/components/ReconnectStatus";
 import {
   repairReconstructedTimelineEntries,
   threadDetailEntries
@@ -32,6 +33,11 @@ import { setDraft } from "../../../web/storage/drafts";
 import { getContextUsage, type ContextUsageSnapshot } from "../../../web/storage/contextUsage";
 import { settingsStore } from "../../../web/storage/settings";
 import { invalidateTimelineEventThread } from "../../../web/events/client";
+import { repairWindowFrom, type HistoryStamp } from "../../../shared/timeline-protocol";
+import {
+  captureTimelineDomScrollAnchor,
+  restoreTimelineDomScrollAnchor
+} from "../../../web/state/timeline-scroll";
 
 const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
@@ -56,6 +62,7 @@ export default function ThreadPage(): JSX.Element {
   const ensureThread = useStore((s) => s.ensureThread);
   const setThreadEntries = useStore((s) => s.setThreadEntries);
   const mergeThreadEntries = useStore((s) => s.mergeThreadEntries);
+  const replaceLatestWindow = useStore((s) => s.replaceLatestWindow);
   const prependEntries = useStore((s) => s.prependEntries);
   const appendEntries = useStore((s) => s.appendEntries);
   const replaceOrAddEntry = useStore((s) => s.replaceOrAddEntry);
@@ -124,12 +131,15 @@ export default function ThreadPage(): JSX.Element {
   const requestCoordinatorRef = useRef(createRequestCoordinator());
   const invalidatedRepairSignalsRef = useRef(new Set<string>());
   const loadingPageCursorsRef = useRef(new Set<string>());
+  const historyPageLoadingRef = useRef(false);
   const pendingSettingsRef = useRef<UpdateThreadSettingsInput | null>(null);
   const settingsFlushRef = useRef<Promise<void> | null>(null);
   const compactActionPendingRef = useRef(false);
   const streamDisconnectedRepairKeysRef = useRef(new Set<string>());
   const repairRetryTimerRef = useRef<number | null>(null);
   const completionRepairAttemptsRef = useRef(new Map<string, number>());
+  const requestTokenSequenceRef = useRef(0);
+  const activeRepairTokenRef = useRef<number | null>(null);
 
   const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
@@ -338,22 +348,29 @@ export default function ThreadPage(): JSX.Element {
       setPermissionProfile(threadId, savedPermissionProfile.permissions, savedPermissionProfile.approvalsReviewer);
     }
     let cancelled = false;
-    const requestEpoch = mutationEpochRef.current;
+    const requestGuard = captureTimelineRequestGuard(threadId, mutationEpochRef.current);
+    const requestToken = ++requestTokenSequenceRef.current;
+    const requestStampKey = historyStampKey(requestGuard.historyStamp);
     setLoading(true);
     (async () => {
       try {
         const td = await requestCoordinatorRef.current.dedupeRequest(
-          `thread:${threadId}:detail`,
+          `thread:${threadId}:detail:${requestStampKey}`,
           () => codex.readThread(threadId)
         ).catch((err) => recoverInitialThreadDetail(threadId, err));
         const initialPage = await requestCoordinatorRef.current.dedupeRequest(
-          `thread:${threadId}:turns:initial`,
+          `thread:${threadId}:turns:initial:${requestStampKey}`,
           () => codex.listTurnsBefore(threadId, null)
         );
         if (cancelled) return;
-        if (requestEpoch !== mutationEpochRef.current) return;
+        if (requestToken !== requestTokenSequenceRef.current) return;
+        if (!timelineRequestGuardIsCurrent(threadId, requestGuard, mutationEpochRef.current)) return;
+        if (!responseHistoryStampsAreCompatible(td.historyStamp, initialPage.historyStamp, !requestGuard.hasEntries)) return;
         applyThreadDetail({
           ...td,
+          bootId: initialPage.bootId ?? td.bootId,
+          generation: initialPage.generation ?? td.generation,
+          historyStamp: initialPage.historyStamp ?? td.historyStamp,
           timeline: initialPage.items,
           nextCursor: initialPage.nextCursor ?? null
         }, "replace");
@@ -382,34 +399,61 @@ export default function ThreadPage(): JSX.Element {
       invalidateTimelineDelivery?.(threadId, clientEpoch || undefined);
     }
     let cancelled = false;
-    const requestEpoch = mutationEpochRef.current;
+    const requestGuard = captureTimelineRequestGuard(threadId, mutationEpochRef.current);
+    const repairToken = ++requestTokenSequenceRef.current;
+    activeRepairTokenRef.current = repairToken;
+    const repairIdentity = repairRequestIdentity(repairRequest, requestGuard.historyStamp);
     (async () => {
       try {
         const [td, page] = await Promise.all([
           requestCoordinatorRef.current.dedupeRequest(
-            `thread:${threadId}:repair:metadata`,
+            `thread:${threadId}:repair:metadata:${repairIdentity}`,
             () => codex.readThread(threadId)
           ),
           requestCoordinatorRef.current.dedupeRequest(
-            `thread:${threadId}:repair:items`,
+            `thread:${threadId}:repair:items:${repairIdentity}`,
             () => codex.listTurnsBefore(threadId, null)
           )
         ]);
         if (cancelled) return;
-        if (requestEpoch !== mutationEpochRef.current) {
+        if (activeRepairTokenRef.current !== repairToken) return;
+        if (!timelineRequestGuardIsCurrent(threadId, requestGuard, mutationEpochRef.current)) {
           requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
           return;
         }
-        const currentThread = useStore.getState().threads[threadId];
-        const currentCursor = currentThread ? currentThread.cursor : (page.nextCursor ?? null);
-        applyThreadDetail({ ...td, timeline: page.items, nextCursor: currentCursor }, "merge");
+        if (!responseHistoryStampsAreCompatible(td.historyStamp, page.historyStamp, !requestGuard.hasEntries)) {
+          requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
+          return;
+        }
+        const repairWindow = repairWindowFrom(page);
+        if (repairWindow) {
+          const repairEntries = repairReconstructedTimelineEntries(
+            page.items.map((item, index) => timelineItemToEntry(item, td.updatedAt - page.items.length + index)),
+            "snapshot"
+          );
+          if (!replaceLatestWindow(threadId, repairEntries, page.nextCursor ?? null, repairWindow)) {
+            requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
+            return;
+          }
+        } else if (requestGuard.hasEntries) {
+          requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
+          return;
+        }
+        applyThreadDetail({
+          ...td,
+          bootId: page.bootId ?? td.bootId,
+          generation: page.generation ?? td.generation,
+          historyStamp: page.historyStamp ?? td.historyStamp,
+          timeline: page.items,
+          nextCursor: page.nextCursor ?? null
+        }, "merge");
         const completionRetry = completionRepairRetryInput(repairRequest);
         if (completionRetry && !timelinePageHasVisibleTurnOutput(page.items, completionRetry.turnId)) {
           const attemptKey = `${completionRetry.turnId}:${completionRetry.generation ?? "legacy"}`;
           const nextAttempt = (completionRepairAttemptsRef.current.get(attemptKey) ?? 0) + 1;
           if (nextAttempt <= MAX_COMPLETION_REPAIR_ATTEMPTS) {
             completionRepairAttemptsRef.current.set(attemptKey, nextAttempt);
-            clearSnapshotRepair(threadId);
+            if (activeRepairTokenRef.current === repairToken) clearSnapshotRepair(threadId);
             scheduleSnapshotRepairRetry(completionRetry);
             return;
           }
@@ -420,10 +464,12 @@ export default function ThreadPage(): JSX.Element {
           );
         }
         clearRepairRetryTimer();
-        clearSnapshotRepair(threadId);
+        if (activeRepairTokenRef.current === repairToken) clearSnapshotRepair(threadId);
       } catch (err) {
         if (isRequestAbort(err)) return;
-        scheduleSnapshotRepairRetry();
+        if (activeRepairTokenRef.current === repairToken) scheduleSnapshotRepairRetry(
+          completionRepairRetryInput(repairRequest) ?? { reason: "mutation-retry" }
+        );
       }
     })();
     return () => {
@@ -438,7 +484,8 @@ export default function ThreadPage(): JSX.Element {
     clearSnapshotRepair,
     clearRepairRetryTimer,
     scheduleSnapshotRepairRetry,
-    invalidateTimelineDelivery
+    invalidateTimelineDelivery,
+    replaceLatestWindow
   ]);
 
   useEffect(() => {
@@ -535,44 +582,71 @@ export default function ThreadPage(): JSX.Element {
     };
   }, [threadId, setPendingRequests]);
 
+  const loadOlderHistory = useCallback(async () => {
+    if (historyPageLoadingRef.current) {
+      return;
+    }
+    const currentThread = useStore.getState().threads[threadId];
+    if (!currentThread || currentThread.reachedBeginning || !currentThread.cursor) {
+      return;
+    }
+    const cursor = currentThread.cursor;
+    const requestGuard = captureTimelineRequestGuard(threadId, mutationEpochRef.current);
+    const pageKey = `${threadId}\u0001${historyStampKey(requestGuard.historyStamp)}\u0001${cursor}`;
+    if (loadingPageCursorsRef.current.has(pageKey)) {
+      return;
+    }
+    loadingPageCursorsRef.current.add(pageKey);
+    historyPageLoadingRef.current = true;
+    try {
+      const page = await requestCoordinatorRef.current.dedupeRequest(
+        `thread:${threadId}:turns:${historyStampKey(requestGuard.historyStamp)}:${cursor}`,
+        () => codex.listTurnsBefore(threadId, cursor)
+      );
+      if (!timelineRequestGuardIsCurrent(threadId, requestGuard, mutationEpochRef.current)) return;
+      if (!sameHistoryStamp(requestGuard.historyStamp, page.historyStamp)) return;
+      const pageCreatedAtBase = Date.now() - 10_000;
+      const extra = repairReconstructedTimelineEntries(
+        page.items.map((it, i) => timelineItemToEntry(it, pageCreatedAtBase + i)),
+        "pagination"
+      );
+      const scroller = scrollerRef.current;
+      const scrollAnchor = scroller ? captureTimelineDomScrollAnchor(scroller) : null;
+      prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
+      if (scroller && scrollAnchor) {
+        window.requestAnimationFrame(() => {
+          if (scrollerRef.current !== scroller) return;
+          restoreTimelineDomScrollAnchor(scroller, scrollAnchor);
+        });
+      }
+    } catch {
+      // The current page remains usable; a later resize or top scroll can retry.
+    } finally {
+      loadingPageCursorsRef.current.delete(pageKey);
+      historyPageLoadingRef.current = false;
+    }
+  }, [threadId, prependEntries]);
+
   const onScroll = useCallback(
     async (event: React.UIEvent<HTMLDivElement>) => {
       const el = event.currentTarget;
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       atBottomRef.current = distanceFromBottom < 64;
       setShowJumpLatest(!atBottomRef.current);
-
-      const currentThread = useStore.getState().threads[threadId];
-      if (el.scrollTop < 64 && currentThread && !currentThread.reachedBeginning && currentThread.cursor) {
-        const cursor = currentThread.cursor;
-        const pageKey = `${threadId}\u0001${cursor}`;
-        if (loadingPageCursorsRef.current.has(pageKey)) return;
-        loadingPageCursorsRef.current.add(pageKey);
-        try {
-          const page = await requestCoordinatorRef.current.dedupeRequest(
-            `thread:${threadId}:turns:${cursor}`,
-            () => codex.listTurnsBefore(threadId, cursor)
-          );
-          const pageCreatedAtBase = Date.now() - 10_000;
-          const extra = repairReconstructedTimelineEntries(
-            page.items.map((it, i) =>
-              timelineItemToEntry(it, pageCreatedAtBase + i)
-            ),
-            "pagination"
-          );
-          prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
-        } catch {
-          // ignore page load failure
-        } finally {
-          loadingPageCursorsRef.current.delete(pageKey);
-        }
+      if (el.scrollTop < 64) {
+        await loadOlderHistory();
       }
     },
-    [threadId, prependEntries]
+    [loadOlderHistory]
   );
 
   const onSend = useCallback(
-    async (text: string, imagePaths: string[], skillReferences: SkillReference[] = []) => {
+    async (
+      text: string,
+      imagePaths: string[],
+      skillReferences: SkillReference[] = [],
+      retryEntry?: TimelineEntry
+    ) => {
       const currentDetail =
         detail ??
         (useStore.getState().threads[threadId]?.entries.length
@@ -583,11 +657,18 @@ export default function ThreadPage(): JSX.Element {
       const sendKey = sendPayloadKey(text, imagePaths, skillReferences);
       if (pendingSendKeysRef.current.has(sendKey)) return;
       pendingSendKeysRef.current.add(sendKey);
-      const localUserMessageId = uniqueTimelineId("local-user");
+      const localUserMessageId = retryEntry?.clientUserMessageId ?? retryEntry?.id ?? uniqueTimelineId("local-user");
+      const payloadFingerprint = sendPayloadKey(text, imagePaths, skillReferences);
       const optimisticEntry: TimelineEntry = {
-        id: localUserMessageId,
+        ...(retryEntry ?? {}),
+        id: retryEntry?.id ?? localUserMessageId,
         clientUserMessageId: localUserMessageId,
         createdAt: Date.now(),
+        sendOperation: {
+          payloadFingerprint,
+          ...(detail?.bootId ? { bootId: detail.bootId } : {}),
+          outcome: "pending"
+        },
         body: {
           kind: "user-message",
           text,
@@ -596,7 +677,8 @@ export default function ThreadPage(): JSX.Element {
           status: "sending"
         }
       };
-      appendEntries(threadId, [optimisticEntry]);
+      if (retryEntry) replaceOrAddEntry(threadId, optimisticEntry);
+      else appendEntries(threadId, [optimisticEntry]);
       bumpMutationEpoch();
       setThreadStatus(threadId, "active");
       try {
@@ -640,6 +722,7 @@ export default function ThreadPage(): JSX.Element {
           ...optimisticEntry,
           turnId: started.turnId,
           clientUserMessageId,
+          sendOperation: { ...optimisticEntry.sendOperation!, outcome: "accepted" },
           body: {
             kind: "user-message",
             text,
@@ -659,8 +742,13 @@ export default function ThreadPage(): JSX.Element {
           }
         }
       } catch (err) {
+        const ambiguous = isAmbiguousStartError(err);
         replaceOrAddEntry(threadId, {
           ...optimisticEntry,
+          sendOperation: {
+            ...optimisticEntry.sendOperation!,
+            outcome: ambiguous ? "ambiguous" : "rejected"
+          },
           body: {
             kind: "user-message",
             text,
@@ -673,7 +761,12 @@ export default function ThreadPage(): JSX.Element {
           {
             id: `${optimisticEntry.id}-error`,
             createdAt: Date.now(),
-            body: { kind: "error", text: `发送失败：${errorMessage(err)}` }
+            body: {
+              kind: "error",
+              text: ambiguous
+                ? `发送结果未确认：${errorMessage(err)}。请先刷新恢复，或重试同一发送动作。`
+                : `发送失败：${errorMessage(err)}`
+            }
           }
         ]);
         setThreadStatus(threadId, "idle", null);
@@ -1000,6 +1093,7 @@ export default function ThreadPage(): JSX.Element {
         scrollerRef={scrollerRef}
         followTail={atBottomRef.current}
         onScroll={onScroll}
+        onRequestOlder={loadOlderHistory}
         onSend={onSend}
         onRewindToMessage={rewindToMessage}
         onForkFromMessage={forkFromMessage}
@@ -1320,6 +1414,7 @@ function ThreadTimelineViewport({
   scrollerRef,
   followTail,
   onScroll,
+  onRequestOlder,
   onSend,
   onRewindToMessage,
   onForkFromMessage,
@@ -1332,7 +1427,13 @@ function ThreadTimelineViewport({
   scrollerRef: RefObject<HTMLDivElement | null>;
   followTail: boolean;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void | Promise<void>;
-  onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
+  onRequestOlder: () => void | Promise<void>;
+  onSend: (
+    text: string,
+    imagePaths: string[],
+    skillReferences?: SkillReference[],
+    retryEntry?: TimelineEntry
+  ) => Promise<void>;
   onRewindToMessage: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage: (entry: TimelineEntry) => void | Promise<void>;
   onResolveApproval: (req: PendingServerRequest) => void | Promise<void>;
@@ -1345,7 +1446,33 @@ function ThreadTimelineViewport({
   const running = useStore((s) => s.threads[threadId]?.running ?? false);
   const activeTurnId = useStore((s) => s.threads[threadId]?.activeTurnId ?? null);
   const mode = useStore((s) => s.threads[threadId]?.mode ?? "build");
+  const viewportWsState = useStore((s) => s.wsState);
+  const reconnectAttempt = useStore((s) => s.reconnectAttempt);
   const reachedBeginning = useStore((s) => s.threads[threadId]?.reachedBeginning ?? false);
+  const cursor = useStore((s) => s.threads[threadId]?.cursor ?? null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content || reachedBeginning || !cursor) {
+      return;
+    }
+
+    const requestIfUnderfilled = () => {
+      if (scroller.clientHeight > 0 && scroller.scrollHeight <= scroller.clientHeight + 1) {
+        void onRequestOlder();
+      }
+    };
+
+    requestIfUnderfilled();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(requestIfUnderfilled);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [cursor, onRequestOlder, reachedBeginning, scrollerRef]);
 
   return (
     <div
@@ -1354,6 +1481,7 @@ function ThreadTimelineViewport({
       onScroll={onScroll}
       style={scrollStyle}
     >
+      <div ref={contentRef} data-thread-timeline-content="true" style={threadTimelineContentStyle}>
       {reachedBeginning ? (
         <div style={{ textAlign: "center", color: "var(--cw-fg-subtle)", padding: 16, fontSize: 12 }}>会话开始</div>
       ) : null}
@@ -1364,8 +1492,9 @@ function ThreadTimelineViewport({
         approvals={approvals}
         running={running}
         activeTurnId={activeTurnId}
-        onResendUser={async (text, imagePaths, skillReferences) => {
-          await onSend(text, imagePaths, skillReferences);
+        onResendUser={async (entry) => {
+          if (entry.body.kind !== "user-message") return;
+          await onSend(entry.body.text, entry.body.imagePaths ?? [], entry.body.skillReferences ?? [], entry);
         }}
         onRewindToMessage={onRewindToMessage}
         onForkFromMessage={onForkFromMessage}
@@ -1373,6 +1502,9 @@ function ThreadTimelineViewport({
           await onResolveApproval(req);
         }}
       />
+      {viewportWsState === "reconnecting" || viewportWsState === "closed" ? (
+        <ReconnectStatus attempt={reconnectAttempt} />
+      ) : null}
       {processing ? (
         <div style={{ textAlign: "center", padding: 12, color: "var(--cw-fg-muted)", fontSize: 12 }}>
           {processingLabel}
@@ -1402,6 +1534,7 @@ function ThreadTimelineViewport({
           </button>
         </div>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -1438,7 +1571,12 @@ function ThreadComposerDock({
   onOpenPermissionPicker: () => void;
   onOpenModelPicker: () => void;
   onOpenGoalEditor: () => void;
-  onSend: (text: string, imagePaths: string[], skillReferences?: SkillReference[]) => Promise<void>;
+  onSend: (
+    text: string,
+    imagePaths: string[],
+    skillReferences?: SkillReference[],
+    retryEntry?: TimelineEntry
+  ) => Promise<void>;
   onInterrupt: () => Promise<void>;
 }): JSX.Element {
   return (
@@ -2031,6 +2169,79 @@ function isThreadNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && /thread not found|找不到会话/i.test(error.message);
 }
 
+type TimelineRequestGuard = {
+  mutationEpoch: number;
+  deliveryEpoch: number;
+  engine: object | null;
+  historyStamp: HistoryStamp | null;
+  hasEntries: boolean;
+};
+
+function captureTimelineRequestGuard(threadId: string, mutationEpoch: number): TimelineRequestGuard {
+  const thread = useStore.getState().threads[threadId];
+  let historyStamp: HistoryStamp | null = null;
+  for (let index = (thread?.entries.length ?? 0) - 1; index >= 0; index -= 1) {
+    const candidate = thread?.entries[index]?.historyStamp;
+    if (candidate) {
+      historyStamp = candidate;
+      break;
+    }
+  }
+  return {
+    mutationEpoch,
+    deliveryEpoch: thread?.deliveryEpoch ?? 0,
+    engine: thread?.timelineEngine ?? null,
+    historyStamp,
+    hasEntries: Boolean(thread?.entries.length)
+  };
+}
+
+function timelineRequestGuardIsCurrent(
+  threadId: string,
+  guard: TimelineRequestGuard,
+  mutationEpoch: number
+): boolean {
+  const thread = useStore.getState().threads[threadId];
+  return (
+    mutationEpoch === guard.mutationEpoch &&
+    (thread?.deliveryEpoch ?? 0) === guard.deliveryEpoch &&
+    (thread?.timelineEngine ?? null) === guard.engine
+  );
+}
+
+function sameHistoryStamp(left: HistoryStamp | null | undefined, right: HistoryStamp | null | undefined): boolean {
+  if (!left || !right) return !left && !right;
+  return left.bootId === right.bootId && left.generation === right.generation;
+}
+
+function responseHistoryStampsAreCompatible(
+  metadataStamp: HistoryStamp | null | undefined,
+  pageStamp: HistoryStamp | null | undefined,
+  emptyBaseline: boolean
+): boolean {
+  if (!metadataStamp || !pageStamp) {
+    return emptyBaseline && !metadataStamp && !pageStamp;
+  }
+  return sameHistoryStamp(metadataStamp, pageStamp);
+}
+
+function historyStampKey(stamp: HistoryStamp | null | undefined): string {
+  return stamp ? `${stamp.bootId}:${stamp.generation}` : "legacy";
+}
+
+function repairRequestIdentity(
+  request: { key?: string; reason?: string; turnId?: string | null; itemId?: string | null } | null,
+  historyStamp: HistoryStamp | null
+): string {
+  return [
+    historyStampKey(historyStamp),
+    request?.reason ?? "repair",
+    request?.turnId ?? "thread",
+    request?.itemId ?? "item",
+    request?.key ?? "request"
+  ].map(encodeURIComponent).join(":");
+}
+
 function completionRepairRetryInput(
   repairRequest: { reason?: string; turnId?: string; generation?: number } | null | undefined
 ): SnapshotRepairRetryInput & { turnId: string } | null {
@@ -2239,6 +2450,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "未知错误";
 }
 
+function isAmbiguousStartError(error: unknown): boolean {
+  if (isRequestAbort(error)) return true;
+  if (error instanceof ApiError) {
+    return error.status >= 500 || error.message.includes("ambiguous-start-unresolved");
+  }
+  return error instanceof TypeError || (error instanceof Error && /timeout|network|connection|响应/i.test(error.message));
+}
+
 function contextUsageProgress(
   usage: ContextUsageSnapshot | null
 ): { percent: number; fillPercent: number; color: string } | null {
@@ -2361,6 +2580,14 @@ const scrollStyle: React.CSSProperties = {
   minHeight: 0,
   overflowY: "auto",
   padding: "12px",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10
+};
+
+const threadTimelineContentStyle: React.CSSProperties = {
+  width: "100%",
+  minWidth: 0,
   display: "flex",
   flexDirection: "column",
   gap: 10

@@ -204,6 +204,28 @@ describe("normalizeAppServerNotification", () => {
     });
   });
 
+  it("优先把当前 file change patchUpdated 映射为带 changes 的原位事件", () => {
+    expect(normalizeAppServerNotification({
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "file-1",
+        changes: [{ path: "src/app.ts", kind: "update", diff: "@@\n-old\n+new" }]
+      }
+    })).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "file_output_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "file-1",
+        delta: "@@\n-old\n+new",
+        changes: [{ path: "src/app.ts", kind: "update", diff: "@@\n-old\n+new" }]
+      }
+    });
+  });
+
   it("把 command/process base64 output delta 映射为浏览器 timeline 事件", () => {
     expect(
       normalizeAppServerNotification({
@@ -248,6 +270,27 @@ describe("normalizeAppServerNotification", () => {
         turnId: "turn-1",
         itemId: "proc-1",
         delta: "进程输出\n"
+      }
+    });
+  });
+
+  it("把 capReached 保留为可见事件截断信号", () => {
+    expect(normalizeAppServerNotification({
+      method: "process/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        processHandle: "proc-cap",
+        stream: "stdout",
+        deltaBase64: Buffer.from("truncated").toString("base64"),
+        capReached: true
+      }
+    })).toMatchObject({
+      event: {
+        kind: "command_output_delta",
+        itemId: "proc-cap",
+        delta: "truncated",
+        capReached: true
       }
     });
   });
@@ -400,6 +443,8 @@ describe("normalizeAppServerNotification", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
+          responseId: "response-explicit",
+          absoluteOutputIndex: 3,
           item: {
             type: "message",
             id: "msg-1",
@@ -421,7 +466,12 @@ describe("normalizeAppServerNotification", () => {
         item: {
           id: "msg-1",
           role: "agent",
-          text: "第一段\n第二段"
+          text: "第一段\n第二段",
+          sourceLocator: {
+            sourceKind: "response",
+            sourceId: "response-explicit",
+            absoluteOutputIndex: 3
+          }
         }
       }
     });
@@ -451,6 +501,38 @@ describe("normalizeAppServerNotification", () => {
         }
       }
     });
+  });
+
+  it("用 response absolute locator 区分同 turn 的无 ID items", () => {
+    const normalize = (absoluteOutputIndex: number) => normalizeAppServerNotification({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        responseId: "response-1",
+        absoluteOutputIndex,
+        item: { type: "message", role: "assistant", content: `output-${absoluteOutputIndex}` }
+      }
+    });
+
+    expect([normalize(7), normalize(8)]).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "synthetic:response:response-1:7",
+            sourceLocator: { sourceKind: "response", sourceId: "response-1", absoluteOutputIndex: 7 }
+          })
+        })
+      }),
+      expect.objectContaining({
+        event: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "synthetic:response:response-1:8",
+            sourceLocator: { sourceKind: "response", sourceId: "response-1", absoluteOutputIndex: 8 }
+          })
+        })
+      })
+    ]);
   });
 
   it("把未知 raw response 完成项映射为可见运行活动 fallback", () => {
@@ -513,6 +595,56 @@ describe("normalizeAppServerNotification", () => {
         turnId: "turn-1",
         completedAtMs: 1234,
         item: { id: "agent-1", role: "agent", text: "完整回复" }
+      }
+    });
+  });
+
+  it("把 contextCompaction 的开始与完成映射为同 identity 的运行和完成状态", () => {
+    const item = { type: "contextCompaction", id: "compact-1" };
+
+    expect(
+      normalizeAppServerNotification({
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", startedAtMs: 1200, item }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1200,
+        item: {
+          id: "compact-1",
+          role: "system",
+          text: "正在自动压缩上下文",
+          toolKind: "system",
+          systemKind: "context-compaction",
+          status: "running"
+        }
+      }
+    });
+
+    expect(
+      normalizeAppServerNotification({
+        method: "item/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1300, item }
+      })
+    ).toEqual({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1300,
+        item: {
+          id: "compact-1",
+          role: "system",
+          text: "压缩上下文已完成",
+          toolKind: "system",
+          systemKind: "context-compaction",
+          status: "success"
+        }
       }
     });
   });

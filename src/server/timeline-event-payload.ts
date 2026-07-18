@@ -17,6 +17,7 @@ export type TimelineEventContentLocator = {
   server?: string;
   tool?: string;
   status?: "running" | "success" | "failed";
+  sourceLocator?: import("../shared/codex").MobileTimelineItem["sourceLocator"];
 };
 
 export type TimelineEventBudgetOptions = {
@@ -74,10 +75,14 @@ export function browserTimelineEventForBudget(
         ...(content?.server ? { server: content.server } : {}),
         ...(content?.tool ? { tool: content.tool } : {}),
         ...(content?.status ? { status: content.status } : {}),
+        ...(content?.sourceLocator ? { sourceLocator: content.sourceLocator } : {}),
         preview: preview.text,
         ...(contentRef ? { contentRef } : {}),
         completeness,
         ...(identity.eventId ? { eventId: identity.eventId } : {}),
+        ...(identity.bootId ? { bootId: identity.bootId } : {}),
+        ...(typeof identity.streamSequence === "number" ? { streamSequence: identity.streamSequence } : {}),
+        ...(typeof identity.fragmentSequence === "number" ? { fragmentSequence: identity.fragmentSequence } : {}),
         ...(typeof identity.sequence === "number" ? { sequence: identity.sequence } : {}),
         ...(typeof identity.revision === "number" ? { revision: identity.revision } : {}),
         ...(typeof identity.generation === "number" ? { generation: identity.generation } : {})
@@ -95,6 +100,7 @@ export function browserTimelineEventForBudget(
           ...(content?.turnId ? { turnId: content.turnId } : {}),
           ...(content?.itemId ? { itemId: content.itemId } : {}),
           originalKind: content?.originalKind ?? identity.kind,
+          ...(content?.sourceLocator ? { sourceLocator: content.sourceLocator } : {}),
           preview: "",
           ...(contentRef ? { contentRef } : {}),
           completeness: contentRef
@@ -113,6 +119,9 @@ export function browserTimelineEventForBudget(
                 includedBytes: 0
               },
           ...(identity.eventId ? { eventId: identity.eventId } : {}),
+          ...(identity.bootId ? { bootId: identity.bootId } : {}),
+          ...(typeof identity.streamSequence === "number" ? { streamSequence: identity.streamSequence } : {}),
+          ...(typeof identity.fragmentSequence === "number" ? { fragmentSequence: identity.fragmentSequence } : {}),
           ...(typeof identity.sequence === "number" ? { sequence: identity.sequence } : {}),
           ...(typeof identity.revision === "number" ? { revision: identity.revision } : {}),
           ...(typeof identity.generation === "number" ? { generation: identity.generation } : {})
@@ -150,7 +159,8 @@ function eventContent(
       ...(value.item.toolKind ? { toolKind: value.item.toolKind } : {}),
       ...(value.item.server ? { server: value.item.server } : {}),
       ...(value.item.tool ? { tool: value.item.tool } : {}),
-      ...(value.item.status ? { status: value.item.status } : {})
+      ...(value.item.status ? { status: value.item.status } : {}),
+      ...(value.item.sourceLocator ? { sourceLocator: value.item.sourceLocator } : {})
     };
   }
   if (

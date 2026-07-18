@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
-import { assertRuntimePathAllowed } from "../security";
+import { assertRuntimeSessionRolloutFileAllowed } from "../security";
 import type { AppServerConfig } from "../../config/env";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
 import type {
@@ -81,6 +81,12 @@ import {
   utf8ByteLength,
   type TimelineCompleteness
 } from "../../shared/timeline-content";
+import {
+  resolveAgentMessageAlias,
+  type AgentMessageAliasCandidate,
+  type AgentMessageAliasResolution,
+  type TimelineGapScope
+} from "../../shared/timeline-protocol";
 import { getRuntimeConfig } from "../runtime";
 import {
   CodexAppServerClient,
@@ -184,7 +190,23 @@ type TextUserInput = { type: "text"; text: string };
 type TimelineOverlayEntry = {
   item: MobileTimelineItem;
   turnId: string | null;
+  generation: number;
+  provisionalAgent: boolean;
   updatedAtMs: number;
+};
+
+type TimelineGenerationTransition = {
+  generation: number;
+  previousStamp: { bootId: string; generation: number };
+  stablePrefix: MobileTimelineItem[];
+  nextTimeline: MobileTimelineItem[];
+};
+
+type BrowserEventOwnerRecord = {
+  bootId: string;
+  streamSequence: number;
+  threadId: string | null;
+  visible: boolean;
 };
 
 type TimelineContentSourceBase = {
@@ -220,11 +242,13 @@ export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequ
 
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
 const MAX_BROWSER_EVENT_BACKLOG = 500;
-const SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT = 1_000_000;
+const MAX_BROWSER_EVENT_OWNER_LEDGER = 2_000;
+const SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT = 64 * 1024 * 1024;
+const SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT = 16 * 1024 * 1024;
 const SESSION_CONTEXT_USAGE_TAIL_LINES = 500;
-const SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT = 20_000;
-const SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT = 120;
-const SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS = 75;
+const SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT = 200_000;
+const SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT = 240;
+const SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS = 1_000;
 const CONTEXT_COMPACTION_DONE_TEXT = "压缩上下文已完成";
 
 function pendingReasoningItemId(threadId: string, turnId: string | null): string {
@@ -246,28 +270,55 @@ type BoundedJsonlRead = {
   budgetExhausted: boolean;
 };
 
-async function readBoundedJsonlLines(
+async function readBoundedMatchingSessionLines(
   filePath: string,
-  options: { maxLines: number; maxBytes: number; maxElapsedMs: number }
+  fileSize: number,
+  options: {
+    maxSourceBytes: number;
+    maxMatchedBytes: number;
+    maxLines: number;
+    maxElapsedMs: number;
+    matches: (line: string) => boolean;
+  }
 ): Promise<BoundedJsonlRead> {
-  const lines: string[] = [];
-  let bytes = 0;
-  let budgetExhausted = false;
-  const deadline = Date.now() + options.maxElapsedMs;
-  const stream = createReadStream(filePath, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  if (fileSize <= 0) {
+    return { lines: [], budgetExhausted: false };
+  }
+  const startedAt = Date.now();
+  const start = Math.max(0, fileSize - options.maxSourceBytes);
+  const stream = createReadStream(filePath, {
+    encoding: "utf8",
+    start,
+    end: fileSize - 1,
+    highWaterMark: 64 * 1024
+  });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
+  const lines: string[] = [];
+  let sourceLines = 0;
+  let matchedBytes = 0;
+  let skipPartialLine = start > 0;
+  let budgetExhausted = start > 0;
 
   try {
     for await (const line of reader) {
-      if (lines.length >= options.maxLines || Date.now() > deadline) {
+      if (skipPartialLine) {
+        skipPartialLine = false;
+        continue;
+      }
+      sourceLines += 1;
+      if (sourceLines > options.maxLines || Date.now() - startedAt > options.maxElapsedMs) {
         budgetExhausted = true;
         break;
       }
-      bytes += line.length + 1;
-      if (bytes > options.maxBytes) {
+      if (!options.matches(line)) {
+        continue;
+      }
+      const lineBytes = utf8ByteLength(line) + 1;
+      if (matchedBytes + lineBytes > options.maxMatchedBytes) {
         budgetExhausted = true;
         break;
       }
+      matchedBytes += lineBytes;
       lines.push(line);
     }
   } finally {
@@ -294,11 +345,308 @@ function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem
   };
 }
 
+function isRawResponseAgentItem(item: MobileTimelineItem): boolean {
+  return item.role === "agent" && item.sourceLocator?.sourceKind === "response";
+}
+
+function agentAliasCandidate(
+  item: MobileTimelineItem,
+  turnId: string | null,
+  generation: number,
+  provisional: boolean
+): AgentMessageAliasCandidate | null {
+  if (item.role !== "agent" || !turnId) {
+    return null;
+  }
+  return {
+    id: item.id,
+    turnId,
+    generation,
+    text: item.text,
+    provisional
+  };
+}
+
+function sameAgentAlias(
+  left: AgentMessageAliasResolution,
+  right: AgentMessageAliasResolution
+): left is Extract<AgentMessageAliasResolution, { kind: "alias" }> {
+  return left.kind === "alias" &&
+    right.kind === "alias" &&
+    left.canonicalId === right.canonicalId &&
+    left.provisionalId === right.provisionalId;
+}
+
+function reciprocalAgentMessageAlias(
+  incoming: AgentMessageAliasCandidate,
+  candidates: AgentMessageAliasCandidate[]
+): Extract<AgentMessageAliasResolution, { kind: "alias" }> | null {
+  const resolution = resolveAgentMessageAlias(incoming, candidates);
+  if (resolution.kind !== "alias") {
+    return null;
+  }
+  const counterpartId = incoming.id === resolution.canonicalId
+    ? resolution.provisionalId
+    : resolution.canonicalId;
+  const counterpart = candidates.find((candidate) => candidate.id === counterpartId);
+  if (!counterpart) {
+    return null;
+  }
+  const reverse = resolveAgentMessageAlias(
+    counterpart,
+    [incoming, ...candidates.filter((candidate) => candidate.id !== counterpart.id)]
+  );
+  return sameAgentAlias(resolution, reverse) ? resolution : null;
+}
+
+function mergeAgentAliasItems(
+  provisional: MobileTimelineItem,
+  canonical: MobileTimelineItem
+): MobileTimelineItem {
+  const { sourceLocator: _provisionalSourceLocator, ...provisionalFields } = provisional;
+  const createdAt = [provisional.createdAt, canonical.createdAt]
+    .filter((value): value is number => typeof value === "number")
+    .sort((left, right) => left - right)[0];
+  return {
+    ...provisionalFields,
+    ...canonical,
+    id: canonical.id,
+    text: canonical.text,
+    ...(typeof createdAt === "number" ? { createdAt } : {})
+  };
+}
+
+type UniqueTimelineIdentityIndex = Map<string, string | null>;
+
+function addUniqueTimelineIdentity(
+  index: UniqueTimelineIdentityIndex,
+  key: string | null,
+  itemId: string
+): void {
+  if (!key) {
+    return;
+  }
+  const current = index.get(key);
+  if (current === undefined) {
+    index.set(key, itemId);
+  } else if (current !== itemId) {
+    index.set(key, null);
+  }
+}
+
+function timelineItemGeneration(item: MobileTimelineItem, fallback: number): number {
+  return item.historyStamp?.generation ?? item.generation ?? fallback;
+}
+
+function materializedOverlayIdentityKey(
+  item: MobileTimelineItem,
+  turnId: string | null,
+  generation: number
+): string | null {
+  if (!turnId) {
+    return null;
+  }
+  if (item.role === "agent") {
+    const text = item.text.trim();
+    return text ? `agent\u0000${generation}\u0000${turnId}\u0000${text}` : null;
+  }
+  if (item.role === "user" && item.clientUserMessageId) {
+    return `user\u0000${generation}\u0000${turnId}\u0000${item.clientUserMessageId}`;
+  }
+  return null;
+}
+
+function materializedTimelineOverlayIds(
+  items: MobileTimelineItem[],
+  overlay: ReadonlyMap<string, TimelineOverlayEntry>,
+  generation: number
+): Set<string> {
+  const historyIdentities: UniqueTimelineIdentityIndex = new Map();
+  const overlayIdentities: UniqueTimelineIdentityIndex = new Map();
+
+  for (const item of items) {
+    addUniqueTimelineIdentity(
+      historyIdentities,
+      materializedOverlayIdentityKey(
+        item,
+        item.turnId ?? null,
+        timelineItemGeneration(item, generation)
+      ),
+      item.id
+    );
+  }
+
+  for (const [id, entry] of overlay) {
+    if (entry.item.role === "agent" && (entry.provisionalAgent || isRawResponseAgentItem(entry.item))) {
+      continue;
+    }
+    addUniqueTimelineIdentity(
+      overlayIdentities,
+      materializedOverlayIdentityKey(entry.item, entry.turnId, entry.generation),
+      id
+    );
+  }
+
+  const materialized = new Set<string>();
+  for (const [key, overlayId] of overlayIdentities) {
+    const historyId = historyIdentities.get(key);
+    if (typeof overlayId === "string" && typeof historyId === "string" && overlayId !== historyId) {
+      materialized.add(overlayId);
+    }
+  }
+  return materialized;
+}
+
+function agentAliasesById(
+  items: MobileTimelineItem[],
+  overlay: ReadonlyMap<string, TimelineOverlayEntry>,
+  materializedOverlayIds: ReadonlySet<string>,
+  generation: number
+): Map<string, Extract<AgentMessageAliasResolution, { kind: "alias" }>> {
+  const historyIds = new Set(items.map((item) => item.id));
+  const candidateByIdentity = new Map<string, AgentMessageAliasCandidate>();
+  const addCandidate = (candidate: AgentMessageAliasCandidate | null) => {
+    if (!candidate) return;
+    candidateByIdentity.set(`${candidate.id}\u0000${candidate.provisional ? "p" : "c"}`, candidate);
+  };
+
+  for (const item of items) {
+    addCandidate(agentAliasCandidate(
+      item,
+      item.turnId ?? null,
+      timelineItemGeneration(item, generation),
+      isRawResponseAgentItem(item)
+    ));
+  }
+  for (const [id, entry] of overlay) {
+    if (materializedOverlayIds.has(id) || historyIds.has(id)) {
+      continue;
+    }
+    addCandidate(agentAliasCandidate(
+      entry.item,
+      entry.turnId,
+      entry.generation,
+      entry.provisionalAgent
+    ));
+  }
+
+  const candidatesByTurn = new Map<string, AgentMessageAliasCandidate[]>();
+  for (const candidate of candidateByIdentity.values()) {
+    const key = `${candidate.generation}\u0000${candidate.turnId}`;
+    const candidates = candidatesByTurn.get(key) ?? [];
+    candidates.push(candidate);
+    candidatesByTurn.set(key, candidates);
+  }
+
+  const aliases = new Map<string, Extract<AgentMessageAliasResolution, { kind: "alias" }>>();
+  for (const candidates of candidatesByTurn.values()) {
+    if (!candidates.some((candidate) => candidate.provisional)) {
+      continue;
+    }
+    for (const candidate of candidates) {
+      if (!candidate.provisional) {
+        continue;
+      }
+      const alias = reciprocalAgentMessageAlias(
+        candidate,
+        candidates.filter((existing) => existing.id !== candidate.id)
+      );
+      if (alias) {
+        aliases.set(alias.canonicalId, alias);
+        aliases.set(alias.provisionalId, alias);
+      }
+    }
+  }
+  return aliases;
+}
+
 function overlayItemWithTurnMeta(item: MobileTimelineItem, turnId: string | null): MobileTimelineItem {
   return {
     ...item,
     ...(turnId ? { turnId } : {})
   };
+}
+
+function cloneTimelineOverlay(
+  overlay: ReadonlyMap<string, TimelineOverlayEntry> | undefined
+): Map<string, TimelineOverlayEntry> {
+  return new Map(
+    [...(overlay ?? [])].map(([id, entry]) => [
+      id,
+      {
+        ...entry,
+        item: {
+          ...entry.item,
+          ...(entry.item.imagePaths ? { imagePaths: [...entry.item.imagePaths] } : {}),
+          ...(entry.item.skillReferences ? { skillReferences: [...entry.item.skillReferences] } : {})
+        }
+      }
+    ])
+  );
+}
+
+function timelineWindowAnchor(
+  historyStamp: { bootId: string; generation: number },
+  item: MobileTimelineItem
+): string {
+  return JSON.stringify([
+    historyStamp.bootId,
+    historyStamp.generation,
+    item.turnId ?? null,
+    item.id
+  ]);
+}
+
+function timelineItemIdentityMatches(left: MobileTimelineItem, right: MobileTimelineItem): boolean {
+  return left.id === right.id && (left.turnId ?? null) === (right.turnId ?? null);
+}
+
+function stableTimelinePrefix(
+  previous: MobileTimelineItem[],
+  next: MobileTimelineItem[]
+): MobileTimelineItem[] {
+  const limit = Math.min(previous.length, next.length);
+  let length = 0;
+  while (length < limit && timelineItemIdentityMatches(previous[length]!, next[length]!)) {
+    length += 1;
+  }
+  return previous.slice(0, length);
+}
+
+function stableTimelineSuffixLength(previous: MobileTimelineItem[], next: MobileTimelineItem[]): number {
+  const limit = Math.min(previous.length, next.length);
+  let length = 0;
+  while (
+    length < limit &&
+    timelineItemIdentityMatches(previous[previous.length - 1 - length]!, next[next.length - 1 - length]!)
+  ) {
+    length += 1;
+  }
+  return length;
+}
+
+function reverseTimelineTurnGroups(items: MobileTimelineItem[]): MobileTimelineItem[] {
+  const groups: MobileTimelineItem[][] = [];
+  for (const item of items) {
+    const current = groups.at(-1);
+    if (current?.[0]?.turnId && current[0].turnId === item.turnId) {
+      current.push(item);
+    } else {
+      groups.push([item]);
+    }
+  }
+  return groups.reverse().flat();
+}
+
+function chronologicalTimelineTransition(
+  previous: MobileTimelineItem[],
+  next: MobileTimelineItem[]
+): { previous: MobileTimelineItem[]; next: MobileTimelineItem[] } {
+  const prefixLength = stableTimelinePrefix(previous, next).length;
+  const suffixLength = stableTimelineSuffixLength(previous, next);
+  return suffixLength > prefixLength
+    ? { previous: reverseTimelineTurnGroups(previous), next: reverseTimelineTurnGroups(next) }
+    : { previous, next };
 }
 
 function mergeTimelineTurnMeta(base: MobileTimelineItem, overlay: MobileTimelineItem): MobileTimelineItem {
@@ -317,6 +665,24 @@ export function browserEventId(event: BrowserTimelineEvent): string {
     return `server-request:${event.request.requestId}`;
   }
   return `server-request-resolved:${event.requestId}`;
+}
+
+function browserEventCursor(eventId: string): { bootId: string; streamSequence: number } | null {
+  const match = /^([^:]+):[^:]+:\d+:(\d+):[^:]+$/.exec(eventId);
+  if (!match) {
+    return null;
+  }
+  const streamSequence = Number(match[2]);
+  return Number.isSafeInteger(streamSequence) && streamSequence >= 0
+    ? { bootId: match[1]!, streamSequence }
+    : null;
+}
+
+function browserEventStreamSequence(event: BrowserTimelineEvent): number {
+  if (event.type !== "codex-event") {
+    return Number.POSITIVE_INFINITY;
+  }
+  return event.event.streamSequence ?? event.event.sequence ?? Number.POSITIVE_INFINITY;
 }
 
 function browserCodexEventThreadKey(envelope: BrowserCodexEventEnvelope): string {
@@ -406,41 +772,6 @@ function shouldUseOverlayTimelineItem(base: MobileTimelineItem, overlay: MobileT
   }
 
   return overlay.text.length > base.text.length;
-}
-
-function equivalentTimelineOutput(base: MobileTimelineItem, overlay: MobileTimelineItem): boolean {
-  if (!base.turnId || !overlay.turnId || base.turnId !== overlay.turnId || base.role !== overlay.role) {
-    return false;
-  }
-
-  if (base.role === "tool") {
-    return (
-      base.toolKind === overlay.toolKind &&
-      base.server === overlay.server &&
-      base.tool === overlay.tool &&
-      equivalentTimelineText(base.text, overlay.text)
-    );
-  }
-
-  if (base.role === "agent" || base.role === "reasoning") {
-    return equivalentTimelineText(base.text, overlay.text);
-  }
-
-  if (base.role === "system") {
-    return isContextCompactionTimelineItem(base) && isContextCompactionTimelineItem(overlay);
-  }
-
-  return false;
-}
-
-function isContextCompactionTimelineItem(item: MobileTimelineItem): boolean {
-  return item.role === "system" && item.text.trim() === CONTEXT_COMPACTION_DONE_TEXT;
-}
-
-function equivalentTimelineText(left: string, right: string): boolean {
-  const a = left.trim();
-  const b = right.trim();
-  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
 }
 
 function insertOverlayTimelineItem(timeline: MobileTimelineItem[], item: MobileTimelineItem): MobileTimelineItem[] {
@@ -2763,8 +3094,11 @@ export class AppServerGateway {
   private readonly client: CodexAppServerClient;
   private readonly browserEventHandlers = new Set<(event: BrowserTimelineEvent) => void>();
   private readonly browserEventBacklog: BrowserTimelineEvent[] = [];
+  private readonly browserEventOwnerLedger: BrowserEventOwnerRecord[] = [];
   private readonly threadEventRevisions = new Map<string, number>();
   private readonly threadTimelineGenerations = new Map<string, number>();
+  private readonly timelineGenerationTransitions = new Map<string, TimelineGenerationTransition>();
+  private readonly fragmentSequences = new Map<string, number>();
   private readonly pendingServerRequests = new Map<number, PendingServerRequestView>();
   private readonly terminalSessions = new Map<string, MobileTerminalSession>();
   private readonly commandExecSessions = new Map<string, MobileTerminalSession>();
@@ -2775,23 +3109,27 @@ export class AppServerGateway {
   private readonly timelineContentCursorByPosition = new Map<string, string>();
   private readonly activeTurnIds = new Map<string, string>();
   private readonly terminalTurnIdsByThread = new Map<string, Set<string>>();
+  private readonly outputDecoders = new Map<string, TextDecoder>();
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
   private fileSearchSessionCounter = 0;
+  private readonly browserBootId = randomUUID();
   private browserEventSequence = 0;
 
   constructor(
     private readonly peer: ManagedAppServerPeer,
-    private readonly timelinePathPolicy: { assertPathAllowed(path: string): string } = {
-      assertPathAllowed: assertRuntimePathAllowed
+    private readonly timelinePathPolicy: { assertPathAllowed(path: string): string | Promise<string> } = {
+      assertPathAllowed: assertRuntimeSessionRolloutFileAllowed
     }
   ) {
     this.client = new CodexAppServerClient(peer as AppServerPeer);
     this.peer.onNotification((message) => {
-      this.recordProcessNotification(message);
-      this.recordCommandExecNotification(message);
-      const event = normalizeAppServerNotification(message);
+      const decodedMessage = this.decodeOutputNotification(message);
+      if (!decodedMessage) return;
+      this.recordProcessNotification(decodedMessage);
+      this.recordCommandExecNotification(decodedMessage);
+      const event = normalizeAppServerNotification(decodedMessage);
       if (!event) {
         return;
       }
@@ -2826,24 +3164,72 @@ export class AppServerGateway {
     return this.activeTurnIds.get(threadId) ?? null;
   }
 
+  getTimelineBootId(): string {
+    return this.browserBootId;
+  }
+
   onBrowserEvent(handler: (event: BrowserTimelineEvent) => void): () => void {
     this.browserEventHandlers.add(handler);
     return () => this.browserEventHandlers.delete(handler);
   }
 
-  listBrowserEventBacklog(afterEventId?: string | null): { events: BrowserTimelineEvent[]; gap: boolean } {
+  listBrowserEventBacklog(afterEventId?: string | null): {
+    events: BrowserTimelineEvent[];
+    gap: boolean;
+    gapScope?: TimelineGapScope;
+    bootId: string;
+  } {
     if (!afterEventId) {
-      return { events: [], gap: false };
+      return { events: [], gap: false, bootId: this.browserBootId };
     }
 
     const index = this.browserEventBacklog.findIndex((event) => browserEventId(event) === afterEventId);
     if (index < 0) {
-      return { events: [], gap: true };
+      const cursor = browserEventCursor(afterEventId);
+      if (!cursor || cursor.bootId !== this.browserBootId) {
+        return {
+          events: [],
+          gap: true,
+          gapScope: { scope: "all-tracked" },
+          bootId: this.browserBootId
+        };
+      }
+      const oldestOwnerSequence = this.browserEventOwnerLedger[0]?.streamSequence;
+      if (typeof oldestOwnerSequence !== "number" || cursor.streamSequence < oldestOwnerSequence - 1) {
+        return {
+          events: [],
+          gap: true,
+          gapScope: { scope: "all-tracked" },
+          bootId: this.browserBootId
+        };
+      }
+      const owners = new Set<string>();
+      let hasUnknownVisibleOwner = false;
+      for (const record of this.browserEventOwnerLedger) {
+        if (record.streamSequence <= cursor.streamSequence || !record.visible) {
+          continue;
+        }
+        if (record.threadId) {
+          owners.add(record.threadId);
+        } else {
+          hasUnknownVisibleOwner = true;
+        }
+      }
+      const gapScope: TimelineGapScope = hasUnknownVisibleOwner || !owners.size
+        ? { scope: "all-tracked" }
+        : { scope: "threads", affectedThreadIds: [...owners] };
+      return {
+        events: this.browserEventBacklog.filter((event) => browserEventStreamSequence(event) > cursor.streamSequence),
+        gap: true,
+        gapScope,
+        bootId: this.browserBootId
+      };
     }
 
     return {
       events: this.browserEventBacklog.slice(index + 1).filter((event) => !this.isBlockedBacklogEvent(event)),
-      gap: false
+      gap: false,
+      bootId: this.browserBootId
     };
   }
 
@@ -2881,13 +3267,19 @@ export class AppServerGateway {
   private enrichCodexEvent(envelope: BrowserCodexEventEnvelope): BrowserCodexEventEnvelope {
     const threadId = browserCodexEventThreadKey(envelope);
     const revision = this.nextThreadEventRevision(threadId);
-    const sequence = ++this.browserEventSequence;
-    const eventId = envelope.event.eventId ?? `${threadId}:${revision}:${sequence}:${envelope.event.kind}`;
     const generation = this.currentTimelineGeneration(threadId);
+    const streamSequence = ++this.browserEventSequence;
+    const fragmentSequence = this.nextFragmentSequence(envelope, threadId, generation);
+    const eventId =
+      envelope.event.eventId ??
+      `${this.browserBootId}:${threadId}:${revision}:${streamSequence}:${envelope.event.kind}`;
     const event = {
       ...envelope.event,
       eventId,
-      sequence,
+      bootId: this.browserBootId,
+      streamSequence,
+      sequence: streamSequence,
+      ...(typeof fragmentSequence === "number" ? { fragmentSequence } : {}),
       revision,
       generation
     };
@@ -2909,10 +3301,49 @@ export class AppServerGateway {
     return nextRevision;
   }
 
+  private nextFragmentSequence(
+    envelope: BrowserCodexEventEnvelope,
+    threadId: string,
+    generation: number
+  ): number | undefined {
+    const event = envelope.event as unknown as Record<string, unknown>;
+    const { turnId, itemId, kind } = event;
+    if (
+      typeof turnId !== "string" ||
+      !turnId ||
+      typeof itemId !== "string" ||
+      !itemId ||
+      typeof event.delta !== "string" ||
+      typeof kind !== "string"
+    ) {
+      return undefined;
+    }
+    const key = `${threadId}\u0000${generation}\u0000${turnId}\u0000${itemId}\u0000${kind}`;
+    const next = (this.fragmentSequences.get(key) ?? 0) + 1;
+    this.fragmentSequences.set(key, next);
+    return next;
+  }
+
   private recordBrowserEvent(event: BrowserTimelineEvent): void {
     this.browserEventBacklog.push(event);
     while (this.browserEventBacklog.length > MAX_BROWSER_EVENT_BACKLOG) {
       this.browserEventBacklog.shift();
+    }
+    if (event.type === "codex-event") {
+      const bootId = event.event.bootId;
+      const streamSequence = event.event.streamSequence ?? event.event.sequence;
+      if (typeof bootId === "string" && typeof streamSequence === "number") {
+        const threadId = browserCodexEventThreadKey(event);
+        this.browserEventOwnerLedger.push({
+          bootId,
+          streamSequence,
+          threadId: threadId === "_global" ? null : threadId,
+          visible: this.isVisibleCodexEvent(event)
+        });
+        while (this.browserEventOwnerLedger.length > MAX_BROWSER_EVENT_OWNER_LEDGER) {
+          this.browserEventOwnerLedger.shift();
+        }
+      }
     }
   }
 
@@ -2920,18 +3351,74 @@ export class AppServerGateway {
     return this.threadTimelineGenerations.get(threadId) ?? 0;
   }
 
-  private bumpTimelineGeneration(threadId: string): number {
-    const next = this.currentTimelineGeneration(threadId) + 1;
+  private bumpTimelineGeneration(
+    threadId: string,
+    transition?: { previous: MobileTimelineItem[]; next: MobileTimelineItem[] }
+  ): number {
+    const previousStamp = {
+      bootId: this.browserBootId,
+      generation: this.currentTimelineGeneration(threadId)
+    };
+    const next = previousStamp.generation + 1;
     this.threadTimelineGenerations.set(threadId, next);
+    const normalizedTransition = transition
+      ? chronologicalTimelineTransition(transition.previous, transition.next)
+      : null;
+    const stablePrefix = normalizedTransition
+      ? stableTimelinePrefix(normalizedTransition.previous, normalizedTransition.next)
+      : [];
+    if (normalizedTransition && stablePrefix.length) {
+      this.timelineGenerationTransitions.set(threadId, {
+        generation: next,
+        previousStamp,
+        stablePrefix,
+        nextTimeline: normalizedTransition.next
+      });
+    } else {
+      this.timelineGenerationTransitions.delete(threadId);
+    }
     this.threadEventRevisions.set(threadId, 0);
+    this.clearFragmentSequences(threadId);
+    this.clearOutputDecoders(threadId);
     this.pruneBrowserEventBacklogForThread(threadId);
+    this.broadcastTimelineGenerationBarrier(threadId);
     return next;
   }
 
   private resetTimelineGeneration(threadId: string): void {
     this.threadTimelineGenerations.set(threadId, 0);
     this.threadEventRevisions.set(threadId, 0);
+    this.timelineGenerationTransitions.delete(threadId);
+    this.clearFragmentSequences(threadId);
+    this.clearOutputDecoders(threadId);
     this.pruneBrowserEventBacklogForThread(threadId);
+    this.broadcastTimelineGenerationBarrier(threadId);
+  }
+
+  private broadcastTimelineGenerationBarrier(threadId: string): void {
+    const barrier = this.enrichCodexEvent({
+      type: "codex-event",
+      event: { kind: "timeline_generation_changed", threadId }
+    });
+    for (const handler of this.browserEventHandlers) {
+      handler(barrier);
+    }
+  }
+
+  private clearFragmentSequences(threadId: string): void {
+    const prefix = `${threadId}\u0000`;
+    for (const key of this.fragmentSequences.keys()) {
+      if (key.startsWith(prefix)) {
+        this.fragmentSequences.delete(key);
+      }
+    }
+  }
+
+  private clearOutputDecoders(threadId?: string): void {
+    const prefix = threadId ? `${threadId}\u0000` : null;
+    for (const key of this.outputDecoders.keys()) {
+      if (!prefix || key.startsWith(prefix)) this.outputDecoders.delete(key);
+    }
   }
 
   private isBlockedBacklogEvent(event: BrowserTimelineEvent): boolean {
@@ -3016,7 +3503,11 @@ export class AppServerGateway {
     this.terminalTurnIdsByThread.set(threadId, turnIds);
   }
 
-  private markDeletedTurns(threadId: string, turnIds: string[]): void {
+  private markDeletedTurns(
+    threadId: string,
+    turnIds: string[],
+    transition?: { previous: MobileTimelineItem[]; next: MobileTimelineItem[] }
+  ): void {
     if (!turnIds.length) {
       return;
     }
@@ -3025,7 +3516,7 @@ export class AppServerGateway {
       deleted.add(turnId);
     }
     this.deletedTurnIdsByThread.set(threadId, deleted);
-    this.bumpTimelineGeneration(threadId);
+    this.bumpTimelineGeneration(threadId, transition);
   }
 
   private recordTimelineOverlay(envelope: BrowserCodexEventEnvelope): void {
@@ -3070,10 +3561,14 @@ export class AppServerGateway {
         );
         break;
       case "agent_message_delta":
-        this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
-          role: "agent",
-          text: ""
-        });
+        this.appendTimelineOverlayText(
+          event.threadId,
+          event.turnId,
+          event.itemId,
+          event.delta,
+          { role: "agent", text: "" },
+          { provisionalAgent: true }
+        );
         break;
       case "command_output_delta":
         this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
@@ -3132,7 +3627,9 @@ export class AppServerGateway {
           id: `${event.turnId}-context-compacted`,
           role: "system",
           text: CONTEXT_COMPACTION_DONE_TEXT,
-          toolKind: "system"
+          toolKind: "system",
+          systemKind: "context-compaction",
+          status: "success"
         });
         break;
       case "warning":
@@ -3159,13 +3656,61 @@ export class AppServerGateway {
     }
   }
 
-  private upsertTimelineOverlayItem(threadId: string, turnId: string | null, item: MobileTimelineItem): void {
+  private upsertTimelineOverlayItem(
+    threadId: string,
+    turnId: string | null,
+    item: MobileTimelineItem,
+    options: { provisionalAgent?: boolean } = {}
+  ): void {
     const overlay = this.getTimelineOverlay(threadId);
     const current = overlay.get(item.id);
     const itemWithMeta = overlayItemWithTurnMeta(item, turnId);
+    const generation = this.currentTimelineGeneration(threadId);
+    const incomingProvisional = options.provisionalAgent ?? isRawResponseAgentItem(itemWithMeta);
+    const candidate = agentAliasCandidate(itemWithMeta, turnId, generation, incomingProvisional);
+    if (candidate) {
+      const existingCandidates = [...overlay.values()]
+        .map((entry) => agentAliasCandidate(
+          entry.item,
+          entry.turnId,
+          entry.generation,
+          entry.provisionalAgent
+        ))
+        .filter((entry): entry is AgentMessageAliasCandidate => Boolean(entry));
+      const alias = reciprocalAgentMessageAlias(candidate, existingCandidates);
+      if (alias) {
+        const canonicalIsIncoming = alias.canonicalId === candidate.id;
+        const canonicalEntry = canonicalIsIncoming ? null : overlay.get(alias.canonicalId);
+        const provisionalEntry = canonicalIsIncoming ? overlay.get(alias.provisionalId) : null;
+        if (canonicalIsIncoming && provisionalEntry) {
+          overlay.delete(alias.provisionalId);
+          overlay.set(alias.canonicalId, {
+            item: mergeAgentAliasItems(provisionalEntry.item, itemWithMeta),
+            turnId,
+            generation,
+            provisionalAgent: false,
+            updatedAtMs: Date.now()
+          });
+        } else if (canonicalEntry) {
+          overlay.set(alias.canonicalId, {
+            ...canonicalEntry,
+            updatedAtMs: Date.now()
+          });
+        }
+        this.trimTimelineOverlay(overlay);
+        return;
+      }
+    }
+
     overlay.set(item.id, {
       item: current ? mergeOverlayItems(current.item, itemWithMeta) : itemWithMeta,
       turnId,
+      generation,
+      provisionalAgent: item.role === "agent"
+        ? current
+          ? Boolean(current.provisionalAgent && incomingProvisional)
+          : incomingProvisional
+        : false,
       updatedAtMs: Date.now()
     });
     this.trimTimelineOverlay(overlay);
@@ -3176,7 +3721,8 @@ export class AppServerGateway {
     turnId: string | null,
     itemId: string,
     delta: string,
-    defaults: Omit<MobileTimelineItem, "id">
+    defaults: Omit<MobileTimelineItem, "id">,
+    options: { provisionalAgent?: boolean } = {}
   ): void {
     if (!delta) {
       return;
@@ -3195,6 +3741,10 @@ export class AppServerGateway {
     overlay.set(itemId, {
       item: nextItem,
       turnId,
+      generation: this.currentTimelineGeneration(threadId),
+      provisionalAgent: defaults.role === "agent"
+        ? Boolean(current?.provisionalAgent || options.provisionalAgent)
+        : false,
       updatedAtMs: Date.now()
     });
     this.trimTimelineOverlay(overlay);
@@ -3308,6 +3858,52 @@ export class AppServerGateway {
     }
   }
 
+  private decodeOutputNotification(message: AppServerNotificationMessage): AppServerNotificationMessage | null {
+    const params = message.params as Record<string, unknown> | null | undefined;
+    if (!params) return message;
+    if (message.method === "process/exited") {
+      if (typeof params.threadId === "string" && typeof params.processHandle === "string") {
+        const prefix = `${params.threadId}\u0000${params.processHandle}\u0000`;
+        for (const key of this.outputDecoders.keys()) {
+          if (key.startsWith(prefix)) this.outputDecoders.delete(key);
+        }
+      }
+      return message;
+    }
+    if (
+      message.method !== "process/outputDelta" &&
+      message.method !== "command/exec/outputDelta"
+    ) {
+      return message;
+    }
+    const itemId = message.method === "process/outputDelta" ? params.processHandle : params.processId;
+    if (
+      typeof params.threadId !== "string" ||
+      typeof itemId !== "string" ||
+      typeof params.deltaBase64 !== "string"
+    ) {
+      return message;
+    }
+    const stream = typeof params.stream === "string" ? params.stream : "stdout";
+    const key = `${params.threadId}\u0000${itemId}\u0000${stream}`;
+    const decoder = this.outputDecoders.get(key) ?? new TextDecoder();
+    const capReached = params.capReached === true;
+    const delta = decoder.decode(Buffer.from(params.deltaBase64, "base64"), { stream: !capReached });
+    if (capReached) {
+      this.outputDecoders.delete(key);
+    } else {
+      this.outputDecoders.set(key, decoder);
+    }
+    if (!delta) return null;
+    return {
+      ...message,
+      params: {
+        ...params,
+        deltaBase64: Buffer.from(delta, "utf8").toString("base64")
+      }
+    };
+  }
+
   private recordCommandExecNotification(message: AppServerNotificationMessage): void {
     const params = message.params as Record<string, unknown> | null | undefined;
     if (!params || typeof params.processId !== "string") {
@@ -3383,7 +3979,9 @@ export class AppServerGateway {
 
   async readThreadMetadata(threadId: string): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    const detail = await this.reconcileThreadExecutionStatus(await this.client.readThreadMetadata(threadId));
+    const detail = await this.applySessionTimelineSupplement(
+      await this.reconcileThreadExecutionStatus(await this.client.readThreadMetadata(threadId))
+    );
     return this.withTimelineGeneration(detail);
   }
 
@@ -3496,15 +4094,20 @@ export class AppServerGateway {
       if (!sourceRolloutPath) {
         return null;
       }
-      const rolloutPath = this.timelinePathPolicy.assertPathAllowed(sourceRolloutPath);
+      const rolloutPath = await this.timelinePathPolicy.assertPathAllowed(sourceRolloutPath);
       const metadata = await stat(rolloutPath);
-      if (!metadata.isFile() || metadata.size > SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT) {
+      if (!metadata.isFile()) {
         return null;
       }
-      const { lines, budgetExhausted } = await readBoundedJsonlLines(rolloutPath, {
+      const turnIds = [...allowedTurnIds];
+      const { lines, budgetExhausted } = await readBoundedMatchingSessionLines(rolloutPath, metadata.size, {
+        maxSourceBytes: SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT,
+        maxMatchedBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
         maxLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
-        maxBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
-        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS
+        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS,
+        matches: (line) =>
+          (line.includes("response_item") && turnIds.some((turnId) => line.includes(turnId))) ||
+          (Boolean(options.includeContextUsage) && line.includes("token_count"))
       });
       if (budgetExhausted && !lines.length) {
         return null;
@@ -3512,7 +4115,7 @@ export class AppServerGateway {
       const supplement = scanSessionTimelineSupplement(lines, {
         allowedTurnIds,
         maxScanLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
-        maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
+        maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
         maxSupplementRecords: SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT,
         maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS,
         contentRefFactory: (locator) =>
@@ -3532,9 +4135,6 @@ export class AppServerGateway {
 
   private async applySessionTimelineSupplement(detail: MobileThreadDetail): Promise<MobileThreadDetail> {
     const allowedTurnIds = timelineTurnIdSet(detail.timeline);
-    if (!allowedTurnIds.size) {
-      return detail;
-    }
     const supplement = await this.readSessionTimelineSupplement(detail.id, allowedTurnIds, {
       includeContextUsage: true
     });
@@ -3544,7 +4144,9 @@ export class AppServerGateway {
     return {
       ...detail,
       ...(supplement.contextUsage ? { contextUsage: supplement.contextUsage } : {}),
-      timeline: mergeSessionTimelineRecords(detail.timeline, supplement.records)
+      timeline: allowedTurnIds.size
+        ? mergeSessionTimelineRecords(detail.timeline, supplement.records)
+        : detail.timeline
     };
   }
 
@@ -3567,26 +4169,49 @@ export class AppServerGateway {
   }
 
   private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
-    const overlay = this.timelineOverlays.get(detail.id);
+    return {
+      ...detail,
+      timeline: this.applyTimelineOverlayItems(
+        detail.timeline,
+        this.timelineOverlays.get(detail.id),
+        this.currentTimelineGeneration(detail.id)
+      )
+    };
+  }
+
+  private applyTimelineOverlayItems(
+    items: MobileTimelineItem[],
+    overlay: ReadonlyMap<string, TimelineOverlayEntry> | undefined,
+    generation: number
+  ): MobileTimelineItem[] {
     if (!overlay?.size) {
-      return detail;
+      return items;
     }
 
     const overlayById = new Map(overlay);
-    const usedOverlayIds = new Set<string>();
-    let timeline = detail.timeline.map((item) => {
+    const materializedOverlayIds = materializedTimelineOverlayIds(items, overlayById, generation);
+    const usedOverlayIds = new Set(materializedOverlayIds);
+    const aliasById = agentAliasesById(items, overlayById, materializedOverlayIds, generation);
+    let timeline = items.map((item) => {
       const directOverlayEntry = overlayById.get(item.id);
-      const equivalentOverlayEntry = directOverlayEntry
-        ? null
-        : [...overlayById.entries()].find(
-            ([overlayId, entry]) => !usedOverlayIds.has(overlayId) && equivalentTimelineOutput(item, entry.item)
-          ) ?? null;
-      const overlayEntry = directOverlayEntry ?? equivalentOverlayEntry?.[1] ?? null;
+      const overlayEntry = directOverlayEntry ?? null;
       if (!overlayEntry) {
-        return item;
+        const alias = aliasById.get(item.id);
+        if (!alias) {
+          return item;
+        }
+        const counterpartId = item.id === alias.canonicalId ? alias.provisionalId : alias.canonicalId;
+        const counterpart = overlayById.get(counterpartId);
+        if (!counterpart) {
+          return item;
+        }
+        usedOverlayIds.add(counterpartId);
+        return item.id === alias.canonicalId
+          ? item
+          : mergeTimelineTurnMeta(item, mergeAgentAliasItems(item, counterpart.item));
       }
 
-      usedOverlayIds.add(directOverlayEntry ? item.id : equivalentOverlayEntry![0]);
+      usedOverlayIds.add(item.id);
       return shouldUseOverlayTimelineItem(item, overlayEntry.item)
         ? mergeTimelineTurnMeta(item, overlayEntry.item)
         : item;
@@ -3598,24 +4223,36 @@ export class AppServerGateway {
       }
     }
 
-    return { ...detail, timeline };
+    return timeline;
   }
 
   private withTimelineGeneration(detail: MobileThreadDetail): MobileThreadDetail {
     const generation = this.currentTimelineGeneration(detail.id);
     const snapshotSequence = this.browserEventSequence;
+    const historyStamp = { bootId: this.browserBootId, generation };
     return {
       ...detail,
+      bootId: this.browserBootId,
       generation,
+      historyStamp,
       snapshotSequence,
-      timeline: detail.timeline.map((item) => ({ ...item, generation, snapshotSequence }))
+      timeline: detail.timeline.map((item) => ({
+        ...item,
+        bootId: this.browserBootId,
+        generation,
+        historyStamp,
+        snapshotSequence,
+        baselineWatermark: snapshotSequence
+      }))
     };
   }
 
   private withTimelineSummaryVersion(threadId: string, summary: MobileThreadSummary): MobileThreadSummary {
     return {
       ...summary,
+      bootId: this.browserBootId,
       generation: this.currentTimelineGeneration(threadId),
+      historyStamp: { bootId: this.browserBootId, generation: this.currentTimelineGeneration(threadId) },
       snapshotSequence: this.browserEventSequence
     };
   }
@@ -3673,10 +4310,11 @@ export class AppServerGateway {
     const deletedTurnIds = expectedDeletedTurnIds.length
       ? uniqueStrings([...snapshotDeletedTurnIds, ...validExpectedDeletedTurnIds])
       : snapshotDeletedTurnIds.slice(-numTurns);
-    this.markDeletedTurns(threadId, deletedTurnIds);
+    const transition = before ? { previous: before.timeline, next: detail.timeline } : undefined;
+    this.markDeletedTurns(threadId, deletedTurnIds, transition);
     this.clearTimelineOverlayTurns(threadId, deletedTurnIds);
     if (!deletedTurnIds.length && numTurns > 0) {
-      this.bumpTimelineGeneration(threadId);
+      this.bumpTimelineGeneration(threadId, transition);
     }
     return this.timelineThreadWithinBudget(
       this.withTimelineGeneration(this.applyTimelineOverlay(detail))
@@ -4168,9 +4806,20 @@ export class AppServerGateway {
 
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
     await this.ensureReady();
+    const upstreamPage = await this.applySessionTimelinePageSupplement(
+      input.threadId,
+      await this.client.listThreadTurns(input)
+    );
+    const generation = this.currentTimelineGeneration(input.threadId);
+    const pageWatermark = this.browserEventSequence;
+    const overlaySnapshot = cloneTimelineOverlay(this.timelineOverlays.get(input.threadId));
+    const page = {
+      ...upstreamPage,
+      items: this.applyTimelineOverlayItems(upstreamPage.items, overlaySnapshot, generation)
+    };
     return this.timelinePageWithinBudget(
       input.threadId,
-      await this.applySessionTimelinePageSupplement(input.threadId, await this.client.listThreadTurns(input))
+      this.withTimelinePageVersion(input.threadId, page, { generation, pageWatermark })
     );
   }
 
@@ -4179,8 +4828,68 @@ export class AppServerGateway {
     const page = await this.client.listThreadTurnItems(input);
     return this.timelinePageWithinBudget(
       input.threadId,
-      await this.applySessionTimelinePageSupplement(input.threadId, page)
+      this.withTimelinePageVersion(
+        input.threadId,
+        await this.applySessionTimelinePageSupplement(input.threadId, page)
+      )
     );
+  }
+
+  private withTimelinePageVersion(
+    threadId: string,
+    page: MobileTimelinePage,
+    version?: { generation: number; pageWatermark: number }
+  ): MobileTimelinePage {
+    const generation = version?.generation ?? this.currentTimelineGeneration(threadId);
+    const pageWatermark = version?.pageWatermark ?? this.browserEventSequence;
+    const historyStamp = { bootId: this.browserBootId, generation };
+    const windowStartAnchor = page.items[0]
+      ? timelineWindowAnchor(historyStamp, page.items[0])
+      : undefined;
+    const windowEndAnchor = page.items.at(-1)
+      ? timelineWindowAnchor(historyStamp, page.items.at(-1)!)
+      : undefined;
+    const preservedThrough = this.preservedTimelineAnchor(threadId, generation, page.items[0]);
+    return {
+      ...page,
+      bootId: this.browserBootId,
+      generation,
+      historyStamp,
+      pageWatermark,
+      ...(windowStartAnchor ? { windowStartAnchor } : {}),
+      ...(windowEndAnchor ? { windowEndAnchor } : {}),
+      ...(preservedThrough ? { preservedThrough } : {}),
+      items: page.items.map((item) => ({
+        ...item,
+        bootId: this.browserBootId,
+        generation,
+        historyStamp,
+        snapshotSequence: pageWatermark,
+        baselineWatermark: pageWatermark
+      }))
+    };
+  }
+
+  private preservedTimelineAnchor(
+    threadId: string,
+    generation: number,
+    firstPageItem: MobileTimelineItem | undefined
+  ): string | undefined {
+    const transition = this.timelineGenerationTransitions.get(threadId);
+    if (!transition || transition.generation !== generation || !firstPageItem) {
+      return undefined;
+    }
+    const matchingIndexes = transition.nextTimeline.flatMap((item, index) =>
+      timelineItemIdentityMatches(item, firstPageItem) ? [index] : []
+    );
+    if (matchingIndexes.length !== 1) {
+      return undefined;
+    }
+    const boundaryIndex = Math.min(matchingIndexes[0]!, transition.stablePrefix.length) - 1;
+    const boundaryItem = transition.stablePrefix[boundaryIndex];
+    return boundaryItem
+      ? timelineWindowAnchor(transition.previousStamp, boundaryItem)
+      : undefined;
   }
 
   private timelinePageWithinBudget(threadId: string, page: MobileTimelinePage): MobileTimelinePage {
@@ -4376,7 +5085,7 @@ export class AppServerGateway {
     if (source.kind === "session") {
       let rolloutPath: string;
       try {
-        rolloutPath = this.timelinePathPolicy.assertPathAllowed(source.rolloutPath);
+        rolloutPath = await this.timelinePathPolicy.assertPathAllowed(source.rolloutPath);
       } catch {
         return { reason: "source-gap" };
       }
@@ -4385,10 +5094,12 @@ export class AppServerGateway {
       if (!metadata?.isFile() || sourceRevision !== source.sourceRevision) {
         return { reason: "source-revision" };
       }
-      const { lines, budgetExhausted } = await readBoundedJsonlLines(rolloutPath, {
+      const { lines, budgetExhausted } = await readBoundedMatchingSessionLines(rolloutPath, metadata.size, {
+        maxSourceBytes: SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT,
+        maxMatchedBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
         maxLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
-        maxBytes: SESSION_TIMELINE_SUPPLEMENT_TEXT_LIMIT,
-        maxElapsedMs: Math.max(SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS, 250)
+        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS,
+        matches: (line) => line.includes(source.callId)
       });
       if (budgetExhausted && !lines.length) {
         return { reason: "source-gap" };
@@ -4612,6 +5323,7 @@ export class AppServerGateway {
     this.timelineContentSources.clear();
     this.timelineContentCursors.clear();
     this.timelineContentCursorByPosition.clear();
+    this.clearOutputDecoders();
   }
 }
 

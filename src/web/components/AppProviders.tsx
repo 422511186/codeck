@@ -1,21 +1,24 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect } from "react";
 import { setSessionInvalidHandler } from "../api/client";
 import { auth } from "../api/endpoints";
 import { connectBrowserEventStream } from "../events/client";
 import { useStore } from "../state/store";
 import { applyTheme, settingsStore } from "../storage/settings";
+import { ReconnectStatus } from "./ReconnectStatus";
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const setWsState = useStore((s) => s.setWsState);
+  const setReconnectAttempt = useStore((s) => s.setReconnectAttempt);
   const setAppServer = useStore((s) => s.setAppServer);
   const dispatchEvent = useStore((s) => s.dispatchEvent);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const wsState = useStore((s) => s.wsState);
+  const reconnectAttempt = useStore((s) => s.reconnectAttempt);
 
   useEffect(() => {
     setSessionInvalidHandler(() => {
@@ -32,7 +35,10 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     if (pathname?.startsWith("/login")) return;
 
     const conn = connectBrowserEventStream({
-      onState: setWsState,
+      onState: (state, attempt) => {
+        setWsState(state);
+        setReconnectAttempt(attempt);
+      },
       onMessage: (event) => {
         switch (event.type) {
           case "health":
@@ -58,7 +64,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     });
 
     return () => conn.close();
-  }, [dispatchEvent, pathname, resolvePendingRequest, setAppServer, setWsState]);
+  }, [dispatchEvent, pathname, resolvePendingRequest, setAppServer, setReconnectAttempt, setWsState]);
 
   useEffect(() => {
     if (pathname?.startsWith("/login")) return;
@@ -79,43 +85,15 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
     };
   }, [pathname, router, wsState]);
 
-  const showOffline = useMemo(
-    () => wsState !== "open" && wsState !== "idle" && !pathname?.startsWith("/login"),
-    [pathname, wsState]
-  );
+  const showReconnect =
+    (wsState === "reconnecting" || wsState === "closed") &&
+    !pathname?.startsWith("/login") &&
+    !pathname?.startsWith("/threads/");
 
   return (
     <>
-      {showOffline ? <OfflineBanner /> : null}
+      {showReconnect ? <ReconnectStatus attempt={reconnectAttempt} floating /> : null}
       {children}
     </>
-  );
-}
-
-function OfflineBanner() {
-  const [dots, setDots] = useState("");
-  useEffect(() => {
-    const id = setInterval(() => setDots((d) => (d.length >= 3 ? "" : d + ".")), 500);
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 50,
-        background: "var(--warning-bg)",
-        color: "var(--warning)",
-        padding: "6px 12px",
-        fontSize: "13px",
-        textAlign: "center"
-      }}
-    >
-      网络已断开，重连中{dots}
-    </div>
   );
 }

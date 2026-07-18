@@ -66,7 +66,12 @@ describe("codex events route", () => {
   });
 
   it("补发不可用时发送 timeline-gap 信号", async () => {
-    mockListBrowserEventBacklog.mockReturnValue({ events: [], gap: true });
+    mockListBrowserEventBacklog.mockReturnValue({
+      events: [],
+      gap: true,
+      bootId: "boot-a",
+      gapScope: { scope: "threads", affectedThreadIds: ["thread-1"] }
+    });
 
     const { GET } = await import("../../src/app/api/codex/events/route");
     const abort = new AbortController();
@@ -80,6 +85,43 @@ describe("codex events route", () => {
     expect(body).toContain('"type":"timeline-gap"');
     expect(body).toContain('"lastEventId":"thread-1:9:9:agent_message_delta"');
     expect(body).toContain('"threadId":"thread-1"');
+  });
+
+  it("timeline gap 保留完整 affectedThreadIds", async () => {
+    mockListBrowserEventBacklog.mockReturnValue({
+      events: [],
+      gap: true,
+      bootId: "boot-a",
+      gapScope: { scope: "threads", affectedThreadIds: ["thread-a", "thread-b"] }
+    });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(new Request("http://localhost/api/codex/events?lastEventId=old", { signal: abort.signal }));
+    abort.abort();
+    const body = await response.text();
+
+    expect(body).toContain('"scope":"threads"');
+    expect(body).toContain('"affectedThreadIds":["thread-a","thread-b"]');
+    expect(body).not.toContain('"threadId":"old"');
+  });
+
+  it("owner ledger 不可恢复时发送 all-tracked barrier", async () => {
+    mockListBrowserEventBacklog.mockReturnValue({
+      events: [],
+      gap: true,
+      bootId: "boot-new",
+      gapScope: { scope: "all-tracked" }
+    });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(new Request("http://localhost/api/codex/events?lastEventId=boot-old:event", { signal: abort.signal }));
+    abort.abort();
+    const body = await response.text();
+
+    expect(body).toContain('"scope":"all-tracked"');
+    expect(body).toContain('"bootId":"boot-new"');
   });
 
   it("定期发送 SSE heartbeat，避免代理空闲断开事件流", async () => {

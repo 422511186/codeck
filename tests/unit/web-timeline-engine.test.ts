@@ -7,6 +7,7 @@ import {
   selectRollbackMetadataForEntry,
   selectTimelineEntries,
   selectTurnHasVisibleOutput,
+  timelineEventLedgerKey,
   type TimelineInput
 } from "../../src/web/state/timeline-engine";
 import type { TimelineEntry } from "../../src/web/state/timeline";
@@ -57,6 +58,30 @@ function systemEntry(id: string, turnId: string, text: string, createdAt: number
 }
 
 describe("timeline engine", () => {
+  it("历史页重叠项只去重且不改写当前可见正文", () => {
+    let state = createTimelineEngineState({
+      entries: [agentEntry("agent-current", "turn-1", "当前稳定正文", 20)],
+      cursor: "older"
+    });
+
+    state = applyTimelineInput(state, {
+      kind: "pagination-page",
+      entries: [
+        userEntry("older-user", "turn-0", "更早消息", 10),
+        agentEntry("agent-current", "turn-1", "历史页返回的更长正文，不应改写当前内容", 20)
+      ],
+      cursor: "oldest"
+    });
+
+    expect(selectTimelineEntries(state)).toEqual([
+      expect.objectContaining({ id: "older-user" }),
+      expect.objectContaining({
+        id: "agent-current",
+        body: { kind: "agent-message", text: "当前稳定正文" }
+      })
+    ]);
+  });
+
   it("accepts every timeline input source through one reducer", () => {
     const inputs: TimelineInput[] = [
       { kind: "snapshot-window", entries: [userEntry("snapshot-user", "turn-1", "hi", 1)], cursor: "older" },
@@ -176,7 +201,8 @@ describe("timeline engine", () => {
       entry: agentEntry("agent-1", "turn-1", "hello", 1),
       eventId: "delta-10",
       revision: 1,
-      sequence: 10,
+      sequence: 100,
+      fragmentSequence: 10,
       deliveryEpoch: 0
     });
     state = applyTimelineInput(state, {
@@ -184,7 +210,8 @@ describe("timeline engine", () => {
       entry: agentEntry("agent-1", "turn-1", " world", 2),
       eventId: "delta-11",
       revision: 2,
-      sequence: 11,
+      sequence: 102,
+      fragmentSequence: 11,
       deliveryEpoch: 0
     });
     state = applyTimelineInput(state, {
@@ -192,7 +219,8 @@ describe("timeline engine", () => {
       entry: agentEntry("agent-1", "turn-1", " lost", 3),
       eventId: "delta-13",
       revision: 3,
-      sequence: 13,
+      sequence: 105,
+      fragmentSequence: 13,
       deliveryEpoch: 0
     });
 
@@ -201,6 +229,40 @@ describe("timeline engine", () => {
     ]);
     expect(state.diagnostics.sequenceGaps).toBe(1);
     expect(state.diagnostics.repairRequests).toBe(1);
+  });
+
+  it("does not treat interleaved global stream sequence values as an item fragment gap", () => {
+    let state = createTimelineEngineState();
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-a", "turn-1", "A1", 1),
+      eventId: "stream-1",
+      revision: 1,
+      sequence: 1,
+      deliveryEpoch: 0
+    });
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-b", "turn-1", "B1", 2),
+      eventId: "stream-2",
+      revision: 2,
+      sequence: 2,
+      deliveryEpoch: 0
+    });
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-a", "turn-1", "A2", 3),
+      eventId: "stream-3",
+      revision: 3,
+      sequence: 3,
+      deliveryEpoch: 0
+    });
+
+    expect(selectTimelineEntries(state)).toEqual([
+      expect.objectContaining({ id: "agent-a", body: { kind: "agent-message", text: "A1A2" } }),
+      expect.objectContaining({ id: "agent-b", body: { kind: "agent-message", text: "B1" } })
+    ]);
+    expect(state.diagnostics.sequenceGaps).toBe(0);
   });
 
   it("builds indexes for entry id turn id and stable identity after reduction", () => {
@@ -220,7 +282,7 @@ describe("timeline engine", () => {
 
     expect(state.indexes.byEntryId.get("agent-1")).toBe(1);
     expect(state.indexes.byTurnId.get("turn-1")).toEqual([0, 1, 2]);
-    expect(state.indexes.byIdentity.get("agent-message:0:turn-1:agent-1")).toBe(1);
+    expect(state.indexes.byIdentity.get("agent-message:legacy:0:turn-1:agent-1")).toBe(1);
   });
 
   it("derives visible output compact completion and rollback metadata from indexes", () => {
@@ -370,6 +432,112 @@ describe("timeline engine", () => {
         body: { kind: "agent-message", text: "完整 realtime 正文" }
       })
     ]);
+  });
+
+  it("does not let empty complete user or diff updates erase content references", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        {
+          ...userEntry("user-1", "turn-1", "保留用户正文", 1),
+          completeness: { status: "truncated", contentRef: "user-ref", includedBytes: 18 }
+        },
+        {
+          id: "diff-1",
+          turnId: "turn-1",
+          createdAt: 2,
+          completeness: { status: "truncated", contentRef: "diff-ref", includedBytes: 12 },
+          body: { kind: "diff", path: "src/a.ts", added: 1, removed: 0, diff: "+content" }
+        }
+      ]
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      entry: {
+        ...userEntry("user-1", "turn-1", "", 3),
+        completeness: { status: "complete" }
+      }
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      entry: {
+        id: "diff-1",
+        turnId: "turn-1",
+        createdAt: 4,
+        completeness: { status: "complete" },
+        body: { kind: "diff", path: "src/a.ts", added: 1, removed: 0, diff: "" }
+      }
+    });
+
+    expect(state.entries[0]).toMatchObject({
+      completeness: { status: "truncated", contentRef: "user-ref" },
+      body: { kind: "user-message", text: "保留用户正文" }
+    });
+    expect(state.entries[1]).toMatchObject({
+      completeness: { status: "truncated", contentRef: "diff-ref" },
+      body: { kind: "diff", diff: "+content" }
+    });
+  });
+
+  it("preserves current text and requests repair for conflicting complete candidates", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "live-event",
+      entry: {
+        ...agentEntry("agent-conflict", "turn-1", "first complete", 1),
+        completeness: { status: "complete", includedBytes: 14 }
+      }
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      entry: {
+        ...agentEntry("agent-conflict", "turn-1", "different final", 2),
+        completeness: { status: "complete", includedBytes: 15 }
+      }
+    });
+
+    expect(state.entries[0]).toMatchObject({
+      completeness: { status: "repair-required", reason: "source-gap" },
+      body: { kind: "agent-message", text: "first complete" }
+    });
+  });
+
+  it("keeps empty reasoning with a continuation when the turn finalizes", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "live-event",
+      entry: {
+        ...reasoningEntry("reasoning-ref", "turn-1", "", 1),
+        body: { kind: "reasoning", text: "", done: false },
+        completeness: {
+          status: "truncated",
+          reason: "event-budget",
+          contentRef: "reasoning-content"
+        }
+      }
+    });
+    state = applyTimelineInput(state, { kind: "finish-turn", turnId: "turn-1", status: "completed" });
+
+    expect(state.entries).toEqual([
+      expect.objectContaining({
+        id: "reasoning-ref",
+        completeness: expect.objectContaining({ contentRef: "reasoning-content" }),
+        body: { kind: "reasoning", text: "", done: true }
+      })
+    ]);
+  });
+
+  it("retains the declared number of logical event identities in the ledger", () => {
+    let state = createTimelineEngineState();
+    for (let index = 0; index < 2_050; index += 1) {
+      state = applyTimelineInput(state, {
+        kind: "live-event",
+        eventId: `event-${index}`,
+        entry: agentEntry("agent-ledger", "turn-1", `content-${index}`, index)
+      });
+    }
+
+    expect(state.processedEventIds).toHaveLength(2_000);
+    expect(state.processedEventIds.has(timelineEventLedgerKey(0, "event-0"))).toBe(false);
+    expect(state.processedEventIds.has(timelineEventLedgerKey(0, "event-2049"))).toBe(true);
   });
 
   it("does not replace a richer truncated preview with a shorter partial snapshot", () => {
@@ -535,7 +703,7 @@ describe("timeline engine", () => {
     ]);
   });
 
-  it("renders context compaction once across live snapshot overlay and rollout sources", () => {
+  it("keeps context compaction entries distinct without a shared operation identity", () => {
     let state = createTimelineEngineState();
     for (const input of [
       { kind: "live-event" as const, entry: systemEntry("live-compact", "turn-1", "压缩上下文已完成", 1) },
@@ -546,9 +714,7 @@ describe("timeline engine", () => {
       state = applyTimelineInput(state, input);
     }
 
-    expect(selectTimelineEntries(state).filter((entry) => entry.body.kind === "system")).toEqual([
-      expect.objectContaining({ body: { kind: "system", text: "压缩上下文已完成" } })
-    ]);
+    expect(selectTimelineEntries(state).filter((entry) => entry.body.kind === "system")).toHaveLength(3);
   });
 
   it("preserves same-turn source order instead of hoisting every user entry", () => {
@@ -743,6 +909,40 @@ describe("timeline engine", () => {
     ]);
   });
 
+  it("resolves anchors by HistoryStamp turn and item identity instead of bare item id", () => {
+    const stamp = { bootId: "boot-a", generation: 2 };
+    let state = createTimelineEngineState({
+      generation: 2,
+      entries: [
+        { ...agentEntry("agent-shared", "turn-old", "old", 1), generation: 1, bootId: "boot-a" },
+        { ...agentEntry("agent-before", "turn-new", "before", 2), ...stamp, historyStamp: stamp },
+        { ...agentEntry("agent-shared", "turn-new", "new", 3), ...stamp, historyStamp: stamp }
+      ]
+    });
+
+    state = applyTimelineInput(state, {
+      kind: "turn-item-detail",
+      entry: {
+        ...toolEntry("tool-anchored", "turn-new", "result", 4),
+        ...stamp,
+        historyStamp: stamp,
+        sourceOrder: {
+          sourceKind: "turn-detail",
+          ordinal: 1,
+          beforeEntryId: "agent-shared",
+          beforeTurnId: "turn-new"
+        }
+      }
+    });
+
+    expect(state.entries.map((entry) => `${entry.turnId}:${entry.id}`)).toEqual([
+      "turn-old:agent-shared",
+      "turn-new:agent-before",
+      "turn-new:tool-anchored",
+      "turn-new:agent-shared"
+    ]);
+  });
+
   it("isolates event ids revisions and reused item ids by generation", () => {
     let state = createTimelineEngineState();
     state = applyTimelineInput(state, {
@@ -774,6 +974,87 @@ describe("timeline engine", () => {
       expect.objectContaining({ id: "agent-1", turnId: "turn-new", body: { kind: "agent-message", text: "new" } })
     ]);
     expect(state.diagnostics.droppedStaleGenerationEvents).toBe(1);
+  });
+
+  it("re-keys a live provisional agent to canonical and migrates ledgers", () => {
+    let state = createTimelineEngineState();
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      eventId: "agent-live-delta-1",
+      revision: 4,
+      fragmentSequence: 7,
+      entry: agentEntry("agent-live", "turn-1", "完整答复", 10)
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      eventId: "agent-canonical-complete",
+      revision: 5,
+      entry: agentEntry("agent-canonical", "turn-1", "完整答复", 20)
+    });
+
+    expect(state.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-canonical",
+        createdAt: 10,
+        body: { kind: "agent-message", text: "完整答复" }
+      })
+    ]);
+    expect(state.agentMessageAliases.size).toBe(1);
+    expect([...state.itemRevisions.keys()].some((key) => key.includes("agent-live"))).toBe(false);
+    expect([...state.itemSequences.keys()].some((key) => key.includes("agent-live"))).toBe(false);
+    expect([...state.itemRevisions.keys()].some((key) => key.includes("agent-canonical"))).toBe(true);
+    expect([...state.itemSequences.keys()].some((key) => key.includes("agent-canonical"))).toBe(true);
+    expect(state.diagnostics.agentAliasReconciliations).toBe(1);
+  });
+
+  it("suppresses late provisional fragments already covered by canonical text", () => {
+    let state = createTimelineEngineState();
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-live", "turn-1", "完整", 10)
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      entry: agentEntry("agent-canonical", "turn-1", "完整答复", 20)
+    });
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-live", "turn-1", "答复", 30)
+    });
+
+    expect(state.entries).toEqual([
+      expect.objectContaining({ id: "agent-canonical", body: { kind: "agent-message", text: "完整答复" } })
+    ]);
+  });
+
+  it("bounds provisional agent records per turn and clears them at lifecycle barriers", () => {
+    let state = createTimelineEngineState();
+    for (let index = 0; index < 10; index += 1) {
+      state = applyTimelineInput(state, {
+        kind: "live-delta",
+        entry: agentEntry(`agent-live-${index}`, "turn-1", `片段 ${index}`, index)
+      });
+    }
+    expect(state.provisionalAgentLedger.size).toBe(8);
+
+    state = applyTimelineInput(state, { kind: "finish-turn", turnId: "turn-1", status: "completed" });
+    expect(state.provisionalAgentLedger.size).toBe(0);
+    expect(state.agentMessageAliases.size).toBe(0);
+
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-live-next", "turn-2", "下一轮", 20)
+    });
+    state = applyTimelineInput(state, { kind: "mark-turn-deleted", turnId: "turn-2" });
+    expect(state.provisionalAgentLedger.size).toBe(0);
+
+    state = applyTimelineInput(state, {
+      kind: "live-delta",
+      entry: agentEntry("agent-live-generation", "turn-3", "旧 generation", 30)
+    });
+    state = applyTimelineInput(state, { kind: "set-generation", generation: 1 });
+    expect(state.provisionalAgentLedger.size).toBe(0);
+    expect(state.agentMessageAliases.size).toBe(0);
   });
 
   it("selects ordered distinct turns for message actions", () => {

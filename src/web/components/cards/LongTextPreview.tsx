@@ -114,7 +114,8 @@ export function LongTextPreview({
   copyLabel,
   maxLines,
   maxChars,
-  cacheKey
+  cacheKey,
+  variant = "default"
 }: {
   text: string;
   emptyText?: string;
@@ -122,6 +123,7 @@ export function LongTextPreview({
   maxLines?: number;
   maxChars?: number;
   cacheKey?: string;
+  variant?: "default" | "terminal";
 }): JSX.Element {
   const preview = useMemo(
     () => createTextPreview(text, { maxLines, maxChars, cacheKey }),
@@ -133,8 +135,10 @@ export function LongTextPreview({
         style={{
           margin: 0,
           padding: "10px 0",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
+          maxWidth: "100%",
+          overflowX: variant === "terminal" ? "auto" : "hidden",
+          whiteSpace: variant === "terminal" ? "pre" : "pre-wrap",
+          wordBreak: variant === "terminal" ? "normal" : "break-word",
           fontFamily: "var(--font-mono)",
           fontSize: 12,
           color: "var(--cw-fg-muted)"

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import type { MobileTimelineItem } from "../../shared/codex";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
 import { timelineItem } from "./client";
@@ -56,11 +57,16 @@ export type BrowserCodexEvent =
       activeFlags?: unknown[];
     }
   | {
+      kind: "timeline_generation_changed";
+      threadId: string;
+    }
+  | {
       kind: "agent_message_delta";
       threadId: string;
       turnId: string;
       itemId: string;
       delta: string;
+      capReached?: boolean;
     }
   | {
       kind: "reasoning_delta";
@@ -101,6 +107,7 @@ export type BrowserCodexEvent =
       turnId: string;
       itemId: string;
       delta: string;
+      changes?: Array<{ path: string; kind: unknown; diff: string }>;
     }
   | {
       kind: "tool_output_delta";
@@ -133,6 +140,7 @@ export type BrowserCodexEvent =
       preview: string;
       contentRef?: string;
       completeness: TimelineCompleteness;
+      sourceLocator?: MobileTimelineItem["sourceLocator"];
     }
   | {
       kind: "turn_diff_updated";
@@ -252,6 +260,10 @@ export type BrowserActivePermissionProfile = {
 
 export type BrowserTimelineEventIdentity = {
   eventId: string;
+  bootId: string;
+  streamSequence: number;
+  fragmentSequence?: number;
+  /** Legacy alias for streamSequence. */
   sequence: number;
   revision: number;
   generation: number;
@@ -345,29 +357,46 @@ function processDeltaEvent(
       threadId: params.threadId,
       turnId: params.turnId,
       itemId,
-      delta: base64Delta(params.deltaBase64)
+      delta: base64Delta(params.deltaBase64),
+      ...(params.capReached === true ? { capReached: true } : {})
     }
   };
 }
 
-function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
+function rawResponseTimelineItem(
+  value: unknown,
+  locator?: { responseId: string; absoluteOutputIndex: number }
+): MobileTimelineItem | null {
   if (!isRecord(value) || typeof value.type !== "string") {
     return null;
   }
 
   const metadata = isRecord(value.metadata) ? value.metadata : null;
-  const id =
+  const explicitId =
     typeof value.id === "string"
       ? value.id
       : typeof value.call_id === "string"
         ? value.call_id
-        : `${value.type}-${metadata?.turn_id ?? "item"}`;
+        : null;
+  const sourceLocator = locator
+    ? { sourceKind: "response" as const, sourceId: locator.responseId, absoluteOutputIndex: locator.absoluteOutputIndex }
+    : undefined;
+  const id = explicitId ?? (sourceLocator
+    ? `synthetic:response:${encodeURIComponent(sourceLocator.sourceId)}:${sourceLocator.absoluteOutputIndex}`
+    : `unresolved:response:${value.type}:${randomUUID()}`);
+  const identityMeta = {
+    ...(sourceLocator ? { sourceLocator } : {}),
+    ...(!explicitId && !sourceLocator
+      ? { completeness: { status: "repair-required" as const, reason: "source-gap" as const } }
+      : {})
+  };
 
   if (value.type === "message" || value.type === "agent_message") {
     const text = rawMessageText(value);
     if (text) {
       return {
         id,
+        ...identityMeta,
         role: "agent",
         text
       };
@@ -387,6 +416,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
       : [];
     return {
       id,
+      ...identityMeta,
       role: "reasoning",
       text: [...summary, ...content].join("\n"),
       done: true
@@ -397,6 +427,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
     const command = Array.isArray(value.action.command) ? value.action.command.join(" ") : "shell";
     return {
       id,
+      ...identityMeta,
       role: "tool",
       text: command,
       toolKind: "command",
@@ -409,6 +440,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   if (value.type === "function_call" || value.type === "custom_tool_call" || value.type === "tool_search_call") {
     return {
       id,
+      ...identityMeta,
       role: "tool",
       text: typeof value.arguments === "string" ? value.arguments : stringifyForEvent(value),
       toolKind: "dynamic",
@@ -426,6 +458,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   ) {
     return {
       id,
+      ...identityMeta,
       role: "tool",
       text: stringifyForEvent(value.output ?? value),
       toolKind: "dynamic",
@@ -438,6 +471,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   if (value.type === "web_search_call") {
     return {
       id,
+      ...identityMeta,
       role: "tool",
       text: stringifyForEvent(value.action ?? value),
       toolKind: "web",
@@ -450,6 +484,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   if (value.type === "image_generation_call") {
     return {
       id,
+      ...identityMeta,
       role: "tool",
       text: typeof value.revised_prompt === "string" ? value.revised_prompt : "",
       toolKind: "image",
@@ -462,6 +497,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
   if (value.type === "compaction" || value.type === "compaction_trigger" || value.type === "context_compaction") {
     return {
       id,
+      ...identityMeta,
       role: "system",
       text: "压缩上下文已完成",
       toolKind: "system"
@@ -470,6 +506,7 @@ function rawResponseTimelineItem(value: unknown): MobileTimelineItem | null {
 
   return {
     id,
+    ...identityMeta,
     role: "tool",
     text: stringifyForEvent(value),
     toolKind: "dynamic",
@@ -857,6 +894,40 @@ export function normalizeAppServerNotification(
     return deltaEvent("file_output_delta", message.params);
   }
 
+  if (message.method === "item/fileChange/patchUpdated") {
+    const params = message.params as {
+      threadId?: unknown;
+      turnId?: unknown;
+      itemId?: unknown;
+      changes?: unknown;
+    } | null | undefined;
+    if (
+      !params ||
+      typeof params.threadId !== "string" ||
+      typeof params.turnId !== "string" ||
+      typeof params.itemId !== "string" ||
+      !Array.isArray(params.changes)
+    ) {
+      return null;
+    }
+    const changes = params.changes.flatMap((change) =>
+      isRecord(change) && typeof change.path === "string" && typeof change.diff === "string"
+        ? [{ path: change.path, kind: change.kind, diff: change.diff }]
+        : []
+    );
+    return {
+      type: "codex-event",
+      event: {
+        kind: "file_output_delta",
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        delta: changes.map((change) => change.diff).filter(Boolean).join("\n"),
+        changes
+      }
+    };
+  }
+
   if (message.method === "item/mcpToolCall/progress") {
     const params = message.params as { threadId?: unknown; turnId?: unknown; itemId?: unknown; message?: unknown } | null | undefined;
     if (
@@ -905,6 +976,15 @@ export function normalizeAppServerNotification(
       };
     }
 
+    const lifecycleItem =
+      item.systemKind === "context-compaction"
+        ? {
+            ...item,
+            text: message.method === "item/started" ? "正在自动压缩上下文" : "压缩上下文已完成",
+            status: message.method === "item/started" ? "running" as const : "success" as const
+          }
+        : item;
+
     return {
       type: "codex-event",
       event: {
@@ -917,17 +997,31 @@ export function normalizeAppServerNotification(
             : typeof params.startedAtMs === "number"
               ? params.startedAtMs
               : Date.now(),
-        item
+        item: lifecycleItem
       }
     };
   }
 
   if (message.method === "rawResponseItem/completed") {
-    const params = message.params as { threadId?: unknown; turnId?: unknown; item?: unknown } | null | undefined;
+    const params = message.params as {
+      threadId?: unknown;
+      turnId?: unknown;
+      item?: unknown;
+      responseId?: unknown;
+      absoluteOutputIndex?: unknown;
+    } | null | undefined;
     if (!params || typeof params.threadId !== "string" || typeof params.turnId !== "string") {
       return null;
     }
-    const item = rawResponseTimelineItem(params.item);
+    const item = rawResponseTimelineItem(
+      params.item,
+      typeof params.responseId === "string" &&
+      typeof params.absoluteOutputIndex === "number" &&
+      Number.isSafeInteger(params.absoluteOutputIndex) &&
+      params.absoluteOutputIndex >= 0
+        ? { responseId: params.responseId, absoluteOutputIndex: params.absoluteOutputIndex }
+        : undefined
+    );
     if (!item) return null;
 
     return {

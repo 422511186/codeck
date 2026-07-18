@@ -4,7 +4,7 @@
 TBD - created by archiving change fix-timeline-history-virtualization-and-completeness. Update Purpose after archive.
 ## Requirements
 ### Requirement: Timeline responses expose explicit completeness
-thread snapshot、turn pagination、turn item detail、session supplement 和 full-content response SHALL 返回结构化 completeness 状态。系统 MUST 区分 complete、partial、truncated 和 repair-required，MUST NOT 以空 cursor、空数组或文本省略号隐式表示不完整。
+thread snapshot、turn pagination、turn item detail、session supplement 和 full-content response SHALL 返回结构化 completeness 状态。系统 MUST 区分 complete、partial、truncated 和 repair-required，MUST NOT 以空 cursor、空数组或文本省略号隐式表示不完整。客户端应用响应时 MUST 同步更新 completeness 与 cursor；权威响应返回 `nextCursor: null` 时 MUST 清除旧 cursor，并使 `reachedBeginning` 与已声明的窗口边界保持一致。
 
 #### Scenario: Complete page
 - **WHEN** source page 已读取到末尾且所有 item 正文均在预算内
@@ -20,6 +20,12 @@ thread snapshot、turn pagination、turn item detail、session supplement 和 fu
 - **WHEN** cursor 无法恢复、source item 不存在或补充文件出现缺口
 - **THEN** completeness MUST 为 `repair-required`
 - **AND** MUST 包含可诊断 reason
+
+#### Scenario: Final page clears an older cursor
+- **WHEN** 客户端当前保存非空历史 cursor
+- **AND** 同一 history generation 的权威最终页返回 `nextCursor: null`
+- **THEN** 客户端 MUST 清除旧 cursor
+- **AND** MUST NOT 保留 `{cursor: <old>, reachedBeginning: true}` 的矛盾状态
 
 ### Requirement: Timeline payload budgets use UTF-8 bytes
 系统 SHALL 对单 item、page、thread response、realtime event 和 full-content chunk 设置显式 UTF-8 bytes budget。默认预算 MUST 分别为 96 KiB、1 MiB、2 MiB、256 KiB 和 2 MiB，配置覆盖 MUST 仍受安全上限约束。page、response 和 event budget MUST 按最终序列化 payload 计算，包含 envelope、metadata、cursor、preview 和 completeness，返回或发送 bytes MUST 不超过硬上限。
@@ -40,7 +46,7 @@ thread snapshot、turn pagination、turn item detail、session supplement 和 fu
 - **AND** 最终 response bytes MUST 不超过配置硬上限并返回 continuation
 
 ### Requirement: Truncated content remains retrievable
-任何因 item、response 或 event budget 被截断的用户可见正文 SHALL 通过 opaque `contentRef` 和 cursor 分块读取完整内容。contentRef MUST 绑定主体 identity、source locator、source revision 和允许字段；cursor MUST 绑定 contentRef、revision 和 chunk byte offset并防篡改。content read MUST 复用鉴权、thread ownership、workspace roots 和审计边界，MUST NOT 接受任意客户端文件路径。
+任何因 item、response 或 event budget 被截断的用户可见正文 SHALL 通过 opaque `contentRef` 和 cursor 分块读取完整内容。contentRef MUST 绑定主体 identity、source locator、source revision 和允许字段；cursor MUST 绑定 contentRef、revision 和 chunk byte offset并防篡改。content read MUST 复用鉴权、thread ownership、workspace roots 和审计边界，MUST NOT 接受任意客户端文件路径。只要有效 continuation 尚存，空 preview、空 completion 或 turn finalize MUST NOT 删除 entry、contentRef 或未完成状态。
 
 #### Scenario: User expands truncated tool output
 - **WHEN** 用户展开带 contentRef 的 truncated tool output
@@ -62,8 +68,20 @@ thread snapshot、turn pagination、turn item detail、session supplement 和 fu
 - **THEN** 服务端 MUST 返回 scoped `repair-required`
 - **AND** MUST 不把不同 revision 的 chunks 拼接到同一正文
 
+#### Scenario: Empty completion follows a retrievable preview
+- **WHEN** timeline 已包含带有效 `contentRef` 的 truncated item
+- **AND** 同 identity 的 completion 正文为空且没有证明完整正文合法为空
+- **THEN** engine MUST 保留现有 preview、contentRef 和 continuation
+- **AND** MUST NOT 将该 item 标记为 complete
+
+#### Scenario: Empty reasoning preview survives turn finalization
+- **WHEN** reasoning item 的 inline preview 为空但携带有效 `contentRef`
+- **AND** turn 随后完成
+- **THEN** normalized timeline MUST 保留 reasoning identity、contentRef 与未完整状态
+- **AND** 展示层隐藏完成态 reasoning 时 MUST NOT 删除或错误完成该 continuation
+
 ### Requirement: Turn item pagination never stops silently
-turn item detail coordinator SHALL 持续读取 source pages 直到 `nextCursor = null`、达到显式累计 response budget或 source 返回 repair-required。系统 MUST NOT 使用固定 5 页上限后返回看似完整的 entries。
+turn item detail coordinator SHALL 持续读取 source pages 直到 `nextCursor = null`、达到显式累计 response budget或 source 返回 repair-required。系统 MUST NOT 使用固定 5 页上限后返回看似完整的 entries。后续页失败时 coordinator MUST 保留已成功取得的页面并返回 partial 或 repair-required；跨页出现相同强 identity 时 MUST 按 revision、authority 和 completeness 合并为最完整版本，而不是永久保留首次版本。
 
 #### Scenario: More than five pages
 - **WHEN** 一个 turn 的 item detail 超过 5 页且仍在预算内
@@ -80,8 +98,20 @@ turn item detail coordinator SHALL 持续读取 source pages 直到 `nextCursor 
 - **THEN** coordinator MUST 立即停止分页并返回 scoped `repair-required`
 - **AND** MUST 不继续无限请求或把 response 标记为 complete
 
+#### Scenario: Later detail page fails
+- **WHEN** turn item detail 的前一页已成功返回 entries
+- **AND** 后续页请求失败或返回 repair-required
+- **THEN** coordinator MUST 返回已成功取得的 entries 和 partial 或 repair-required completeness
+- **AND** MUST NOT 将已取得内容替换为空数组
+
+#### Scenario: Later page completes an earlier item
+- **WHEN** 前一页包含某 identity 的 partial revision
+- **AND** 后一页包含同 identity 的更新 revision 或 complete 正文
+- **THEN** coordinator MUST 返回更权威、更完整的 item
+- **AND** 整体 completeness MUST 与实际合并结果一致
+
 ### Requirement: Completeness merges monotonically in timeline engine
-timeline engine SHALL 按 identity 合并正文和 completeness。complete 正文 MUST 不被同 identity 的 truncated/partial snapshot 覆盖；更权威完整正文 MAY 替换旧 preview，repair-required MUST 保留诊断直到成功 repair。
+timeline engine SHALL 按强 identity 合并正文和 completeness，并对 agent、reasoning、user、tool、command、diff、file、error 和 system 等所有可见 kind 使用同一候选选择规则。正文兼容时 MUST 按 `(integrity, includedBytes, authority, revision)` 依次选择：经验证 complete、prefix-compatible partial/live、truncated preview 的 integrity 依次降低；覆盖 bytes 优先于 authority/revision tie-breaker。两个非前缀 complete 正文、相同 revision 的不同正文，或更高 revision 无 continuation 却缩短覆盖范围时 MUST 保留当前正文并标记 repair-required，不能任意挑选。complete 正文 MUST 不被同 identity 的 truncated/partial snapshot 覆盖；正文、contentRef 和 completeness MUST 来自相容候选，MUST NOT 产生 `complete` 状态配合 truncated 正文或丢失 continuation 的组合。未显式携带 completeness 的 realtime 正文不得仅因此被较短 truncated snapshot 降级。
 
 #### Scenario: Realtime complete before truncated refresh
 - **WHEN** realtime 已形成完整 agent/tool 正文
@@ -93,4 +123,33 @@ timeline engine SHALL 按 identity 合并正文和 completeness。complete 正�
 - **WHEN** truncated item 的 full-content chunks 全部读取完成
 - **THEN** engine MUST 原位更新同 identity 正文
 - **AND** completeness MUST 变为 complete 且 entry 顺序不变
+
+#### Scenario: Realtime body has no explicit completeness
+- **WHEN** realtime delta 已形成较长且内部一致的正文，但未携带 completeness
+- **AND** 同 identity 的 refresh 只返回较短 truncated preview 和 contentRef
+- **THEN** engine MUST 保留较长 realtime 正文并合并有效 continuation
+- **AND** MUST NOT 仅因 refresh 显式携带 completeness 就用 preview 覆盖正文
+
+#### Scenario: User and diff content remain consistent with status
+- **WHEN** complete user message 或 diff 正文已存在
+- **AND** 同 identity 的 truncated snapshot 包含较短 preview
+- **THEN** engine MUST 同时保留 complete 正文和 complete 状态
+- **AND** MUST NOT 输出 complete metadata 配合 truncated body
+
+#### Scenario: Empty complete candidate cannot discard continuation
+- **WHEN** 当前 item 具有非空 preview、truncated completeness 和有效 contentRef
+- **AND** 新权威候选声明 complete 但正文为空
+- **THEN** engine MUST 保留原内容与 continuation并标记需要进一步确认
+- **AND** 只有协议明确该 kind 的合法完整正文为空时 MAY 完成该 item
+
+#### Scenario: Conflicting complete candidates require repair
+- **WHEN** 同一强 identity 和相同 revision 出现两个非前缀 complete 正文
+- **THEN** engine MUST 保留当前可见正文并记录 scoped repair-required
+- **AND** MUST NOT 仅按来源优先级、文本长度或到达顺序静默选择一个正文
+
+#### Scenario: Status-only completion does not replace content
+- **WHEN** tool、command 或 file completion 合法只携带 status/metadata 而正文为空
+- **THEN** engine MAY 更新 lifecycle status 和 metadata
+- **AND** MUST 保留已有正文、contentRef 与内容 completeness
+- **AND** agent、user、reasoning、diff 或 error 的空正文 MUST NOT 被视为 content complete 证据
 

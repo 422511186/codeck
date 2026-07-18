@@ -61,12 +61,12 @@ export async function threadDetailEntriesWithTurnItems(
     };
   }
 
+  const itemEntries: TimelineEntry[] = [];
+  const seenCursors = new Set<string>();
+  const itemIndexes = new Map<string, number>();
+  let cursor: string | null | undefined = options.cursor;
+  let detailBytes = 0;
   try {
-    const itemEntries: TimelineEntry[] = [];
-    const seenCursors = new Set<string>();
-    const seenItemIds = new Set<string>();
-    let cursor: string | null | undefined = options.cursor;
-    let detailBytes = 0;
     while (true) {
       if (cursor) {
         if (seenCursors.has(cursor)) {
@@ -89,14 +89,9 @@ export async function threadDetailEntriesWithTurnItems(
         });
       }
       let addedItems = 0;
-      const nextEntries = page.items.flatMap((item, idx) => {
-        if (seenItemIds.has(item.id)) {
-          return [];
-        }
-        seenItemIds.add(item.id);
-        addedItems += 1;
-        return [
-          timelineItemToEntry(
+      const nextEntries: TimelineEntry[] = [];
+      page.items.forEach((item, idx) => {
+        const entry = timelineItemToEntry(
             {
               ...item,
               turnId: item.turnId ?? turnId,
@@ -108,8 +103,23 @@ export async function threadDetailEntriesWithTurnItems(
                 : {})
             },
             td.updatedAt - itemEntries.length - page.items.length + idx
-          )
-        ];
+          );
+        const identity = detailEntryIdentity(entry);
+        const existingIndex = itemIndexes.get(identity);
+        if (typeof existingIndex === "number") {
+          const pendingIndex = existingIndex - itemEntries.length;
+          const existing = itemEntries[existingIndex] ?? nextEntries[pendingIndex];
+          if (!existing) return;
+          if (preferDetailEntry(entry, existing)) {
+            if (existingIndex < itemEntries.length) itemEntries[existingIndex] = entry;
+            else nextEntries[pendingIndex] = entry;
+            addedItems += 1;
+          }
+          return;
+        }
+        itemIndexes.set(identity, itemEntries.length + nextEntries.length);
+        addedItems += 1;
+        nextEntries.push(entry);
       });
       itemEntries.push(...nextEntries);
       detailBytes += pageBytes;
@@ -144,12 +154,53 @@ export async function threadDetailEntriesWithTurnItems(
       cursor = nextCursor;
     }
   } catch {
-    return {
-      snapshotEntries: baseEntries,
-      detailEntries: [],
-      detailCompleteness: { status: "repair-required", reason: "source-gap" },
-      detailBytes: 0
-    };
+    return detailTimelineSources(baseEntries, itemEntries, detailBytes, {
+      status: "repair-required",
+      reason: "source-gap",
+      ...(cursor ? { nextCursor: cursor } : {})
+    });
+  }
+}
+
+function detailEntryIdentity(entry: TimelineEntry): string {
+  return [
+    entry.historyStamp?.bootId ?? entry.bootId ?? "legacy",
+    entry.generation ?? entry.historyStamp?.generation ?? "legacy",
+    entry.turnId ?? "none",
+    entry.id
+  ].join("\u0000");
+}
+
+function preferDetailEntry(candidate: TimelineEntry, current: TimelineEntry): boolean {
+  const completenessRank = (entry: TimelineEntry): number => {
+    switch (entry.completeness?.status) {
+      case "complete": return 4;
+      case "truncated": return 3;
+      case "partial": return 2;
+      case "repair-required": return 1;
+      default: return 0;
+    }
+  };
+  const candidateRank = completenessRank(candidate);
+  const currentRank = completenessRank(current);
+  if (candidateRank !== currentRank) return candidateRank > currentRank;
+  return visibleEntryText(candidate).length > visibleEntryText(current).length;
+}
+
+function visibleEntryText(entry: TimelineEntry): string {
+  switch (entry.body.kind) {
+    case "user-message":
+    case "agent-message":
+    case "reasoning":
+    case "system":
+    case "error":
+      return entry.body.text;
+    case "tool":
+      return entry.body.result ?? "";
+    case "command":
+      return entry.body.output ?? "";
+    case "diff":
+      return entry.body.diff;
   }
 }
 
@@ -176,8 +227,18 @@ export function repairReconstructedTimelineEntries(
     sourceOrder: entry.sourceOrder ?? {
       sourceKind,
       ordinal,
-      ...(entries[ordinal - 1]?.id ? { afterEntryId: entries[ordinal - 1]!.id } : {}),
-      ...(entries[ordinal + 1]?.id ? { beforeEntryId: entries[ordinal + 1]!.id } : {})
+      ...(entries[ordinal - 1]?.id
+        ? {
+            afterEntryId: entries[ordinal - 1]!.id,
+            ...(entries[ordinal - 1]!.turnId ? { afterTurnId: entries[ordinal - 1]!.turnId } : {})
+          }
+        : {}),
+      ...(entries[ordinal + 1]?.id
+        ? {
+            beforeEntryId: entries[ordinal + 1]!.id,
+            ...(entries[ordinal + 1]!.turnId ? { beforeTurnId: entries[ordinal + 1]!.turnId } : {})
+          }
+        : {})
     }
   }));
 }

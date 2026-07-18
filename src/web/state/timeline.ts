@@ -1,5 +1,6 @@
 import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
+import type { CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
 import {
   createTimelineEngineState,
   selectRollbackMetadataForEntry,
@@ -59,6 +60,8 @@ export type ToolEntry = {
 export type SystemEntry = {
   kind: "system";
   text: string;
+  systemKind?: "context-compaction";
+  status?: CommandEntryStatus;
 };
 
 export type ErrorEntry = {
@@ -85,14 +88,28 @@ export type TimelineEntry = {
   turnIndex?: number;
   clientUserMessageId?: string;
   generation?: number;
+  bootId?: string;
+  historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  streamSequence?: number;
+  fragmentSequence?: number;
+  revision?: number;
+  baselineWatermark?: number;
+  sourceLocator?: CanonicalSourceLocator;
+  sendOperation?: {
+    payloadFingerprint: string;
+    bootId?: string;
+    outcome: "pending" | "accepted" | "ambiguous" | "rejected";
+  };
   completeness?: TimelineCompleteness;
   sourceOrder?: {
     sourceKind: "live" | "snapshot" | "pagination" | "turn-detail" | "supplement" | "optimistic";
     ordinal: number;
     sequence?: number;
     beforeEntryId?: string;
+    beforeTurnId?: string;
     afterEntryId?: string;
+    afterTurnId?: string;
   };
   createdAt: number;
   body:
@@ -111,22 +128,146 @@ export function hasVisibleTurnOutput(entries: TimelineEntry[], turnId: string): 
 }
 
 const localImagePattern = /[A-Za-z]:[\\/][^\r\n]+?\.(?:png|jpe?g|webp|gif)/gi;
+const codexRequestMarkerPattern = /^## My request for Codex:[^\S\r\n]*(?:\r?\n|$)/m;
+const codexFileWrapperPattern = /^# Files mentioned by the user:[^\S\r\n]*$/m;
+const trustedBrowserContextPattern =
+  /<in-app-browser-context\s+source=["']ambient-ui-state["'][^>]*>[\s\S]*?<\/in-app-browser-context>/i;
+const trustedGoalContextPattern =
+  /^<codex_internal_context\s+source="goal">([\s\S]*)<\/codex_internal_context>$/;
+const goalObjectivePattern = /<objective>([\s\S]*?)<\/objective>/g;
 
-function normalizeUserTextAndImages(text: string, imagePaths?: string[]): { text: string; imagePaths?: string[] } {
+export function visibleUserMessageText(text: string): string {
+  const trimmedText = text.trim();
+  const goalContext = trustedGoalContextPattern.exec(trimmedText);
+  if (goalContext) {
+    const objectiveMatches = [...goalContext[1]!.matchAll(goalObjectivePattern)];
+    const objective = objectiveMatches[0]?.[1]?.trim() ?? "";
+    if (objectiveMatches.length === 1 && objective) {
+      return objective;
+    }
+  }
+
+  const requestMarker = codexRequestMarkerPattern.exec(text);
+  if (!requestMarker) {
+    return text;
+  }
+
+  const wrapper = text.slice(0, requestMarker.index);
+  if (!codexFileWrapperPattern.test(wrapper) && !trustedBrowserContextPattern.test(wrapper)) {
+    return text;
+  }
+
+  return text.slice(requestMarker.index + requestMarker[0].length);
+}
+
+function normalizeUserTextAndImages(
+  text: string,
+  imagePaths?: string[],
+  skillReferences?: SkillReference[]
+): { text: string; imagePaths?: string[]; skillReferences?: SkillReference[] } {
   const images = [...(imagePaths ?? [])];
   let nextText = text.replace(localImagePattern, (match) => {
     images.push(match);
     return "";
   });
 
+  nextText = visibleUserMessageText(nextText);
+  const normalizedSkills = normalizeSkillReferences(skillReferences);
+  const recovered = normalizedSkills.length ? { text: nextText, skillReferences: normalizedSkills } : recoverSkillReferences(nextText);
+  nextText = recovered.text;
   nextText = nextText
-    .replace(/^# Files mentioned by the user:[\s\S]*?(?=^## My request for Codex:)/m, "")
-    .replace(/^## My request for Codex:\s*/m, "")
     .replace(/^\[图片\]\s*$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return { text: nextText, ...(images.length ? { imagePaths: Array.from(new Set(images)) } : {}) };
+  return {
+    text: nextText,
+    ...(images.length ? { imagePaths: Array.from(new Set(images)) } : {}),
+    ...(recovered.skillReferences.length ? { skillReferences: recovered.skillReferences } : {})
+  };
+}
+
+function recoverSkillReferences(text: string): { text: string; skillReferences: SkillReference[] } {
+  const references: SkillReference[] = [];
+  const keptLines: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const token = fenceMatch[1]!;
+      const marker = token[0] as "`" | "~";
+      if (!fence) {
+        fence = { marker, length: token.length };
+      } else if (fence.marker === marker && token.length >= fence.length) {
+        fence = null;
+      }
+      keptLines.push(line);
+      continue;
+    }
+
+    if (!fence) {
+      const reference = standaloneSkillReference(line);
+      if (reference) {
+        references.push(reference);
+        continue;
+      }
+    }
+    keptLines.push(line);
+  }
+
+  return { text: keptLines.join("\n"), skillReferences: normalizeSkillReferences(references) };
+}
+
+function standaloneSkillReference(line: string): SkillReference | null {
+  const match = /^\s*\[\$?([^\]\r\n]+)\]\((<?)([^)\r\n]+)(>?)\)\s*$/.exec(line);
+  if (!match || (match[2] === "<") !== (match[4] === ">")) {
+    return null;
+  }
+  const name = match[1]!.trim();
+  const path = decodeSkillPath(match[3]!.trim());
+  if (!name || !isAbsoluteSkillPath(path)) {
+    return null;
+  }
+  return { name, path };
+}
+
+function decodeSkillPath(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isAbsoluteSkillPath(value: string): boolean {
+  const absolute = /^\/(?!\/)/.test(value) || /^[A-Za-z]:[\\/]/.test(value);
+  return absolute && /(?:^|[\\/])SKILL\.md$/i.test(value);
+}
+
+function normalizeSkillReferences(references?: SkillReference[]): SkillReference[] {
+  const unique = new Map<string, SkillReference>();
+  for (const reference of references ?? []) {
+    const name = reference.name.trim().replace(/^\$/, "");
+    const path = reference.path.trim();
+    if (name && path) {
+      unique.set(`${name}\u0001${path}`, { name, path });
+    }
+  }
+  return [...unique.values()];
+}
+
+export function skillDisplayName(name: string): string {
+  const words = name.trim().replace(/^\$/, "").split(/[-_\s]+/).filter(Boolean);
+  const connectors = new Set(["and", "for", "in", "of", "to", "with"]);
+  return words
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (lower === "openspec") return "OpenSpec";
+      if (index > 0 && connectors.has(lower)) return lower;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
 }
 
 export function diffStats(diff: string): { added: number; removed: number } {
@@ -174,7 +315,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
   const createdAt = timelineItemCreatedAt(item, fallbackCreatedAt);
   switch (item.role as TimelineRole) {
     case "user": {
-      const normalized = normalizeUserTextAndImages(item.text, item.imagePaths);
+      const normalized = normalizeUserTextAndImages(item.text, item.imagePaths, item.skillReferences);
       return {
         id,
         ...meta,
@@ -183,7 +324,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
           kind: "user-message",
           text: normalized.text,
           ...(normalized.imagePaths?.length ? { imagePaths: normalized.imagePaths } : {}),
-          ...(item.skillReferences?.length ? { skillReferences: item.skillReferences } : {}),
+          ...(normalized.skillReferences?.length ? { skillReferences: normalized.skillReferences } : {}),
           status: "sent"
         }
       };
@@ -195,7 +336,17 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
     case "plan":
       return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
     case "system":
-      return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
+      return {
+        id,
+        ...meta,
+        createdAt,
+        body: {
+          kind: "system",
+          text: item.text,
+          ...(item.systemKind ? { systemKind: item.systemKind } : {}),
+          ...(item.status ? { status: item.status } : {})
+        }
+      };
     case "error":
       return { id, ...meta, createdAt, body: { kind: "error", text: item.text } };
     case "diff":
@@ -275,14 +426,31 @@ function timelineEntryMeta(
   item: TimelineItem
 ): Pick<
   TimelineEntry,
-  "turnId" | "turnIndex" | "clientUserMessageId" | "generation" | "snapshotSequence" | "completeness"
+  | "turnId"
+  | "turnIndex"
+  | "clientUserMessageId"
+  | "generation"
+  | "bootId"
+  | "historyStamp"
+  | "snapshotSequence"
+  | "streamSequence"
+  | "fragmentSequence"
+  | "baselineWatermark"
+  | "sourceLocator"
+  | "completeness"
 > {
   return {
     ...(item.turnId ? { turnId: item.turnId } : {}),
     ...(typeof item.turnIndex === "number" ? { turnIndex: item.turnIndex } : {}),
     ...(item.clientUserMessageId ? { clientUserMessageId: item.clientUserMessageId } : {}),
     ...(typeof item.generation === "number" ? { generation: item.generation } : {}),
+    ...(item.bootId ? { bootId: item.bootId } : {}),
+    ...(item.historyStamp ? { historyStamp: item.historyStamp } : {}),
     ...(typeof item.snapshotSequence === "number" ? { snapshotSequence: item.snapshotSequence } : {}),
+    ...(typeof item.streamSequence === "number" ? { streamSequence: item.streamSequence } : {}),
+    ...(typeof item.fragmentSequence === "number" ? { fragmentSequence: item.fragmentSequence } : {}),
+    ...(typeof item.baselineWatermark === "number" ? { baselineWatermark: item.baselineWatermark } : {}),
+    ...(item.sourceLocator ? { sourceLocator: item.sourceLocator } : {}),
     ...(item.completeness ? { completeness: item.completeness } : {})
   };
 }

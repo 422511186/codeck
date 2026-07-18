@@ -897,7 +897,9 @@ export function timelineItem(item: ThreadItem): MobileTimelineItem | null {
       id: item.id,
       role: "system",
       text: "压缩上下文已完成",
-      toolKind: "system"
+      toolKind: "system",
+      systemKind: "context-compaction",
+      status: "success"
     };
   }
 

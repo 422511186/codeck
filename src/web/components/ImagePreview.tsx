@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { ImageOff, RotateCcw } from "lucide-react";
+
 export function imagePreviewSrc(src: string): string {
   if (/^(blob:|data:|https?:)/i.test(src) || src.startsWith("/api/")) {
     return src;
@@ -16,12 +19,21 @@ export function ImageThumb({
   label?: string;
   onPreview: (src: string) => void;
 }): JSX.Element {
-  const preview = imagePreviewSrc(src);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const preview = retryImageSrc(imagePreviewSrc(src), retry);
   return (
     <button
       type="button"
-      aria-label={label}
-      onClick={() => onPreview(src)}
+      aria-label={failed ? "图片加载失败，点击重试" : label}
+      onClick={() => {
+        if (failed) {
+          setFailed(false);
+          setRetry((value) => value + 1);
+          return;
+        }
+        onPreview(src);
+      }}
       style={{
         width: 80,
         height: 80,
@@ -33,7 +45,19 @@ export function ImageThumb({
         cursor: "zoom-in"
       }}
     >
-      <img src={preview} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+      {failed ? (
+        <span style={imageFailureStyle}>
+          <ImageOff aria-hidden="true" size={20} strokeWidth={1.6} />
+          <span>加载失败</span>
+        </span>
+      ) : (
+        <img
+          src={preview}
+          alt={label}
+          onError={() => setFailed(true)}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
+      )}
     </button>
   );
 }
@@ -45,7 +69,9 @@ export function ImagePreviewDialog({
   src: string;
   onClose: () => void;
 }): JSX.Element {
-  const preview = imagePreviewSrc(src);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const preview = retryImageSrc(imagePreviewSrc(src), retry);
   return (
     <div
       role="dialog"
@@ -82,17 +108,82 @@ export function ImagePreviewDialog({
       >
         ×
       </button>
-      <img
-        src={preview}
-        alt="图片预览"
-        onClick={(event) => event.stopPropagation()}
-        style={{
-          maxWidth: "100%",
-          maxHeight: "86dvh",
-          objectFit: "contain",
-          borderRadius: 8
-        }}
-      />
+      {failed ? (
+        <div onClick={(event) => event.stopPropagation()} style={dialogFailureStyle}>
+          <ImageOff aria-hidden="true" size={28} strokeWidth={1.5} />
+          <span>图片加载失败</span>
+          <button
+            type="button"
+            onClick={() => {
+              setFailed(false);
+              setRetry((value) => value + 1);
+            }}
+            style={retryButtonStyle}
+          >
+            <RotateCcw aria-hidden="true" size={15} strokeWidth={1.8} />
+            重试
+          </button>
+        </div>
+      ) : (
+        <img
+          src={preview}
+          alt="图片预览"
+          onError={() => setFailed(true)}
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            maxWidth: "100%",
+            maxHeight: "86dvh",
+            objectFit: "contain",
+            borderRadius: 8
+          }}
+        />
+      )}
     </div>
   );
 }
+
+function retryImageSrc(src: string, retry: number): string {
+  if (retry === 0 || src.startsWith("data:") || src.startsWith("blob:")) {
+    return src;
+  }
+  return `${src}${src.includes("?") ? "&" : "?"}cw_retry=${retry}`;
+}
+
+const imageFailureStyle: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 5,
+  color: "var(--cw-fg-muted)",
+  fontSize: 11,
+  lineHeight: 1.2
+};
+
+const dialogFailureStyle: React.CSSProperties = {
+  width: "min(320px, 100%)",
+  minHeight: 180,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 10,
+  border: "1px solid rgba(255,255,255,0.24)",
+  borderRadius: 8,
+  color: "#fff",
+  background: "rgba(0,0,0,0.28)"
+};
+
+const retryButtonStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 10px",
+  border: "1px solid rgba(255,255,255,0.35)",
+  borderRadius: 6,
+  background: "transparent",
+  color: "#fff",
+  fontSize: 12
+};

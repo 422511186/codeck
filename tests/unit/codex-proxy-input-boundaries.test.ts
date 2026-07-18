@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -166,6 +166,7 @@ describe("codex proxy input boundaries", () => {
     const uploadImage = join(uploadDir, "b.png");
     const outsideImage = join(outside, "c.png");
     const textFile = join(workspace, "note.txt");
+    const imageDirectory = join(workspace, "directory.png");
     await mkdir(workspace, { recursive: true });
     await mkdir(uploadDir, { recursive: true });
     await mkdir(outside, { recursive: true });
@@ -173,6 +174,7 @@ describe("codex proxy input boundaries", () => {
     await writeFile(uploadImage, "upload-image");
     await writeFile(outsideImage, "outside-image");
     await writeFile(textFile, "not image");
+    await mkdir(imageDirectory, { recursive: true });
     runtimeConfig = {
       ...runtimeConfig,
       workspaceRoots: [workspace],
@@ -192,12 +194,89 @@ describe("codex proxy input boundaries", () => {
     const textResponse = await GET(
       new Request(`http://localhost/api/codex/images/preview?path=${encodeURIComponent(textFile)}`)
     );
+    const directoryResponse = await GET(
+      new Request(`http://localhost/api/codex/images/preview?path=${encodeURIComponent(imageDirectory)}`)
+    );
 
     expect(workspaceResponse.status).toBe(200);
     expect(workspaceResponse.headers.get("content-type")).toBe("image/png");
+    expect(workspaceResponse.headers.get("x-content-type-options")).toBe("nosniff");
     expect(uploadResponse.status).toBe(200);
     expect(outsideResponse.status).not.toBe(200);
     expect(textResponse.status).not.toBe(200);
+    expect(directoryResponse.status).not.toBe(200);
+  });
+
+  it("images/preview 拒绝通过文件或目录符号链接逃逸 workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-web-preview-symlink-"));
+    const workspace = join(root, "workspace");
+    const uploadDir = join(root, "uploads");
+    const outside = join(root, "outside");
+    const outsideImage = join(outside, "secret.png");
+    const fileLink = join(workspace, "file-link.png");
+    const directoryLink = join(workspace, "directory-link");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(uploadDir, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(outsideImage, "outside-image");
+    await symlink(outsideImage, fileLink);
+    await symlink(outside, directoryLink, "dir");
+    runtimeConfig = { ...runtimeConfig, workspaceRoots: [workspace], uploadDir };
+    const { GET } = await import("../../src/app/api/codex/images/preview/route");
+
+    const fileResponse = await GET(
+      new Request(`http://localhost/api/codex/images/preview?path=${encodeURIComponent(fileLink)}`)
+    );
+    const directoryResponse = await GET(
+      new Request(
+        `http://localhost/api/codex/images/preview?path=${encodeURIComponent(join(directoryLink, "secret.png"))}`
+      )
+    );
+
+    expect(fileResponse.status).toBe(404);
+    expect(directoryResponse.status).toBe(404);
+  });
+
+  it("images/preview 不因无关的缺失 workspace root 拒绝有效图片", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-web-preview-missing-root-"));
+    const workspace = join(root, "workspace");
+    const uploadDir = join(root, "uploads");
+    const image = join(workspace, "valid.png");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(image, "valid-image");
+    runtimeConfig = {
+      ...runtimeConfig,
+      workspaceRoots: [join(root, "missing"), workspace],
+      uploadDir
+    };
+    const { GET } = await import("../../src/app/api/codex/images/preview/route");
+
+    const response = await GET(
+      new Request(`http://localhost/api/codex/images/preview?path=${encodeURIComponent(image)}`)
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("images/preview 失败响应不回显本机绝对路径", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codex-web-preview-error-"));
+    const workspace = join(root, "workspace");
+    const uploadDir = join(root, "uploads");
+    const missingImage = join(workspace, "missing.png");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(uploadDir, { recursive: true });
+    runtimeConfig = { ...runtimeConfig, workspaceRoots: [workspace], uploadDir };
+    const { GET } = await import("../../src/app/api/codex/images/preview/route");
+
+    const response = await GET(
+      new Request(`http://localhost/api/codex/images/preview?path=${encodeURIComponent(missingImage)}`)
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body).toEqual({ ok: false, error: "无法读取图片" });
+    expect(JSON.stringify(body)).not.toContain(missingImage);
   });
 
   it("turns/start imagePaths 仍允许 uploadDir 作为额外根", async () => {

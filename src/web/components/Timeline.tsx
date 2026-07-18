@@ -1,7 +1,23 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { TimelineEntry } from "../state/timeline";
+import {
+  BookOpen,
+  Bot,
+  Box,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  FileText,
+  FolderOpen,
+  Globe2,
+  Image as ImageIcon,
+  Pencil,
+  Search,
+  Terminal as TerminalIcon,
+  Wrench
+} from "lucide-react";
+import { skillDisplayName, type TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
 import { CommandCard } from "./cards/CommandCard";
@@ -15,6 +31,11 @@ import { ImagePreviewDialog, ImageThumb } from "./ImagePreview";
 import { LongTextPreview } from "./cards/LongTextPreview";
 import { codex } from "../api/endpoints";
 import { useStore } from "../state/store";
+import {
+  createActivityPresentation,
+  timelineEntriesForPresentation,
+  type ActivityPresentationItem
+} from "../state/timeline-presentation";
 
 const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
@@ -25,7 +46,6 @@ const EAGER_MARKDOWN_TAIL_ROWS = 2;
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 72;
 const MIN_MEASURED_TIMELINE_ROW_HEIGHT = 24;
 const TIMELINE_BLOCK_GAP = 10;
-const MIN_REAL_TIMELINE_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 
 type TimelineDerivationDiagnostics = {
   derivationRuns: number;
@@ -71,7 +91,7 @@ type Props = {
   running?: boolean;
   activeTurnId?: string | null;
   onResolveApproval?: (req: PendingServerRequest, value: string) => Promise<void>;
-  onResendUser?: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => void;
+  onResendUser?: (entry: TimelineEntry) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
 };
@@ -92,7 +112,11 @@ export function Timeline({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowHeightCacheRef = useRef<Map<string, number>>(new Map());
   const [rowHeightVersion, setRowHeightVersion] = useState(0);
-  const allBlocks = useMemo(() => deriveTimelineRenderBlocks(entries), [entries]);
+  const presentationEntries = useMemo(
+    () => timelineEntriesForPresentation(entries, { running, activeTurnId }),
+    [entries, running, activeTurnId]
+  );
+  const allBlocks = useMemo(() => deriveTimelineRenderBlocks(presentationEntries), [presentationEntries]);
   const layoutIndex = useMemo(
     () => createTimelineLayoutIndex(allBlocks, rowHeightCacheRef.current),
     [allBlocks, rowHeightVersion]
@@ -121,6 +145,7 @@ export function Timeline({
     layoutIndex.totalHeight - (layoutIndex.offsets[windowRange.end] ?? layoutIndex.totalHeight)
   );
   const longTimeline = allBlocks.length > MAX_INITIAL_TIMELINE_ROWS;
+  const virtualized = allBlocks.length > MAX_INITIAL_TIMELINE_ROWS;
   const rowState = useMemo(
     () => deriveTimelineRowState(visibleEntries, running, activeTurnId),
     [visibleEntries, running, activeTurnId]
@@ -140,6 +165,7 @@ export function Timeline({
     }
     if (
       scroller &&
+      virtualized &&
       scrollAnchorRef.current &&
       !followTail &&
       !scrollAnchorRef.current.followTail &&
@@ -151,15 +177,17 @@ export function Timeline({
       }
     }
     previousLayoutRef.current = { blocks: allBlocks, layoutIndex };
-    if (scroller) {
+    if (scroller && virtualized) {
       scrollAnchorRef.current = captureTimelineScrollAnchor(
         allBlocks,
         layoutIndex,
         scroller.scrollTop,
         scroller.clientHeight
       );
+    } else if (!virtualized) {
+      scrollAnchorRef.current = null;
     }
-  }, [allBlocks, layoutIndex, followTail, windowRange.start, windowRange.end]);
+  }, [allBlocks, layoutIndex, followTail, virtualized, windowRange.start, windowRange.end]);
 
   useEffect(() => {
     const previous = previousBlocksRef.current;
@@ -246,7 +274,7 @@ export function Timeline({
     }
     const observer = new ResizeObserver(() => {
       const scroller = findTimelineScrollContainer(root);
-      if (scroller) {
+      if (scroller && virtualized) {
         scrollAnchorRef.current = captureTimelineScrollAnchor(
           allBlocks,
           layoutIndex,
@@ -262,7 +290,7 @@ export function Timeline({
     return () => {
       observer.disconnect();
     };
-  }, [allBlocks, layoutIndex, visibleBlocks]);
+  }, [allBlocks, layoutIndex, virtualized, visibleBlocks]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -275,19 +303,18 @@ export function Timeline({
       return;
     }
 
-    const virtualized = allBlocks.length > MAX_INITIAL_TIMELINE_ROWS;
     if (virtualized) {
       scroller.dataset.timelineAnchorManaged = "true";
     }
 
     const updateVisibleWindow = () => {
-      scrollAnchorRef.current = captureTimelineScrollAnchor(
-        allBlocks,
-        layoutIndex,
-        scroller.scrollTop,
-        scroller.clientHeight
-      );
       if (virtualized) {
+        scrollAnchorRef.current = captureTimelineScrollAnchor(
+          allBlocks,
+          layoutIndex,
+          scroller.scrollTop,
+          scroller.clientHeight
+        );
         setWindowRange(timelineWindowRangeForScroll(scroller.scrollTop, scroller.clientHeight, layoutIndex));
       }
     };
@@ -357,7 +384,7 @@ export type TimelineRenderBlock =
   | { kind: "inline-activity-log"; id: string; version: string; turnId?: string; entries: TimelineEntry[] };
 
 function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
-  return block.kind === "entry" ? block.entry.id : block.entries[0]?.id ?? block.id;
+  return block.kind === "entry" ? block.entry.id : block.entries.at(-1)?.id ?? block.id;
 }
 
 export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
@@ -625,7 +652,7 @@ type TimelineRowProps = {
   actionAvailable: boolean;
   running: boolean;
   eagerMarkdown: boolean;
-  onResendUser?: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => void;
+  onResendUser?: (entry: TimelineEntry) => void;
   onRewindToMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onForkFromMessage?: (entry: TimelineEntry) => void | Promise<void>;
   onPreviewImage: (src: string) => void;
@@ -700,7 +727,7 @@ const TimelineRow = memo(function TimelineRow({
           entry={entry}
           actionAvailable={!running && actionAvailable}
           running={running}
-          onResend={() => onResendUser?.(body.text, body.imagePaths ?? [], body.skillReferences ?? [])}
+          onResend={() => onResendUser?.(entry)}
           onRewind={() => onRewindToMessage?.(entry)}
           onFork={() => onForkFromMessage?.(entry)}
           onPreviewImage={onPreviewImage}
@@ -727,7 +754,6 @@ const TimelineRow = memo(function TimelineRow({
 
   return (
     <>
-      <TimelineRelativeTime createdAt={entry.createdAt} />
       {content}
       {entry.completeness && entry.completeness.status !== "complete" ? (
         <TimelineCompletenessFooter
@@ -824,22 +850,14 @@ function TimelineCompletenessFooter({
 
 const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
   timelineDerivationDiagnostics.inlineActivityRenderRuns += 1;
-  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const [open, setOpen] = useState(false);
   const [openActionKeys, setOpenActionKeys] = useState<Set<string>>(() => new Set());
-  const sectionsCacheKey = inlineActivitySectionsCacheKey(entries);
-  const sections = useMemo(() => inlineActivitySections(entries), [sectionsCacheKey]);
-
-  function toggleSection(key: string): void {
-    setOpenKeys((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }
+  const presentationCacheKey = inlineActivitySectionsCacheKey(entries);
+  const presentation = useMemo(() => {
+    timelineDerivationDiagnostics.inlineActivitySectionRuns += 1;
+    return createActivityPresentation(entries);
+  }, [presentationCacheKey]);
+  const thinkingOnly = presentation.items.length === 1 && presentation.items[0]?.kind === "thinking";
 
   function toggleAction(actionKey: string): void {
     setOpenActionKeys((current) => {
@@ -855,134 +873,118 @@ const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries
 
   return (
     <div style={inlineActivityLogStyle}>
-      <TimelineRelativeTime createdAt={entries[0]?.createdAt} compact />
-      {sections.map((section) => {
-        const canExpand = section.entries.length > 0;
-        const open = canExpand && openKeys.has(section.key);
-        return (
-          <div key={section.key} style={inlineActivitySectionStyle}>
-            <button
-              type="button"
-              {...(canExpand ? { "aria-expanded": open } : {})}
-              onClick={() => {
-                if (canExpand) {
-                  toggleSection(section.key);
-                }
-              }}
-              style={inlineActivityButtonStyle}
+      {thinkingOnly ? (
+        <div style={inlineActivityButtonStyle} role="status">
+          <span style={inlineActivityTitleStyle}>{presentation.summary}</span>
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={presentation.failed ? `${presentation.summary}，失败` : presentation.summary}
+            onClick={() => setOpen((current) => !current)}
+            style={inlineActivityButtonStyle}
+          >
+            <span
+              aria-hidden="true"
+              data-activity-summary-icon={presentation.summaryKind}
+              style={activityActionIconStyle}
             >
-              <span aria-hidden="true" style={inlineActivityIconStyle}>
-                ▣
+              <ActivityKindIcon kind={presentation.summaryKind} />
+            </span>
+            <span style={inlineActivityTitleStyle}>{presentation.summary}</span>
+            {presentation.failed ? (
+              <span style={inlineActivityFailedStyle}>
+                <CircleAlert aria-hidden="true" size={13} strokeWidth={1.8} />
+                失败
               </span>
-              <span style={inlineActivityTitleStyle}>{section.title}</span>
-              {section.failed ? <span style={inlineActivityFailedStyle}>失败</span> : null}
-              {canExpand ? (
-                <span aria-hidden="true" style={inlineActivityChevronStyle}>
-                  {open ? "⌄" : "›"}
-                </span>
-              ) : null}
-            </button>
-            {open ? (
-              shouldRenderDirectActivityDetails(section) ? (
-                <DirectActivityDetails section={section} />
-              ) : (
-                <div style={activityDetailsStyle}>
-                  {inlineActivityActionRows(section).map((row) => {
-                    const entryOpen = openActionKeys.has(row.key);
-                    return (
-                      <div key={row.key} style={activityDetailItemStyle}>
-                        <button
-                          type="button"
-                          aria-expanded={entryOpen}
-                          onClick={() => toggleAction(row.key)}
-                          style={inlineActivityEntryButtonStyle}
-                        >
-                          <span style={inlineActivityEntryTitleStyle}>{row.label}</span>
-                          <span aria-hidden="true" style={inlineActivityChevronStyle}>
-                            {entryOpen ? "⌄" : "›"}
-                          </span>
-                        </button>
-                        {entryOpen ? <ActivityDetail entry={row.entry} /> : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )
             ) : null}
-          </div>
-        );
-      })}
+            {open ? (
+              <ChevronDown aria-hidden="true" size={15} strokeWidth={1.8} />
+            ) : (
+              <ChevronRight aria-hidden="true" size={15} strokeWidth={1.8} />
+            )}
+          </button>
+          {open ? (
+            <div data-activity-action-list="true" style={activityActionListStyle}>
+              {presentation.items.map((item) => (
+                <ActivityPresentationRow
+                  key={item.key}
+                  item={item}
+                  open={openActionKeys.has(item.key)}
+                  onToggle={() => toggleAction(item.key)}
+                />
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }, (previous, next) => inlineActivitySectionsCacheKey(previous.entries) === inlineActivitySectionsCacheKey(next.entries));
 
-function TimelineRelativeTime({
-  createdAt,
-  compact = false
+function ActivityPresentationRow({
+  item,
+  open,
+  onToggle
 }: {
-  createdAt?: number;
-  compact?: boolean;
-}): JSX.Element | null {
-  if (
-    typeof createdAt !== "number" ||
-    !Number.isFinite(createdAt) ||
-    createdAt < MIN_REAL_TIMELINE_TIMESTAMP_MS
-  ) {
-    return null;
-  }
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
+  item: ActivityPresentationItem;
+  open: boolean;
+  onToggle: () => void;
+}): JSX.Element {
   return (
-    <time dateTime={date.toISOString()} style={compact ? timelineTimeCompactStyle : timelineTimeStyle}>
-      {formatRelativeTimelineTime(createdAt)}
-    </time>
+    <div data-activity-action-kind={item.kind} style={activityActionItemStyle}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={item.label}
+        onClick={onToggle}
+        style={inlineActivityEntryButtonStyle}
+      >
+        <span aria-hidden="true" style={activityActionIconStyle}>
+          <ActivityKindIcon kind={item.kind} />
+        </span>
+        <span style={inlineActivityEntryTitleStyle}>{item.label}</span>
+        {activityEntryFailed(item.entry) ? (
+          <CircleAlert aria-label="失败" size={14} strokeWidth={1.8} style={{ color: "var(--cw-danger)" }} />
+        ) : null}
+        {open ? (
+          <ChevronDown aria-hidden="true" size={15} strokeWidth={1.8} />
+        ) : (
+          <ChevronRight aria-hidden="true" size={15} strokeWidth={1.8} />
+        )}
+      </button>
+      {open ? <ActivityDetail entry={item.entry} /> : null}
+    </div>
   );
 }
 
-function formatRelativeTimelineTime(createdAt: number, now = Date.now()): string {
-  const diffMs = Math.max(0, now - createdAt);
-  const minuteMs = 60 * 1000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-  const monthMs = 30 * dayMs;
-  const yearMs = 365 * dayMs;
-
-  if (diffMs < minuteMs) {
-    return "刚刚";
+function ActivityKindIcon({ kind }: { kind: ActivityPresentationItem["kind"] }): JSX.Element {
+  const props = { size: 15, strokeWidth: 1.8 };
+  switch (kind) {
+    case "skill":
+      return <BookOpen {...props} />;
+    case "subagent":
+      return <Bot {...props} />;
+    case "file":
+      return <Pencil {...props} />;
+    case "read":
+      return <FileText {...props} />;
+    case "list":
+      return <FolderOpen {...props} />;
+    case "search":
+      return <Search {...props} />;
+    case "command":
+      return <TerminalIcon {...props} />;
+    case "web":
+      return <Globe2 {...props} />;
+    case "image":
+      return <ImageIcon {...props} />;
+    default:
+      return <Wrench {...props} />;
   }
-  if (diffMs < hourMs) {
-    return `${Math.floor(diffMs / minuteMs)} 分钟前`;
-  }
-  if (diffMs < dayMs) {
-    return `${Math.floor(diffMs / hourMs)} 小时前`;
-  }
-  if (diffMs < monthMs) {
-    return `${Math.floor(diffMs / dayMs)} 天前`;
-  }
-  if (diffMs < yearMs) {
-    return `${Math.floor(diffMs / monthMs)} 个月前`;
-  }
-  return `${Math.floor(diffMs / yearMs)} 年前`;
 }
-
-type InlineActivitySection = {
-  key: string;
-  kind: InlineActivitySectionKind;
-  title: string;
-  details: string[];
-  entries: TimelineEntry[];
-  failed: boolean;
-};
-
-type InlineActivityActionRow = {
-  key: string;
-  label: string;
-  entry: TimelineEntry;
-};
-
-type InlineActivitySectionKind = "thinking" | "skills" | "commands" | "tools" | "files" | "fallback";
 
 function inlineActivitySectionsCacheKey(entries: TimelineEntry[]): string {
   return entries.map(activityEntryCacheSignature).join("|");
@@ -1011,7 +1013,9 @@ function timelineEntryDerivationKey(entry: TimelineEntry): string {
         body.status ?? "",
         textCacheSignature(body.text),
         ...(body.imagePaths ?? []),
-        ...(body.skillReferences ?? []).map((skill) => `${skill.name}:${skill.path}`)
+        ...(body.skillReferences ?? []).map(
+          (skill) => `${textCacheSignature(skill.name)}:${textCacheSignature(skill.path)}`
+        )
       ].join(":");
     case "agent-message":
     case "system":
@@ -1048,334 +1052,6 @@ function textCacheSignature(text: string): string {
   return `${text.length}:${hash}`;
 }
 
-function inlineActivitySections(entries: TimelineEntry[]): InlineActivitySection[] {
-  timelineDerivationDiagnostics.inlineActivitySectionRuns += 1;
-  const sections: InlineActivitySection[] = [];
-  let currentKind: InlineActivitySectionKind | null = null;
-  let currentEntries: TimelineEntry[] = [];
-
-  const flush = () => {
-    if (!currentKind || !currentEntries.length) {
-      return;
-    }
-    sections.push(inlineActivitySection(currentKind, currentEntries, sections.length));
-    currentKind = null;
-    currentEntries = [];
-  };
-
-  for (const entry of entries) {
-    const kind = inlineActivitySectionKind(entry);
-    if (currentKind && kind !== currentKind) {
-      flush();
-    }
-    currentKind = kind;
-    currentEntries.push(entry);
-  }
-  flush();
-
-  return sections.length
-    ? sections
-    : [
-        {
-          key: "fallback-0",
-          kind: "fallback",
-          title: `Used ${entries.length} tools`,
-          details: entries.map(genericToolDetail),
-          entries,
-          failed: entries.some((entry) => activityEntryFailed(entry))
-        }
-      ];
-}
-
-function inlineActivitySectionKind(entry: TimelineEntry): InlineActivitySectionKind {
-  if (entry.body.kind === "reasoning") {
-    return "thinking";
-  }
-  if (isSkillsLoadedActivity(entry)) {
-    return "skills";
-  }
-  if (isCommandActivity(entry) || isReadActivity(entry) || isListActivity(entry) || isSearchActivity(entry)) {
-    return "commands";
-  }
-  if (entry.body.kind === "diff" || isFileChangeActivity(entry)) {
-    return "files";
-  }
-  if (entry.body.kind === "tool") {
-    return "tools";
-  }
-  return "fallback";
-}
-
-function inlineActivitySection(
-  kind: InlineActivitySectionKind,
-  entries: TimelineEntry[],
-  index: number
-): InlineActivitySection {
-  if (kind === "thinking") {
-    const running = entries.some((entry) => entry.body.kind === "reasoning" && !entry.body.done);
-    return {
-      key: `thinking-${index}`,
-      kind,
-      title: running ? "Thinking..." : "Thinking",
-      details: [],
-      entries,
-      failed: entries.some((entry) => activityEntryFailed(entry))
-    };
-  }
-
-  if (kind === "skills") {
-    const names = entries.flatMap((entry) => skillNamesFromActivity(entry));
-    const count = names.length || entries.length;
-    return {
-      key: `skills-${index}`,
-      kind,
-      title: count === 1 ? "Loaded a tool" : `Loaded ${count} tools`,
-      details: names.length ? names.map((name) => `读取 ${name} 技能`) : [`${count} tools`],
-      entries,
-      failed: entries.some((entry) => activityEntryFailed(entry))
-    };
-  }
-
-  if (kind === "commands") {
-    const commandActions = entries.filter(
-      (entry) => isCommandActivity(entry) && !isReadActivity(entry) && !isListActivity(entry) && !isSearchActivity(entry)
-    );
-    const readActions = entries.filter((entry) => isReadActivity(entry));
-    const listActions = entries.filter((entry) => isListActivity(entry));
-    const searchActions = entries.filter((entry) => isSearchActivity(entry));
-    return {
-      key: `commands-${index}`,
-      kind,
-      title: commandActivityTitle({
-        read: readActions.length,
-        list: listActions.length,
-        search: searchActions.length,
-        command: commandActions.length
-      }),
-      details: entries.map(commandActivityDetail),
-      entries,
-      failed: entries.some((entry) => activityEntryFailed(entry))
-    };
-  }
-
-  if (kind === "tools") {
-    return {
-      key: `tools-${index}`,
-      kind,
-      title: `Used ${entries.length} tools`,
-      details: entries.map(genericToolDetail),
-      entries,
-      failed: entries.some((entry) => activityEntryFailed(entry))
-    };
-  }
-
-  if (kind === "files") {
-    const stats = entries.reduce(
-      (sum, entry) => {
-        if (entry.body.kind === "diff") {
-          return { added: sum.added + entry.body.added, removed: sum.removed + entry.body.removed };
-        }
-        if (entry.body.kind === "tool") {
-          return { added: sum.added + (entry.body.added ?? 0), removed: sum.removed + (entry.body.removed ?? 0) };
-        }
-        return sum;
-      },
-      { added: 0, removed: 0 }
-    );
-    return {
-      key: `files-${index}`,
-      kind,
-      title: `Files changed · ${entries.length} · +${stats.added} -${stats.removed}`,
-      details: entries.map(fileChangeDetail),
-      entries,
-      failed: entries.some((entry) => activityEntryFailed(entry))
-    };
-  }
-
-  return {
-    key: `fallback-${index}`,
-    kind,
-    title: `Used ${entries.length} tools`,
-    details: entries.map(genericToolDetail),
-    entries,
-    failed: entries.some((entry) => activityEntryFailed(entry))
-  };
-}
-
-function inlineActivityActionRows(section: InlineActivitySection): InlineActivityActionRow[] {
-  return section.entries.flatMap((entry, entryIndex) => {
-    if (isSkillsLoadedActivity(entry)) {
-      const names = skillNamesFromActivity(entry);
-      if (names.length) {
-        return names.map((name, nameIndex) => ({
-          key: `${entry.id}-skill-${nameIndex}`,
-          label: `读取 ${name} 技能`,
-          entry
-        }));
-      }
-    }
-
-    return [
-      {
-        key: entry.id,
-        label: section.details[entryIndex] ?? genericToolDetail(entry),
-        entry
-      }
-    ];
-  });
-}
-
-function commandActivityTitle(counts: { read: number; list: number; search: number; command: number }): string {
-  const parts: string[] = [];
-  if (counts.read) {
-    parts.push(`已读取 ${counts.read} 个文件`);
-  }
-  if (counts.list) {
-    parts.push(`已浏览 ${counts.list} 个目录`);
-  }
-  if (counts.search) {
-    parts.push(`已搜索 ${counts.search} 次`);
-  }
-  if (counts.command) {
-    parts.push(`已运行 ${counts.command} 条命令`);
-  }
-  return parts.join("") || "已运行命令";
-}
-
-function commandActivityDetail(entry: TimelineEntry): string {
-  const command = activityCommandText(entry);
-  if (isReadActivity(entry)) {
-    return `Read ${commandTarget(command, "read")}`;
-  }
-  if (isListActivity(entry)) {
-    return `List ${commandTarget(command, "list")}`;
-  }
-  if (isSearchActivity(entry)) {
-    return `Searched ${commandTarget(command, "search")}`;
-  }
-  return `已运行 ${shortInlineText(command || "command")}`;
-}
-
-function fileChangeDetail(entry: TimelineEntry): string {
-  if (entry.body.kind === "diff") {
-    return `${shortInlineText(entry.body.path)} · +${entry.body.added} -${entry.body.removed}`;
-  }
-  if (entry.body.kind === "tool") {
-    return `${shortInlineText(entry.body.diffPath ?? entry.body.tool)} · +${entry.body.added ?? 0} -${entry.body.removed ?? 0}`;
-  }
-  return genericToolDetail(entry);
-}
-
-function genericToolDetail(entry: TimelineEntry): string {
-  const body = entry.body;
-  if (body.kind === "tool") {
-    return shortInlineText([body.server, body.tool].filter(Boolean).join(" · "));
-  }
-  if (body.kind === "command") {
-    return `已运行 ${shortInlineText(body.command)}`;
-  }
-  if (body.kind === "reasoning") {
-    return body.done ? "Thinking" : "Thinking...";
-  }
-  if (body.kind === "diff") {
-    return fileChangeDetail(entry);
-  }
-  return shortInlineText(entry.id);
-}
-
-function activityCommandText(entry: TimelineEntry): string {
-  if (entry.body.kind === "command") {
-    return entry.body.command;
-  }
-  if (entry.body.kind === "tool") {
-    return entry.body.tool;
-  }
-  return "";
-}
-
-function commandTarget(command: string, kind: "read" | "list" | "search"): string {
-  const words = shellWords(command);
-  if (!words.length) {
-    return kind === "search" ? "search" : "target";
-  }
-  if (kind === "search") {
-    const query = words.slice(1).find((word) => !word.startsWith("-"));
-    return shortInlineText(query ?? words.at(-1) ?? "search");
-  }
-  const target = [...words].reverse().find((word) => !word.startsWith("-") && !/^\d+(,\d+)?p$/.test(word));
-  return shortInlineText(target ?? words.at(-1) ?? "target");
-}
-
-function shellWords(command: string): string[] {
-  const words: string[] = [];
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  for (const match of command.matchAll(pattern)) {
-    const word = match[1] ?? match[2] ?? match[3] ?? "";
-    if (word) {
-      words.push(word);
-    }
-  }
-  return words;
-}
-
-function shortInlineText(text: string): string {
-  const clean = text.replace(/\s+/g, " ").trim();
-  return clean.length > 88 ? `${clean.slice(0, 85)}...` : clean;
-}
-
-function isCommandActivity(entry: TimelineEntry): boolean {
-  return entry.body.kind === "command" || (entry.body.kind === "tool" && entry.body.toolKind === "command");
-}
-
-function isFileChangeActivity(entry: TimelineEntry): boolean {
-  return entry.body.kind === "tool" && entry.body.toolKind === "file";
-}
-
-function isSkillsLoadedActivity(entry: TimelineEntry): boolean {
-  return entry.body.kind === "tool" && entry.body.server === "skills" && entry.body.tool === "loaded";
-}
-
-function skillNamesFromActivity(entry: TimelineEntry): string[] {
-  if (!isSkillsLoadedActivity(entry) || entry.body.kind !== "tool") {
-    return [];
-  }
-  return (entry.body.result ?? "")
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-}
-
-function isToolNamed(entry: TimelineEntry, pattern: RegExp): boolean {
-  if (entry.body.kind === "command") {
-    return pattern.test(entry.body.command.split(/\s+/)[0] ?? "");
-  }
-  if (entry.body.kind !== "tool") {
-    return false;
-  }
-  return pattern.test(entry.body.tool.split(/\s+/)[0] ?? "");
-}
-
-function isReadActivity(entry: TimelineEntry): boolean {
-  if (entry.body.kind === "tool" && entry.body.actionKind === "read") {
-    return true;
-  }
-  return isToolNamed(entry, /^(read|cat|sed|head|tail|less|nl)$/i);
-}
-
-function isListActivity(entry: TimelineEntry): boolean {
-  if (entry.body.kind === "tool" && entry.body.actionKind === "list") {
-    return true;
-  }
-  return isToolNamed(entry, /^(list|ls|dir|tree)$/i);
-}
-
-function isSearchActivity(entry: TimelineEntry): boolean {
-  if (entry.body.kind === "tool" && entry.body.actionKind === "search") {
-    return true;
-  }
-  return isToolNamed(entry, /^(search|rg|grep|find)$/i);
-}
-
 function activityEntryFailed(entry: TimelineEntry): boolean {
   return (
     (entry.body.kind === "tool" && entry.body.status === "failed") ||
@@ -1383,41 +1059,14 @@ function activityEntryFailed(entry: TimelineEntry): boolean {
   );
 }
 
-function shouldRenderDirectActivityDetails(section: InlineActivitySection): boolean {
-  return section.failed || section.kind === "thinking" || section.kind === "files";
-}
-
-function DirectActivityDetails({ section }: { section: InlineActivitySection }): JSX.Element {
-  return (
-    <div style={activityDetailsStyle}>
-      {section.entries.map((entry, index) => (
-        <DirectActivityDetail
-          key={entry.id}
-          entry={entry}
-          label={section.details[index] ?? genericToolDetail(entry)}
-          showTitle={section.kind !== "thinking"}
-        />
-      ))}
-    </div>
-  );
-}
-
-function DirectActivityDetail({
-  entry,
-  label,
-  showTitle
-}: {
-  entry: TimelineEntry;
-  label: string;
-  showTitle: boolean;
-}): JSX.Element {
+function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
   const body = entry.body;
   const cacheKey = timelineEntryDerivationKey(entry);
   if (body.kind === "reasoning") {
     return (
       <ActivityDetailText
+        title={body.done ? "Thinking" : "Thinking..."}
         text={body.text.trim() || (body.done ? "" : "Thinking...")}
-        showTitle={false}
         cacheKey={cacheKey}
       />
     );
@@ -1434,17 +1083,28 @@ function DirectActivityDetail({
         />
       );
     }
+    if (body.toolKind === "command") {
+      return (
+        <CommandOutputDetail
+          command={body.tool}
+          output={commandOutputText(body.tool, body.result)}
+          status={body.status}
+          cwd={looksLikeWorkingDirectory(body.server) ? body.server : undefined}
+          cacheKey={cacheKey}
+        />
+      );
+    }
+    return <ToolActivityDetail argumentsText={body.arguments} result={body.result} cacheKey={cacheKey} />;
+  }
+  if (body.kind === "command") {
     return (
-      <ActivityDetailText
-        title={body.toolKind === "command" ? body.tool : `${body.diffPath ?? body.tool}`}
-        text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
-        showTitle={showTitle}
+      <CommandOutputDetail
+        command={body.command}
+        output={commandOutputText(body.command, body.output)}
+        status={body.status}
         cacheKey={cacheKey}
       />
     );
-  }
-  if (body.kind === "command") {
-    return <ActivityDetailText title={body.command} text={body.output ?? body.command} showTitle={showTitle} cacheKey={cacheKey} />;
   }
   if (body.kind === "diff") {
     return (
@@ -1453,40 +1113,9 @@ function DirectActivityDetail({
         added={body.added}
         removed={body.removed}
         diff={body.diff}
-        showTitle={showTitle}
         cacheKey={cacheKey}
       />
     );
-  }
-  return <ActivityDetailText title={label} text={label} showTitle={showTitle} cacheKey={cacheKey} />;
-}
-
-function ActivityDetail({ entry }: { entry: TimelineEntry }): JSX.Element {
-  const body = entry.body;
-  const cacheKey = timelineEntryDerivationKey(entry);
-  if (body.kind === "reasoning") {
-    return (
-      <ActivityDetailText
-        title={body.done ? "Thinking" : "Thinking..."}
-        text={body.text.trim() || (body.done ? "" : "Thinking...")}
-        cacheKey={cacheKey}
-      />
-    );
-  }
-  if (body.kind === "tool") {
-    return (
-      <ActivityDetailText
-        title={body.toolKind === "command" ? body.tool : `${body.server} · ${body.diffPath ?? body.tool}`}
-        text={[body.arguments, body.result].filter(Boolean).join("\n") || body.tool}
-        cacheKey={cacheKey}
-      />
-    );
-  }
-  if (body.kind === "command") {
-    return <ActivityDetailText title={body.command} text={body.output ?? body.command} cacheKey={cacheKey} />;
-  }
-  if (body.kind === "diff") {
-    return <ActivityDetailText title={body.path} text={body.diff} cacheKey={cacheKey} />;
   }
   return <></>;
 }
@@ -1507,7 +1136,7 @@ function InlineDiffActivityDetail({
   cacheKey?: string;
 }): JSX.Element {
   return (
-    <div style={activityDetailItemStyle}>
+    <div data-activity-detail="diff" style={{ ...activityDetailPanelStyle, ...activityDetailItemStyle }}>
       {showTitle ? (
         <div style={inlineDiffHeaderStyle}>
           <span style={inlineDiffPathStyle}>{path}</span>
@@ -1527,6 +1156,114 @@ function fileActivityDiffText(body: Extract<TimelineEntry["body"], { kind: "tool
     return `${args}\n${result}`;
   }
   return result || args || body.tool;
+}
+
+function CommandOutputDetail({
+  command,
+  output,
+  status,
+  cwd,
+  cacheKey
+}: {
+  command: string;
+  output: string;
+  status: "running" | "success" | "failed";
+  cwd?: string;
+  cacheKey?: string;
+}): JSX.Element {
+  return (
+    <div data-activity-detail="stdout" style={activityDetailPanelStyle}>
+      <div style={commandDetailHeaderStyle}>
+        <code style={commandDetailTextStyle}>{command}</code>
+        <span style={{ ...commandStatusStyle, ...commandStatusTone(status) }}>{commandStatusLabel(status)}</span>
+      </div>
+      {cwd ? <div style={commandCwdStyle}>{cwd}</div> : null}
+      <div style={activityDetailSectionLabelStyle}>输出</div>
+      <LongTextPreview
+        text={output}
+        emptyText={status === "running" ? "等待输出..." : "（无输出）"}
+        copyLabel="复制完整输出"
+        maxLines={80}
+        cacheKey={cacheKey ? `${cacheKey}:stdout` : undefined}
+        variant="terminal"
+      />
+    </div>
+  );
+}
+
+function ToolActivityDetail({
+  argumentsText,
+  result,
+  cacheKey
+}: {
+  argumentsText?: string;
+  result?: string;
+  cacheKey?: string;
+}): JSX.Element {
+  const hasArguments = Boolean(argumentsText?.trim());
+  const hasResult = Boolean(result?.trim());
+  return (
+    <div data-activity-detail="tool" style={activityDetailPanelStyle}>
+      {hasArguments ? (
+        <ActivityDetailSection label="参数">
+          <LongTextPreview
+            text={argumentsText ?? ""}
+            emptyText="（无参数）"
+            copyLabel="复制完整参数"
+            maxLines={48}
+            cacheKey={cacheKey ? `${cacheKey}:arguments` : undefined}
+          />
+        </ActivityDetailSection>
+      ) : null}
+      <ActivityDetailSection label="结果">
+        <LongTextPreview
+          text={result ?? ""}
+          emptyText={hasResult ? "" : "（无结果）"}
+          copyLabel="复制完整结果"
+          maxLines={80}
+          cacheKey={cacheKey ? `${cacheKey}:result` : undefined}
+        />
+      </ActivityDetailSection>
+    </div>
+  );
+}
+
+function ActivityDetailSection({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+  return (
+    <div style={activityDetailSectionStyle}>
+      <div style={activityDetailSectionLabelStyle}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function commandOutputText(command: string, output?: string): string {
+  const text = output?.trimEnd() ?? "";
+  if (text === command) {
+    return "";
+  }
+  return text.startsWith(`${command}\n`) ? text.slice(command.length + 1) : text;
+}
+
+function looksLikeWorkingDirectory(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function commandStatusLabel(status: "running" | "success" | "failed"): string {
+  if (status === "running") {
+    return "运行中";
+  }
+  return status === "success" ? "已完成" : "失败";
+}
+
+function commandStatusTone(status: "running" | "success" | "failed"): React.CSSProperties {
+  if (status === "success") {
+    return { color: "var(--cw-success)", borderColor: "color-mix(in srgb, var(--cw-success) 36%, transparent)" };
+  }
+  if (status === "failed") {
+    return { color: "var(--cw-danger)", borderColor: "color-mix(in srgb, var(--cw-danger) 36%, transparent)" };
+  }
+  return { color: "var(--cw-accent)", borderColor: "color-mix(in srgb, var(--cw-accent) 36%, transparent)" };
 }
 
 function ActivityDetailText({
@@ -1730,15 +1467,6 @@ const plainAgentTextStyle: React.CSSProperties = {
   overflowWrap: "anywhere"
 };
 
-const timelineTimeStyle: React.CSSProperties = {
-  display: "block",
-  padding: "0 14px",
-  margin: "0 0 2px",
-  color: "var(--cw-fg-muted)",
-  fontSize: 11,
-  lineHeight: 1.3
-};
-
 const timelineRowStyle: React.CSSProperties = {
   maxWidth: "100%",
   minWidth: 0,
@@ -1766,24 +1494,12 @@ const timelineCompletenessButtonStyle: React.CSSProperties = {
   cursor: "pointer"
 };
 
-const timelineTimeCompactStyle: React.CSSProperties = {
-  display: "block",
-  margin: "0 0 1px 20px",
-  color: "var(--cw-fg-muted)",
-  fontSize: 11,
-  lineHeight: 1.3
-};
-
 const inlineActivityLogStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 6,
   padding: "2px 14px 4px",
   color: "var(--cw-fg-muted)"
-};
-
-const inlineActivitySectionStyle: React.CSSProperties = {
-  minWidth: 0
 };
 
 const inlineActivityButtonStyle: React.CSSProperties = {
@@ -1796,15 +1512,8 @@ const inlineActivityButtonStyle: React.CSSProperties = {
   border: "none",
   minWidth: 0,
   color: "var(--cw-fg-muted)",
-  textAlign: "left"
-};
-
-const inlineActivityIconStyle: React.CSSProperties = {
-  flex: "0 0 auto",
-  width: 14,
-  color: "var(--cw-fg-muted)",
-  fontSize: 12,
-  lineHeight: 1
+  textAlign: "left",
+  cursor: "pointer"
 };
 
 const inlineActivityTitleStyle: React.CSSProperties = {
@@ -1819,15 +1528,37 @@ const inlineActivityTitleStyle: React.CSSProperties = {
 };
 
 const inlineActivityFailedStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
   flex: "0 0 auto",
   color: "var(--cw-danger)",
   fontSize: 12
 };
 
-const inlineActivityChevronStyle: React.CSSProperties = {
+const activityActionListStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  maxHeight: "320px",
+  overflowY: "auto",
+  padding: "2px 0 2px 18px",
+  scrollbarGutter: "stable",
+  minWidth: 0
+};
+
+const activityActionItemStyle: React.CSSProperties = {
+  minWidth: 0
+};
+
+const activityActionIconStyle: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
   flex: "0 0 auto",
-  width: 12,
-  color: "var(--cw-fg-muted)"
+  color: "var(--cw-fg-subtle)"
 };
 
 const inlineActivityEntryButtonStyle: React.CSSProperties = {
@@ -1835,12 +1566,13 @@ const inlineActivityEntryButtonStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
-  padding: "1px 0",
+  padding: "4px 0",
   background: "transparent",
   border: "none",
   color: "var(--cw-fg-muted)",
   textAlign: "left",
-  minWidth: 0
+  minWidth: 0,
+  cursor: "pointer"
 };
 
 const inlineActivityEntryTitleStyle: React.CSSProperties = {
@@ -1854,18 +1586,68 @@ const inlineActivityEntryTitleStyle: React.CSSProperties = {
   lineHeight: 1.45
 };
 
-const activityDetailsStyle: React.CSSProperties = {
-  margin: "4px 0 2px 20px",
-  padding: "6px 0 0",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  maxHeight: 520,
-  overflowY: "auto"
+const activityDetailItemStyle: React.CSSProperties = {
+  minWidth: 0,
+  maxWidth: "100%"
 };
 
-const activityDetailItemStyle: React.CSSProperties = {
+const activityDetailPanelStyle: React.CSSProperties = {
+  margin: "4px 0 6px 22px",
+  padding: "6px 0 4px 10px",
+  maxWidth: "calc(100% - 22px)",
+  minWidth: 0,
+  borderLeft: "1px solid var(--cw-border)",
+  overflow: "hidden"
+};
+
+const commandDetailHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+  paddingBottom: 4
+};
+
+const commandDetailTextStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "var(--cw-fg)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 12
+};
+
+const commandStatusStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  padding: "1px 5px",
+  border: "1px solid",
+  borderRadius: 4,
+  fontSize: 11,
+  lineHeight: 1.4
+};
+
+const commandCwdStyle: React.CSSProperties = {
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "var(--cw-fg-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  paddingBottom: 5
+};
+
+const activityDetailSectionStyle: React.CSSProperties = {
   minWidth: 0
+};
+
+const activityDetailSectionLabelStyle: React.CSSProperties = {
+  color: "var(--cw-fg-subtle)",
+  fontSize: 11,
+  fontWeight: 600,
+  lineHeight: 1.4,
+  paddingTop: 3
 };
 
 const activityDetailTitleStyle: React.CSSProperties = {
@@ -1907,9 +1689,8 @@ const inlineDiffRemovedStyle: React.CSSProperties = {
 
 const activityDetailPreviewStyle: React.CSSProperties = {
   margin: "4px 0 0",
-  padding: 8,
-  borderRadius: 8,
-  background: "var(--cw-bg-elevated)",
+  padding: "0 8px",
+  borderTop: "1px solid var(--cw-border)",
   color: "var(--cw-fg)"
 };
 
@@ -1933,6 +1714,7 @@ function UserMessage({
   const body = entry.body as Extract<TimelineEntry["body"], { kind: "user-message" }>;
   const [menuOpen, setMenuOpen] = useState(false);
   const failed = body.status === "failed";
+  const hasMessageBubble = Boolean(body.text || body.imagePaths?.length || body.skillReferences?.length || failed);
 
   function pressHandler(e: React.PointerEvent): void {
     const timer = window.setTimeout(() => setMenuOpen(true), 450);
@@ -1943,107 +1725,137 @@ function UserMessage({
   }
 
   return (
-    <div
-      onPointerDown={pressHandler}
-      style={{
-        padding: "10px 14px",
-        borderLeft: "3px solid var(--cw-user-strip)",
-        background: failed ? "var(--cw-danger-bg)" : "var(--cw-bg-elevated)",
-        margin: "2px 0",
-        whiteSpace: "pre-wrap",
-        userSelect: "text",
-        position: "relative"
-      }}
-    >
-      {body.imagePaths?.length ? (
-        <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-          {body.imagePaths.map((src) => (
-            <ImageThumb key={src} src={src} onPreview={onPreviewImage} />
-          ))}
-        </div>
-      ) : null}
-      {body.skillReferences?.length ? (
-        <div style={skillReferenceRowStyle}>
-          {body.skillReferences.map((skill) => (
-            <span key={`${skill.name}\u0001${skill.path}`} style={skillReferenceChipStyle}>
-              {skill.name}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <div style={{ color: failed ? "var(--cw-danger)" : "var(--cw-fg)" }}>{body.text}</div>
-      {failed ? (
-        <button
-          type="button"
-          onClick={onResend}
-          style={{
-            marginTop: 8,
-            padding: "4px 10px",
-            fontSize: 12,
-            borderRadius: 8,
-            border: "1px solid var(--cw-danger)",
-            background: "transparent",
-            color: "var(--cw-danger)"
-          }}
-        >
-          重试
-        </button>
-      ) : null}
-      {menuOpen ? (
+    <div data-user-message-row="true" style={userMessageRowStyle}>
+      {hasMessageBubble ? (
         <div
-          role="presentation"
-          onClick={() => setMenuOpen(false)}
-          onPointerDown={(e) => e.stopPropagation()}
+          data-user-message-bubble="true"
+          onPointerDown={pressHandler}
           style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "center",
-            zIndex: 80
+            ...userMessageBubbleStyle,
+            background: failed ? "var(--cw-danger-bg)" : "var(--cw-bg-elevated)"
           }}
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            style={messageSheetStyle}
-          >
-            <div style={sheetHandleStyle} aria-hidden="true" />
-            <MessageSheetItem
-              label="复制"
-              onClick={() => {
-                navigator.clipboard?.writeText(body.text);
-                setMenuOpen(false);
-              }}
-            />
-            {!running && actionAvailable ? (
-              <>
-                <MessageSheetItem
-                  label="回滚到这里"
-                  divided
-                  onClick={() => {
-                    void onRewind();
-                    setMenuOpen(false);
-                  }}
-                />
-                <MessageSheetItem
-                  label="从这里 Fork"
-                  divided
-                  onClick={() => {
-                    void onFork();
-                    setMenuOpen(false);
-                  }}
-                />
-              </>
-            ) : null}
-            <MessageSheetItem label="取消" divided onClick={() => setMenuOpen(false)} />
+        {body.skillReferences?.length ? (
+          <div data-skill-reference-group="true" style={skillReferenceRowStyle}>
+            {body.skillReferences.map((skill) => (
+              <span
+                key={`${skill.name}\u0001${skill.path}`}
+                data-skill-reference-chip="true"
+                style={skillReferenceChipStyle}
+              >
+                <Box aria-hidden="true" size={15} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
+                <span style={skillReferenceLabelStyle}>{skillDisplayName(skill.name)}</span>
+              </span>
+            ))}
           </div>
+        ) : null}
+        {body.imagePaths?.length ? (
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            {body.imagePaths.map((src) => (
+              <ImageThumb key={src} src={src} onPreview={onPreviewImage} />
+            ))}
+          </div>
+        ) : null}
+        {body.text ? <div data-user-message-text="true" style={{ color: failed ? "var(--cw-danger)" : "var(--cw-fg)" }}>{body.text}</div> : null}
+        {failed ? (
+          <button
+            type="button"
+            onClick={onResend}
+            style={{
+              marginTop: 8,
+              padding: "4px 10px",
+              fontSize: 12,
+              borderRadius: 8,
+              border: "1px solid var(--cw-danger)",
+              background: "transparent",
+              color: "var(--cw-danger)"
+            }}
+          >
+            重试
+          </button>
+        ) : null}
+        {menuOpen ? (
+          <div
+            role="presentation"
+            onClick={() => setMenuOpen(false)}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.45)",
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              zIndex: 80
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={messageSheetStyle}
+            >
+              <div style={sheetHandleStyle} aria-hidden="true" />
+              <MessageSheetItem
+                label="复制"
+                onClick={() => {
+                  navigator.clipboard?.writeText(body.text);
+                  setMenuOpen(false);
+                }}
+              />
+              {!running && actionAvailable ? (
+                <>
+                  <MessageSheetItem
+                    label="回滚到这里"
+                    divided
+                    onClick={() => {
+                      void onRewind();
+                      setMenuOpen(false);
+                    }}
+                  />
+                  <MessageSheetItem
+                    label="从这里 Fork"
+                    divided
+                    onClick={() => {
+                      void onFork();
+                      setMenuOpen(false);
+                    }}
+                  />
+                </>
+              ) : null}
+              <MessageSheetItem label="取消" divided onClick={() => setMenuOpen(false)} />
+            </div>
+          </div>
+        ) : null}
         </div>
       ) : null}
     </div>
   );
 }
+
+const userMessageRowStyle: React.CSSProperties = {
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  justifyContent: "flex-end",
+  minWidth: 0,
+  margin: "2px 0"
+};
+
+const userMessageBubbleStyle: React.CSSProperties = {
+  width: "fit-content",
+  maxWidth: "min(82%, 760px)",
+  minWidth: 0,
+  boxSizing: "border-box",
+  padding: "10px 14px",
+  borderRadius: 16,
+  color: "var(--cw-fg)",
+  textAlign: "left",
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  userSelect: "text",
+  position: "relative"
+};
 
 function MessageSheetItem({
   label,
@@ -2105,7 +1917,10 @@ const sheetHandleStyle: React.CSSProperties = {
 const skillReferenceRowStyle: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
+  justifyContent: "flex-start",
   gap: 6,
+  width: "100%",
+  minWidth: 0,
   marginBottom: 8,
   whiteSpace: "normal"
 };
@@ -2113,16 +1928,25 @@ const skillReferenceRowStyle: React.CSSProperties = {
 const skillReferenceChipStyle: React.CSSProperties = {
   maxWidth: "100%",
   minWidth: 0,
-  padding: "3px 8px",
-  borderRadius: 8,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 10px",
+  borderRadius: 10,
   border: "1px solid var(--cw-border)",
-  background: "var(--cw-card)",
-  color: "var(--cw-fg-muted)",
+  background: "var(--cw-surface)",
+  color: "var(--cw-accent)",
   fontSize: 12,
   lineHeight: 1.4,
+  boxSizing: "border-box"
+};
+
+const skillReferenceLabelStyle: React.CSSProperties = {
+  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
-  whiteSpace: "nowrap"
+  whiteSpace: "nowrap",
+  color: "var(--cw-fg)"
 };
 
 export function __getTimelineDerivationDiagnostics(): TimelineDerivationDiagnostics {

@@ -31,7 +31,7 @@ describe("Timeline", () => {
     vi.useRealTimers();
   });
 
-  it("为用户、助手和 activity 消息显示相对时间", () => {
+  it("不为用户、助手和 activity 消息显示相对时间", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00.000Z"));
     const now = Date.now();
@@ -75,9 +75,131 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("3 分钟前")).toBeInTheDocument();
-    expect(screen.getByText("2 天前")).toBeInTheDocument();
-    expect(screen.getByText("10 分钟前")).toBeInTheDocument();
+    expect(screen.queryByText("3 分钟前")).not.toBeInTheDocument();
+    expect(screen.queryByText("2 天前")).not.toBeInTheDocument();
+    expect(screen.queryByText("10 分钟前")).not.toBeInTheDocument();
+    expect(document.querySelector("time")).toBeNull();
+  });
+
+  it("隐藏完成态 reasoning，不展示摘要或 Thinking 行", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "reasoning-complete",
+            turnId: "turn-1",
+            createdAt: 1,
+            body: {
+              kind: "reasoning",
+              text: "Planning the implementation",
+              done: true
+            }
+          },
+          {
+            id: "agent-1",
+            turnId: "turn-1",
+            createdAt: 2,
+            body: { kind: "agent-message", text: "实现完成" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("Planning the implementation")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Thinking/)).not.toBeInTheDocument();
+    expect(screen.getByText("实现完成")).toBeInTheDocument();
+  });
+
+  it("运行态最多显示一个临时 Thinking，占位在后续 activity 到达后消失", () => {
+    const reasoningEntries = [
+      {
+        id: "reasoning-running-1",
+        turnId: "turn-live",
+        createdAt: 1,
+        body: {
+          kind: "reasoning" as const,
+          text: "Inspecting the repository",
+          done: false
+        }
+      },
+      {
+        id: "reasoning-running-2",
+        turnId: "turn-live",
+        createdAt: 2,
+        body: {
+          kind: "reasoning" as const,
+          text: "Planning the fix",
+          done: false
+        }
+      }
+    ];
+    const { rerender } = render(
+      <Timeline running activeTurnId="turn-live" entries={reasoningEntries} />
+    );
+
+    expect(screen.getAllByText("Thinking...")).toHaveLength(1);
+    expect(screen.queryByText("Inspecting the repository")).not.toBeInTheDocument();
+    expect(screen.queryByText("Planning the fix")).not.toBeInTheDocument();
+
+    rerender(
+      <Timeline
+        running
+        activeTurnId="turn-live"
+        entries={[
+          ...reasoningEntries,
+          {
+            id: "tool-after-reasoning",
+            turnId: "turn-live",
+            createdAt: 3,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "rg timeline src",
+              status: "success",
+              result: "src/web/components/Timeline.tsx"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+    expect(screen.getByText("搜索了代码")).toBeInTheDocument();
+  });
+
+  it("上下文压缩开始时显示轻量运行状态，完成后原位更新", () => {
+    const entry = {
+      id: "compact-1",
+      turnId: "turn-live",
+      createdAt: 1,
+      body: {
+        kind: "system" as const,
+        text: "正在自动压缩上下文",
+        systemKind: "context-compaction" as const,
+        status: "running" as const
+      }
+    };
+    const { container, rerender } = render(<Timeline running activeTurnId="turn-live" entries={[entry]} />);
+
+    expect(screen.getByText("正在自动压缩上下文")).toBeInTheDocument();
+    expect(screen.queryByText("压缩上下文已完成")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-context-compaction-status='running'] svg")).not.toBeNull();
+
+    rerender(
+      <Timeline
+        entries={[
+          {
+            ...entry,
+            body: { ...entry.body, text: "压缩上下文已完成", status: "success" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("正在自动压缩上下文")).not.toBeInTheDocument();
+    expect(screen.getByText("压缩上下文已完成")).toBeInTheDocument();
+    expect(container.querySelector("[data-context-compaction-status='success'] svg")).not.toBeNull();
   });
 
   it("不为排序占位 createdAt 显示错误的远古相对时间", () => {
@@ -391,7 +513,7 @@ describe("Timeline", () => {
     const topSpacer = container.querySelector("[data-timeline-spacer='top']") as HTMLDivElement;
     expect(topSpacer.style.minHeight).toBe("1722px");
     expect(container.querySelectorAll("[data-timeline-row='true']")).toHaveLength(80);
-    expect(screen.getByRole("button", { name: /已运行 100 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
   });
 
   it("activity group 跨旧 entry window 边界时保持完整成员和稳定 block key", () => {
@@ -420,7 +542,7 @@ describe("Timeline", () => {
     const { container, rerender } = render(<Timeline entries={entries} />);
     const activityRow = container.querySelector("[data-timeline-block-id*='turn-shared-activity']");
     expect(activityRow).not.toBeNull();
-    expect(screen.getByRole("button", { name: /已运行 90 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
 
     rerender(
       <Timeline
@@ -443,7 +565,7 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: /已运行 91 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
     expect(container.querySelector("[data-timeline-block-id*='turn-shared-activity']")).not.toBeNull();
   });
 
@@ -784,7 +906,7 @@ describe("Timeline", () => {
     expect(screen.getByText("历史回复 125")).toBeInTheDocument();
   });
 
-  it("短列表 prepend 后动态高度变化仍保持原消息 identity 锚点", () => {
+  it("短列表 prepend 与高度变化均不与页面 DOM 锚点争抢 scrollTop", () => {
     let resizeCallback: ResizeObserverCallback | null = null;
     class ResizeObserverMock {
       constructor(callback: ResizeObserverCallback) {
@@ -852,13 +974,13 @@ describe("Timeline", () => {
       </div>
     );
 
-    expect(scrollTop).toBe(246);
+    expect(scrollTop).toBe(0);
     expanded = true;
     act(() => {
       resizeCallback?.([], {} as ResizeObserver);
     });
 
-    expect(scrollTop).toBe(630);
+    expect(scrollTop).toBe(0);
     expect(screen.getByText("短列表回复 0")).toBeInTheDocument();
 
     getBoundingClientRect.mockRestore();
@@ -932,7 +1054,7 @@ describe("Timeline", () => {
     act(() => {
       fireEvent.scroll(scroller);
     });
-    expect(screen.getByRole("button", { name: /已运行 40 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
   });
 
   it("锚点 block 被删除时优先恢复相邻 before block", () => {
@@ -1021,7 +1143,7 @@ describe("Timeline", () => {
     act(() => {
       fireEvent.scroll(scroller);
     });
-    expect(screen.getByRole("button", { name: /已运行 20 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
 
     const olderEntries = Array.from({ length: 5 }, (_value, index) => ({
       id: `older-${index}`,
@@ -1056,7 +1178,61 @@ describe("Timeline", () => {
     );
 
     expect(scroller.scrollTop).toBe(10_250);
-    expect(screen.getByRole("button", { name: /已运行 21 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
+  });
+
+  it("分页边界活动组使用末尾成员作为稳定 DOM 锚点", () => {
+    const recentActivities = Array.from({ length: 3 }, (_value, index) => ({
+      id: `activity-${index}`,
+      turnId: "turn-pagination-boundary",
+      createdAt: index,
+      body: {
+        kind: "tool" as const,
+        toolKind: "command" as const,
+        server: "command",
+        tool: `command-${index}`,
+        status: "success" as const,
+        result: `result-${index}`
+      }
+    }));
+    const { container, rerender } = render(
+      <div className="cw-thread-scroller">
+        <Timeline entries={recentActivities} />
+      </div>
+    );
+
+    expect(container.querySelector("[data-timeline-row='true']")).toHaveAttribute(
+      "data-timeline-entry-id",
+      "activity-2"
+    );
+
+    rerender(
+      <div className="cw-thread-scroller">
+        <Timeline
+          entries={[
+            {
+              id: "activity-before",
+              turnId: "turn-pagination-boundary",
+              createdAt: -1,
+              body: {
+                kind: "tool",
+                toolKind: "command",
+                server: "command",
+                tool: "command-before",
+                status: "success",
+                result: "result-before"
+              }
+            },
+            ...recentActivities
+          ]}
+        />
+      </div>
+    );
+
+    expect(container.querySelector("[data-timeline-row='true']")).toHaveAttribute(
+      "data-timeline-entry-id",
+      "activity-2"
+    );
   });
 
   it("ResizeObserver 高度修正后保持 block intra-offset", () => {
@@ -1230,7 +1406,7 @@ describe("Timeline", () => {
     const { container } = render(<Timeline entries={entries} />);
 
     expect(container.querySelectorAll("[data-timeline-row='true']")).toHaveLength(80);
-    expect(screen.getByRole("button", { name: /已运行 1000 条命令/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "运行了命令" })).toBeInTheDocument();
     expect((container.querySelector("[data-timeline-spacer='top']") as HTMLDivElement).style.minHeight).toBe(
       `${1_121 * 82}px`
     );
@@ -1334,9 +1510,9 @@ describe("Timeline", () => {
     ];
 
     const { rerender } = render(<Timeline entries={entries} />);
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("编辑了文件并运行了命令").closest("button")!);
     await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
-    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "已编辑 src/app.ts +2 -1" }));
 
     __resetMarkdownDiagnostics();
     __resetDiffViewDiagnostics();
@@ -1421,9 +1597,9 @@ describe("Timeline", () => {
     ];
 
     const { rerender } = render(<Timeline entries={baseEntries} />);
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("编辑了文件并运行了命令").closest("button")!);
     await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
-    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "已编辑 src/app.ts +2 -1" }));
 
     __resetMarkdownDiagnostics();
     __resetDiffViewDiagnostics();
@@ -1519,7 +1695,7 @@ describe("Timeline", () => {
     expect(screen.queryByRole("dialog", { name: "图片预览" })).not.toBeInTheDocument();
   });
 
-  it("用户消息把 Skill 引用显示为 chip，复制时只复制正文", () => {
+  it("用户消息把 Skill 引用显示在同一气泡顶部，复制时只复制正文", () => {
     vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -1550,7 +1726,12 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("openspec-explore")).toBeInTheDocument();
+    const skillChip = screen.getByText("OpenSpec Explore").closest("[data-skill-reference-chip='true']");
+    const bubble = screen.getByText("自建 agent 的意义是什么？").closest("[data-user-message-bubble='true']");
+    expect(skillChip).toBeInTheDocument();
+    expect(skillChip?.querySelector("svg")).not.toBeNull();
+    expect(bubble).toContainElement(skillChip as HTMLElement);
+    expect(bubble?.firstElementChild).toHaveAttribute("data-skill-reference-group", "true");
     expect(screen.queryByText("[skill]")).not.toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByText("自建 agent 的意义是什么？"));
@@ -1563,7 +1744,48 @@ describe("Timeline", () => {
     expect(writeText).toHaveBeenCalledWith("自建 agent 的意义是什么？");
   });
 
-  it("将同一 turn 内连续活动渲染为内联日志而不是 Activity 卡片", async () => {
+  it("仅含 Skill 引用时显示一个顶部上下文气泡，不渲染空正文或绝对路径", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "user-skill-only",
+            createdAt: 1,
+            body: {
+              kind: "user-message",
+              text: "",
+              skillReferences: [
+                {
+                  name: "grill-with-docs",
+                  path: "/Users/huangzy/.cc-switch/skills/grill-with-docs/SKILL.md"
+                },
+                {
+                  name: "domain-modeling",
+                  path: "/Users/huangzy/.codex/skills/domain-modeling/SKILL.md"
+                }
+              ],
+              status: "sent"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Grill with Docs")).toBeInTheDocument();
+    expect(screen.getByText("Domain Modeling")).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-user-message-bubble='true']")).toHaveLength(1);
+    const bubble = container.querySelector("[data-user-message-bubble='true']");
+    const skillGroup = bubble?.querySelector("[data-skill-reference-group='true']");
+    expect(skillGroup).toHaveStyle({
+      display: "flex",
+      flexWrap: "wrap",
+      justifyContent: "flex-start"
+    });
+    expect(bubble?.querySelector("[data-user-message-text='true']")).toBeNull();
+    expect(container.innerHTML).not.toContain("/Users/huangzy");
+  });
+
+  it("将同一 turn 内连续活动渲染为两级内联日志而不是 Activity 卡片", async () => {
     const user = userEvent.setup();
     const { container } = render(
       <Timeline
@@ -1610,33 +1832,270 @@ describe("Timeline", () => {
     );
 
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
-    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
     expect(screen.queryByText("先看结构")).not.toBeInTheDocument();
     expect(screen.queryByText("再运行测试")).not.toBeInTheDocument();
-    expect(screen.getByText("已运行 1 条命令")).toBeInTheDocument();
+    expect(screen.getByText("编辑了文件并运行了命令")).toBeInTheDocument();
     expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
-    expect(screen.getByText("Files changed · 1 · +2 -1")).toBeInTheDocument();
+    expect(screen.queryByText("已编辑 src/app.ts +2 -1")).not.toBeInTheDocument();
     expect(container.innerHTML).not.toContain("border-left: 3px solid");
 
-    await user.click(screen.getByText("Thinking").closest("button")!);
-
-    expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(1);
-    expect(screen.getByText(/\*\*先看结构\*\*/)).toBeInTheDocument();
-    expect(screen.getByText(/再运行测试/)).toBeInTheDocument();
-
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("编辑了文件并运行了命令").closest("button")!);
 
     expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/app.ts +2 -1" });
+    expect(fileAction).toBeInTheDocument();
     expect(screen.queryByText("passed")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
     expect(screen.getByText("passed")).toBeInTheDocument();
 
-    await user.click(screen.getByText("Files changed · 1 · +2 -1").closest("button")!);
-
-    expect(screen.queryByRole("button", { name: "src/app.ts · +2 -1" })).not.toBeInTheDocument();
+    await user.click(fileAction);
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
-    expect(screen.getByText("已完成")).toBeInTheDocument();
+    expect(screen.getAllByText("已完成").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("密集 activity 折叠为一个分类摘要，展开后保持原始顺序", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "reasoning-hidden",
+            turnId: "turn-dense",
+            createdAt: 1,
+            body: { kind: "reasoning", text: "Inspecting activity", done: true }
+          },
+          {
+            id: "skill-read",
+            turnId: "turn-dense",
+            createdAt: 2,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "sed -n '1,220p' /repo/.codex/skills/openspec-apply-change/SKILL.md",
+              status: "success",
+              result: "skill instructions"
+            }
+          },
+          {
+            id: "subagent-a-started",
+            turnId: "turn-dense",
+            createdAt: 3,
+            body: {
+              kind: "tool",
+              toolKind: "dynamic",
+              server: "sub-agent",
+              tool: "started",
+              status: "running",
+              result: JSON.stringify({
+                agentThreadId: "agent-thread-a",
+                agentPath: "draft_specs",
+                kind: "started"
+              })
+            }
+          },
+          {
+            id: "read-source",
+            turnId: "turn-dense",
+            createdAt: 4,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "sed -n '1,80p' src/app.ts",
+              status: "success",
+              result: "source content"
+            }
+          },
+          {
+            id: "subagent-a-completed",
+            turnId: "turn-dense",
+            createdAt: 5,
+            body: {
+              kind: "tool",
+              toolKind: "dynamic",
+              server: "sub-agent",
+              tool: "completed",
+              status: "success",
+              result: JSON.stringify({
+                agentThreadId: "agent-thread-a",
+                agentPath: "draft_specs",
+                kind: "completed"
+              })
+            }
+          },
+          {
+            id: "diff-source",
+            turnId: "turn-dense",
+            createdAt: 6,
+            body: {
+              kind: "diff",
+              path: "src/app.ts",
+              added: 1,
+              removed: 0,
+              diff: "--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n old\n+new"
+            }
+          },
+          {
+            id: "subagent-b-started",
+            turnId: "turn-dense",
+            createdAt: 7,
+            body: {
+              kind: "tool",
+              toolKind: "dynamic",
+              server: "sub-agent",
+              tool: "started",
+              status: "running",
+              result: JSON.stringify({
+                agentThreadId: "agent-thread-b",
+                agentPath: "review_specs",
+                kind: "started"
+              })
+            }
+          },
+          {
+            id: "command-failed",
+            turnId: "turn-dense",
+            createdAt: 8,
+            body: {
+              kind: "tool",
+              toolKind: "command",
+              server: "/repo",
+              tool: "npm test",
+              status: "failed",
+              result: "one test failed"
+            }
+          },
+          {
+            id: "mcp-search",
+            turnId: "turn-dense",
+            createdAt: 9,
+            body: {
+              kind: "tool",
+              toolKind: "mcp",
+              server: "mcp",
+              tool: "search",
+              status: "success",
+              result: "search result"
+            }
+          }
+        ]}
+      />
+    );
+
+    const headline = "编辑了文件、运行了命令等操作";
+    const disclosure = screen.getByRole("button", { name: `${headline}，失败` });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelectorAll("button[aria-expanded='false']")).toHaveLength(1);
+    expect(container.textContent).not.toContain("▣");
+    expect(container.querySelector("[data-activity-summary-icon='tool'] svg")).not.toBeNull();
+    expect(screen.queryByText("已加载 openspec-apply-change Skill")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Subagent draft_specs/)).not.toBeInTheDocument();
+    expect(screen.queryByText("src/app.ts")).not.toBeInTheDocument();
+    expect(screen.queryByText("one test failed")).not.toBeInTheDocument();
+
+    await user.click(disclosure);
+
+    const expandedText = container.textContent ?? "";
+    const actionList = container.querySelector("[data-activity-action-list='true']");
+    expect(actionList).toHaveStyle({ maxHeight: "320px", overflowY: "auto" });
+    expect(container.querySelector("[data-activity-detail]")).toBeNull();
+    const skillAction = screen.getByRole("button", { name: "已加载 openspec-apply-change Skill" });
+    const completedSubagentAction = screen.getByRole("button", { name: "Subagent draft_specs · completed" });
+    const readAction = screen.getByRole("button", { name: "已读取 src/app.ts" });
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/app.ts +1 -0" });
+    const secondSubagentAction = screen.getByRole("button", { name: "Subagent review_specs · started" });
+    const commandAction = screen.getByRole("button", { name: "已运行 npm test" });
+    const mcpAction = screen.getByRole("button", { name: "已调用 mcp · search" });
+    expect(skillAction).toBeInTheDocument();
+    expect(skillAction.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Subagent draft_specs · started" })).not.toBeInTheDocument();
+    expect(readAction).toBeInTheDocument();
+    expect(completedSubagentAction).toBeInTheDocument();
+    expect(fileAction).toBeInTheDocument();
+    expect(secondSubagentAction).toBeInTheDocument();
+    expect(commandAction).toBeInTheDocument();
+    expect(mcpAction).toBeInTheDocument();
+    expect(screen.queryByText("one test failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("old")).not.toBeInTheDocument();
+    expect(expandedText.indexOf("已加载 openspec-apply-change Skill")).toBeLessThan(
+      expandedText.indexOf("Subagent draft_specs · completed")
+    );
+    expect(expandedText.indexOf("Subagent draft_specs · completed")).toBeLessThan(
+      expandedText.indexOf("已读取 src/app.ts")
+    );
+    expect(expandedText.indexOf("已读取 src/app.ts")).toBeLessThan(
+      expandedText.indexOf("已编辑 src/app.ts +1 -0")
+    );
+    expect(expandedText.indexOf("已编辑 src/app.ts +1 -0")).toBeLessThan(
+      expandedText.indexOf("Subagent review_specs · started")
+    );
+
+    await user.click(fileAction);
+    expect(screen.getByText("old")).toBeInTheDocument();
+    expect(screen.queryByText("one test failed")).not.toBeInTheDocument();
+    const diffDetail = container.querySelector("[data-activity-detail='diff']");
+    expect(diffDetail).not.toBeNull();
+    expect(diffDetail?.querySelector("[data-diff-old-line='true']")).not.toBeNull();
+    expect(diffDetail?.querySelector("[data-diff-new-line='true']")).not.toBeNull();
+
+    await user.click(commandAction);
+    expect(screen.getByText("one test failed")).toBeInTheDocument();
+    expect(screen.getByText("输出")).toBeInTheDocument();
+    const stdoutDetail = container.querySelector("[data-activity-detail='stdout']");
+    expect(stdoutDetail).not.toBeNull();
+    expect(stdoutDetail?.querySelector("pre")).toHaveStyle({
+      maxWidth: "100%",
+      overflowX: "auto",
+      whiteSpace: "pre"
+    });
+
+    await user.click(mcpAction);
+    expect(screen.queryByText("mcp · search")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-activity-detail='tool']")).not.toBeNull();
+    expect(screen.getByText("结果")).toBeInTheDocument();
+  });
+
+  it("将 user message 渲染为右对齐内容宽气泡而不是全宽色带", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "user-short",
+            turnId: "turn-short",
+            createdAt: 1,
+            body: { kind: "user-message", text: "继续", status: "sent" }
+          },
+          {
+            id: "user-long",
+            turnId: "turn-long",
+            createdAt: 2,
+            body: {
+              kind: "user-message",
+              text: `请继续处理 ${"long-token-".repeat(60)}`,
+              status: "sent"
+            }
+          }
+        ]}
+      />
+    );
+
+    const rows = container.querySelectorAll<HTMLElement>("[data-user-message-row='true']");
+    const bubbles = container.querySelectorAll<HTMLElement>("[data-user-message-bubble='true']");
+    expect(rows).toHaveLength(2);
+    expect(bubbles).toHaveLength(2);
+    expect(rows[0]).toHaveStyle({ display: "flex", justifyContent: "flex-end", width: "100%" });
+    expect(bubbles[0]).toHaveStyle({
+      width: "fit-content",
+      maxWidth: "min(82%, 760px)",
+      borderRadius: "16px",
+      overflowWrap: "anywhere"
+    });
+    expect(bubbles[0]?.style.borderLeft).toBe("");
+    expect(bubbles[0]?.textContent).toContain("继续");
+    expect(bubbles[1]?.textContent).toContain("long-token-");
   });
 
   it("read/search/list/command 混合活动默认只显示摘要，展开后显示动作列表", async () => {
@@ -1701,21 +2160,21 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("已读取 1 个文件已浏览 1 个目录已搜索 1 次已运行 1 条命令")).toBeInTheDocument();
-    expect(screen.queryByText("Read src/app.ts")).not.toBeInTheDocument();
-    expect(screen.queryByText("List src")).not.toBeInTheDocument();
-    expect(screen.queryByText("Searched timeline")).not.toBeInTheDocument();
+    expect(screen.getByText("运行了命令、读取了文件等操作")).toBeInTheDocument();
+    expect(screen.queryByText("已读取 src/app.ts")).not.toBeInTheDocument();
+    expect(screen.queryByText("已浏览 src")).not.toBeInTheDocument();
+    expect(screen.queryByText("已搜索 timeline")).not.toBeInTheDocument();
     expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("已读取 1 个文件已浏览 1 个目录已搜索 1 次已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("运行了命令、读取了文件等操作").closest("button")!);
 
-    expect(screen.getByRole("button", { name: "Read src/app.ts" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "List src" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Searched timeline" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已读取 src/app.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已浏览 src" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已搜索 timeline" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
     expect(screen.queryByText("content")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Read src/app.ts" }));
+    await user.click(screen.getByRole("button", { name: "已读取 src/app.ts" }));
 
     expect(screen.getByText("content")).toBeInTheDocument();
   });
@@ -1743,7 +2202,7 @@ describe("Timeline", () => {
       />
     );
 
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("运行了命令").closest("button")!);
     await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
 
     expect(
@@ -1755,7 +2214,7 @@ describe("Timeline", () => {
     expect(screen.getByText(/已截断/)).toBeInTheDocument();
   });
 
-  it("失败活动使用中文状态并在展开后直接显示错误详情", async () => {
+  it("失败活动使用中文状态并在第二次展开后显示错误详情", async () => {
     const user = userEvent.setup();
     render(
       <Timeline
@@ -1781,14 +2240,19 @@ describe("Timeline", () => {
     expect(screen.queryByText("Failed")).not.toBeInTheDocument();
     expect(screen.queryByText(/No such file/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("已读取 1 个文件").closest("button")!);
+    await user.click(screen.getByText("读取了文件").closest("button")!);
 
-    expect(screen.queryByRole("button", { name: "已运行 sed -n '1,80p' missing.md" })).not.toBeInTheDocument();
+    const failedAction = screen.getByRole("button", { name: "已读取 missing.md" });
+    expect(failedAction).toBeInTheDocument();
+    expect(screen.queryByText(/No such file/)).not.toBeInTheDocument();
+
+    await user.click(failedAction);
+
     expect(screen.getByText(/sed -n '1,80p' missing.md/)).toBeInTheDocument();
     expect(screen.getByText(/No such file or directory/)).toBeInTheDocument();
   });
 
-  it("file 工具活动展开后直接显示文件输出详情", async () => {
+  it("file 工具活动第二次展开后显示文件输出详情", async () => {
     const user = userEvent.setup();
     render(
       <Timeline
@@ -1813,12 +2277,15 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("Files changed · 1 · +1 -1")).toBeInTheDocument();
+    expect(screen.getByText("编辑了文件")).toBeInTheDocument();
     expect(screen.queryByText(/--- a\/src\/app.ts/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+    await user.click(screen.getByText("编辑了文件").closest("button")!);
 
-    expect(screen.queryByRole("button", { name: "src/app.ts · +1 -1" })).not.toBeInTheDocument();
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/app.ts +1 -1" });
+    expect(screen.queryByText(/--- a\/src\/app.ts/)).not.toBeInTheDocument();
+    await user.click(fileAction);
+
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
@@ -1858,12 +2325,14 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("Files changed · 1 · +131 -1")).toBeInTheDocument();
+    expect(screen.getByText("编辑了文件")).toBeInTheDocument();
     expect(screen.queryByText("old")).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("Files changed · 1 · +131 -1").closest("button")!);
+    await user.click(screen.getByText("编辑了文件").closest("button")!);
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/app.ts +131 -1" });
+    expect(screen.queryByText("old")).not.toBeInTheDocument();
+    await user.click(fileAction);
 
-    expect(screen.queryByRole("button", { name: "src/app.ts · +131 -1" })).not.toBeInTheDocument();
     expect(screen.getByText("src/app.ts")).toBeInTheDocument();
     expect(screen.getByText("+131")).toBeInTheDocument();
     expect(screen.getByText("-1")).toBeInTheDocument();
@@ -1877,7 +2346,7 @@ describe("Timeline", () => {
     expect(writeText).toHaveBeenCalledWith(diff);
   });
 
-  it("file 工具 activity 展开后使用 diff view fallback 且不出现第二层文件按钮", async () => {
+  it("file 工具 activity 第二次展开后使用 diff view fallback", async () => {
     const user = userEvent.setup();
     render(
       <Timeline
@@ -1902,9 +2371,11 @@ describe("Timeline", () => {
       />
     );
 
-    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
+    await user.click(screen.getByText("编辑了文件").closest("button")!);
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/file-tool.ts +1 -1" });
+    expect(screen.queryByText("before")).not.toBeInTheDocument();
+    await user.click(fileAction);
 
-    expect(screen.queryByRole("button", { name: "src/file-tool.ts · +1 -1" })).not.toBeInTheDocument();
     expect(screen.getByText("src/file-tool.ts")).toBeInTheDocument();
     expect(screen.getByText("@@ -4,1 +4,1 @@")).toBeInTheDocument();
     expect(screen.getByText("before")).toBeInTheDocument();
@@ -1912,7 +2383,7 @@ describe("Timeline", () => {
     expect(screen.getAllByText("4").length).toBeGreaterThan(0);
   });
 
-  it("多文件 Files changed 展开后按 entry 顺序直接显示多个 diff block", async () => {
+  it("多文件活动按 entry 顺序展开动作，再分别显示 diff block", async () => {
     const user = userEvent.setup();
     const { container } = render(
       <Timeline
@@ -1945,10 +2416,14 @@ describe("Timeline", () => {
       />
     );
 
-    await user.click(screen.getByText("Files changed · 2 · +2 -2").closest("button")!);
+    await user.click(screen.getByText("编辑了文件").closest("button")!);
 
-    expect(screen.queryByRole("button", { name: "src/a.ts · +1 -1" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "src/b.ts · +1 -1" })).not.toBeInTheDocument();
+    const firstFile = screen.getByRole("button", { name: "已编辑 src/a.ts +1 -1" });
+    const secondFile = screen.getByRole("button", { name: "已编辑 src/b.ts +1 -1" });
+    expect(screen.queryByText("oldA")).not.toBeInTheDocument();
+    expect(screen.queryByText("oldB")).not.toBeInTheDocument();
+    await user.click(firstFile);
+    await user.click(secondFile);
     expect(screen.getByText("oldA")).toBeInTheDocument();
     expect(screen.getByText("newA")).toBeInTheDocument();
     expect(screen.getByText("oldB")).toBeInTheDocument();
@@ -1960,7 +2435,7 @@ describe("Timeline", () => {
     expect(text.indexOf("src/b.ts")).toBeLessThan(text.indexOf("oldB"));
   });
 
-  it("Loaded tools 活动默认只显示标题，展开后显示 Skill 动作列表", async () => {
+  it("Skill 活动默认只显示自然标题，展开后显示具体动作列表", async () => {
     const user = userEvent.setup();
     render(
       <Timeline
@@ -1982,19 +2457,19 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("Loaded 2 tools")).toBeInTheDocument();
-    expect(screen.queryByText("读取 openspec-explore 技能")).not.toBeInTheDocument();
-    expect(screen.queryByText("读取 systematic-debugging 技能")).not.toBeInTheDocument();
+    expect(screen.getByText("加载了 Skill")).toBeInTheDocument();
+    expect(screen.queryByText("已加载 openspec-explore Skill")).not.toBeInTheDocument();
+    expect(screen.queryByText("已加载 systematic-debugging Skill")).not.toBeInTheDocument();
     expect(screen.queryByText(/Skills loaded/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Used tools/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("Loaded 2 tools").closest("button")!);
+    await user.click(screen.getByText("加载了 Skill").closest("button")!);
 
-    expect(screen.getByRole("button", { name: "读取 openspec-explore 技能" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "读取 systematic-debugging 技能" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已加载 openspec-explore Skill" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "已加载 systematic-debugging Skill" })).toBeInTheDocument();
   });
 
-  it("单个 Loaded tool 活动使用 Codex App 风格单数标题", () => {
+  it("单个 Skill 活动也使用自然动作标题", () => {
     render(
       <Timeline
         entries={[
@@ -2015,8 +2490,8 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("Loaded a tool")).toBeInTheDocument();
-    expect(screen.queryByText("Loaded 1 tools")).not.toBeInTheDocument();
+    expect(screen.getByText("加载了 Skill")).toBeInTheDocument();
+    expect(screen.queryByText(/Loaded/)).not.toBeInTheDocument();
   });
 
   it("assistant 消息和内联活动按真实顺序穿插渲染", () => {
@@ -2071,10 +2546,10 @@ describe("Timeline", () => {
     );
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("先说明第一段")).toBeLessThan(text.indexOf("已运行 1 条命令"));
-    expect(text.indexOf("已运行 1 条命令")).toBeLessThan(text.indexOf("再说明第二段"));
-    expect(text.indexOf("再说明第二段")).toBeLessThan(text.indexOf("Files changed · 1 · +1 -0"));
-    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("最后说明第三段"));
+    expect(text.indexOf("先说明第一段")).toBeLessThan(text.indexOf("运行了命令"));
+    expect(text.indexOf("运行了命令")).toBeLessThan(text.indexOf("再说明第二段"));
+    expect(text.indexOf("再说明第二段")).toBeLessThan(text.indexOf("编辑了文件"));
+    expect(text.indexOf("编辑了文件")).toBeLessThan(text.indexOf("最后说明第三段"));
     expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
@@ -2111,8 +2586,8 @@ describe("Timeline", () => {
     const { container } = render(<Timeline entries={entries} />);
 
     const text = container.textContent ?? "";
-    expect(text.indexOf("分析 bug")).toBeLessThan(text.indexOf("已搜索 1 次"));
-    expect(text.indexOf("已搜索 1 次")).toBeLessThan(text.indexOf("最终结论"));
+    expect(text.indexOf("分析 bug")).toBeLessThan(text.indexOf("搜索了代码"));
+    expect(text.indexOf("搜索了代码")).toBeLessThan(text.indexOf("最终结论"));
   });
 
   it("连续活动摘要按原始事件顺序显示，动作列表需展开后显示", async () => {
@@ -2149,12 +2624,14 @@ describe("Timeline", () => {
       />
     );
 
-    const text = container.textContent ?? "";
-    expect(text.indexOf("Files changed · 1 · +1 -0")).toBeLessThan(text.indexOf("已运行 1 条命令"));
+    expect(screen.getByText("编辑了文件并运行了命令")).toBeInTheDocument();
     expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("编辑了文件并运行了命令").closest("button")!);
 
+    const text = container.textContent ?? "";
+    expect(text.indexOf("已编辑 src/app.ts +1 -0")).toBeLessThan(text.indexOf("已运行 npm test"));
+    expect(screen.getByRole("button", { name: "已编辑 src/app.ts +1 -0" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
   });
 
@@ -2193,19 +2670,20 @@ describe("Timeline", () => {
     );
 
     expect(screen.queryByText("已运行 npm test")).not.toBeInTheDocument();
-    expect(screen.getByText("Files changed · 1 · +1 -1")).toBeInTheDocument();
+    expect(screen.getByText("编辑了文件并运行了命令")).toBeInTheDocument();
     expect(screen.queryByText("line 1")).not.toBeInTheDocument();
     expect(screen.queryByText("--- a/src/app.ts")).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("已运行 1 条命令").closest("button")!);
+    await user.click(screen.getByText("编辑了文件并运行了命令").closest("button")!);
     expect(screen.getByRole("button", { name: "已运行 npm test" })).toBeInTheDocument();
+    const fileAction = screen.getByRole("button", { name: "已编辑 src/app.ts +1 -1" });
+    expect(fileAction).toBeInTheDocument();
     expect(screen.queryByText("line 1")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "已运行 npm test" }));
     expect(screen.getByText(/line 1/)).toBeInTheDocument();
 
-    await user.click(screen.getByText("Files changed · 1 · +1 -1").closest("button")!);
-    expect(screen.queryByRole("button", { name: "src/app.ts · +1 -1" })).not.toBeInTheDocument();
+    await user.click(fileAction);
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 

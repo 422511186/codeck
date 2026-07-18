@@ -10,6 +10,9 @@ type TimelineGapEvent = {
   type: "timeline-gap";
   lastEventId: string;
   threadId?: string;
+  affectedThreadIds?: string[];
+  scope?: "threads" | "all-tracked";
+  bootId?: string;
 };
 
 export async function GET(request: Request): Promise<Response> {
@@ -53,8 +56,16 @@ export async function GET(request: Request): Promise<Response> {
         write(": ping\n\n");
       }, SSE_HEARTBEAT_INTERVAL_MS);
       if (backlog.gap && lastEventId) {
-        const threadId = threadIdFromBrowserEventId(lastEventId);
-        write(encodeSseData({ type: "timeline-gap", lastEventId, ...(threadId ? { threadId } : {}) }));
+        const gapScope = backlog.gapScope;
+        const affectedThreadIds = gapScope?.scope === "threads" ? gapScope.affectedThreadIds : [];
+        write(encodeSseData({
+          type: "timeline-gap",
+          lastEventId,
+          ...(backlog.bootId ? { bootId: backlog.bootId } : {}),
+          ...(gapScope ? { scope: gapScope.scope } : {}),
+          ...(affectedThreadIds.length ? { affectedThreadIds } : {}),
+          ...(affectedThreadIds.length === 1 ? { threadId: affectedThreadIds[0] } : {})
+        }));
       }
       for (const event of backlog.events) {
         sendOnce(event);
@@ -93,9 +104,4 @@ function encodeSseEvent(id: string, event: BrowserTimelineEvent): string {
 
 function encodeSseData(event: BrowserTimelineEvent | TimelineGapEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
-}
-
-function threadIdFromBrowserEventId(eventId: string): string | null {
-  const match = /^([^:\s]+):\d+:\d+:[^:\s]+$/.exec(eventId);
-  return match?.[1] ?? null;
 }

@@ -535,6 +535,46 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
   }
 }
 
+class LatestPageOverlayPeer extends NotificationOverlayPeer {
+  override async request(method: string): Promise<unknown> {
+    if (method === "thread/items/list") {
+      return {
+        data: [{
+          type: "userMessage",
+          id: "user-1",
+          turnId: "turn-1",
+          clientId: "client-user-1",
+          content: [{ type: "text", text: "触发工具", text_elements: [] }]
+        }],
+        nextCursor: null
+      };
+    }
+    return super.request(method);
+  }
+}
+
+class DelayedLatestPageOverlayPeer extends LatestPageOverlayPeer {
+  private releasePageRequest: (() => void) | null = null;
+  private markPageRequested: (() => void) | null = null;
+  readonly pageRequested = new Promise<void>((resolve) => {
+    this.markPageRequested = resolve;
+  });
+
+  override async request(method: string): Promise<unknown> {
+    if (method === "thread/items/list") {
+      this.markPageRequested?.();
+      await new Promise<void>((resolve) => {
+        this.releasePageRequest = resolve;
+      });
+    }
+    return super.request(method);
+  }
+
+  releasePage(): void {
+    this.releasePageRequest?.();
+  }
+}
+
 class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   override async request(method: string): Promise<unknown> {
     if (method === "thread/turns/list") {
@@ -625,6 +665,57 @@ class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   }
 }
 
+class MaterializedHistoryOverlayPeer extends NotificationOverlayPeer {
+  constructor(
+    private readonly historyItems: Array<Record<string, unknown>> = [
+      {
+        type: "userMessage",
+        id: "item-5",
+        clientId: "local-user-e3",
+        content: [{ type: "text", text: "还有别的吗？", text_elements: [] }]
+      },
+      {
+        type: "agentMessage",
+        id: "item-6",
+        text: "还有一些更偏工程协作和交付的工作。",
+        phase: "final_answer",
+        memoryCitation: null
+      }
+    ]
+  ) {
+    super();
+  }
+
+  private historyTurn() {
+    return {
+      id: "turn-e3",
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1,
+      items: this.historyItems
+    };
+  }
+
+  override async request(method: string): Promise<unknown> {
+    if (method === "thread/items/list") {
+      return {
+        data: [...this.historyTurn().items].reverse().map((item) => ({
+          ...item,
+          turnId: typeof item.turnId === "string" ? item.turnId : "turn-e3"
+        })),
+        nextCursor: null
+      };
+    }
+    if (method === "thread/turns/list") {
+      return { data: [this.historyTurn()], nextCursor: null };
+    }
+    return super.request(method);
+  }
+}
+
 class OversizeItemContentPeer extends NotificationOverlayPeer {
   constructor(readonly fullText: string) {
     super();
@@ -690,7 +781,14 @@ class SnapshotContextCompactionPeer extends NotificationOverlayPeer {
 class PartialRollbackPeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
-  private currentTurnIds = ["turn-1", "turn-2"];
+  constructor(
+    private currentTurnIds = ["turn-1", "turn-2"],
+    private pageStartIndex = 0
+  ) {}
+
+  setPageStartIndex(index: number): void {
+    this.pageStartIndex = index;
+  }
 
   async connect(): Promise<void> {
     this.status = { state: "ready" };
@@ -743,7 +841,20 @@ class PartialRollbackPeer implements ManagedAppServerPeer {
 
     if (method === "thread/turns/list") {
       const thread = threadWithTurns(this.currentTurnIds) as { turns: unknown[] };
-      return { data: thread.turns, nextCursor: null, backwardsCursor: null };
+      return { data: thread.turns.slice(this.pageStartIndex), nextCursor: null, backwardsCursor: null };
+    }
+
+    if (method === "thread/items/list") {
+      return {
+        data: this.currentTurnIds.slice(this.pageStartIndex).reverse().map((turnId) => ({
+          type: "userMessage",
+          id: `user-${turnId}`,
+          turnId,
+          clientId: `client-${turnId}`,
+          content: [{ type: "text", text: `消息 ${turnId}`, text_elements: [] }]
+        })),
+        nextCursor: null
+      };
     }
 
     if (method === "thread/goal/get") {
@@ -751,7 +862,7 @@ class PartialRollbackPeer implements ManagedAppServerPeer {
     }
 
     if (method === "thread/rollback") {
-      this.currentTurnIds = ["turn-1"];
+      this.currentTurnIds = this.currentTurnIds.slice(0, -1);
       return { thread: threadWithTurns(this.currentTurnIds) };
     }
 
@@ -935,6 +1046,36 @@ class SessionResponseItemsPeer implements ManagedAppServerPeer {
       };
     }
     throw new Error(`unexpected method ${method}`);
+  }
+}
+
+class SessionResponseItemsWithTimelineMetaPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/items/list") {
+      this.calls.push({ method, params });
+      return {
+        data: sessionThread().turns[0]!.items.map((item) => ({
+          ...(item as Record<string, unknown>),
+          turnId: "turn-1"
+        })),
+        nextCursor: null
+      };
+    }
+    return super.request(method, params);
+  }
+}
+
+class EmptySessionTimelinePeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/turns/list") {
+      this.calls.push({ method, params });
+      return { data: [], nextCursor: null, backwardsCursor: null };
+    }
+    if (method === "thread/items/list") {
+      this.calls.push({ method, params });
+      return { data: [], nextCursor: null };
+    }
+    return super.request(method, params);
   }
 }
 
@@ -1645,6 +1786,127 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("按 process stream 跨 base64 chunk 流式解码多字节字符", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const events: Array<Record<string, unknown>> = [];
+    gateway.onBrowserEvent((event) => {
+      if (event.type === "codex-event") events.push(event.event as unknown as Record<string, unknown>);
+    });
+    await gateway.ensureReady();
+    const bytes = Buffer.from("🙂", "utf8");
+
+    for (const chunk of [bytes.subarray(0, 2), bytes.subarray(2)]) {
+      peer.emitNotification({
+        method: "process/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          processHandle: "process-emoji",
+          stream: "stdout",
+          deltaBase64: chunk.toString("base64"),
+          capReached: false
+        }
+      });
+    }
+
+    expect(events.filter((event) => event.kind === "command_output_delta")).toEqual([
+      expect.objectContaining({ itemId: "process-emoji", delta: "🙂" })
+    ]);
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "process-emoji", text: "🙂" })
+    ]));
+  });
+
+  it("隔离两个 process 的 stdout/stderr decoder 状态", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    await gateway.ensureReady();
+    const emit = (processHandle: string, stream: string, text: string) => peer.emitNotification({
+      method: "process/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        processHandle,
+        stream,
+        deltaBase64: Buffer.from(text).toString("base64"),
+        capReached: false
+      }
+    });
+
+    emit("process-a", "stdout", "A-out");
+    emit("process-b", "stdout", "B-out");
+    emit("process-a", "stderr", "A-err");
+
+    const timeline = (await gateway.readThread("thread-1")).timeline;
+    expect(timeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "process-a", text: "A-outA-err" }),
+      expect.objectContaining({ id: "process-b", text: "B-out" })
+    ]));
+  });
+
+  it("bounded latest page 原子合并 watermark 内 overlay 并返回一致窗口 stamp", async () => {
+    const peer = new LatestPageOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "command-live",
+        delta: "尚未持久化\n"
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+
+    expect(page.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "command-live",
+        text: "尚未持久化\n",
+        baselineWatermark: page.pageWatermark,
+        historyStamp: page.historyStamp
+      })
+    ]));
+    expect(page).toMatchObject({
+      bootId: expect.any(String),
+      generation: 0,
+      historyStamp: { bootId: expect.any(String), generation: 0 },
+      pageWatermark: expect.any(Number),
+      windowStartAnchor: expect.any(String),
+      windowEndAnchor: expect.any(String)
+    });
+  });
+
+  it("latest page 上游读取期间到达的事件包含在随后捕获的 overlay watermark", async () => {
+    const peer = new DelayedLatestPageOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    const pagePromise = gateway.listThreadTurns({ threadId: "thread-1" });
+    await peer.pageRequested;
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "command-during-read",
+        delta: "读取期间到达\n"
+      }
+    });
+    peer.releasePage();
+
+    const page = await pagePromise;
+    expect(page.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "command-during-read",
+        text: "读取期间到达\n",
+        baselineWatermark: page.pageWatermark
+      })
+    ]));
+  });
+
   it("刷新读取会把未匹配 overlay 活动插入所属 turn 的最终回复之前", async () => {
     const peer = new SnapshotWithFinalAgentOverlayPeer();
     const gateway = new AppServerGateway(peer);
@@ -1879,6 +2141,395 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("raw response overlay 后到达 canonical agent item 时只保留 canonical", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        responseId: "response-1",
+        absoluteOutputIndex: 0,
+        item: {
+          type: "message",
+          id: "agent-raw",
+          role: "assistant",
+          content: [{ type: "output_text", text: "同一条最终答复" }]
+        }
+      }
+    });
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "agent-canonical",
+          text: "同一条最终答复",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const agents = (await gateway.readThread("thread-1")).timeline.filter((item) => item.role === "agent");
+    expect(agents).toEqual([
+      expect.objectContaining({ id: "agent-canonical", text: "同一条最终答复" })
+    ]);
+  });
+
+  it("canonical agent overlay 后到达 raw response alias 时仍只保留 canonical", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "agent-canonical",
+          text: "同一条最终答复",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+    peer.emitNotification({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        responseId: "response-1",
+        absoluteOutputIndex: 0,
+        item: {
+          type: "message",
+          id: "agent-raw",
+          role: "assistant",
+          content: [{ type: "output_text", text: "同一条最终答复" }]
+        }
+      }
+    });
+
+    const agents = (await gateway.readThread("thread-1")).timeline.filter((item) => item.role === "agent");
+    expect(agents).toEqual([
+      expect.objectContaining({ id: "agent-canonical", text: "同一条最终答复" })
+    ]);
+  });
+
+  it("canonical snapshot 会吸收不同 ID 的 raw response overlay", async () => {
+    const peer = new SnapshotWithFinalAgentOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        responseId: "response-1",
+        absoluteOutputIndex: 0,
+        item: {
+          type: "message",
+          id: "agent-raw",
+          role: "assistant",
+          content: [{ type: "output_text", text: "最终答复" }]
+        }
+      }
+    });
+
+    const agents = (await gateway.readThread("thread-1")).timeline.filter((item) => item.role === "agent");
+    expect(agents).toEqual([
+      expect.objectContaining({ id: "agent-final", text: "最终答复" })
+    ]);
+  });
+
+  it("history page 会消费已物化但 ID 不同的 completed user 和 agent overlay", async () => {
+    const peer = new MaterializedHistoryOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "userMessage",
+          id: "019f712f-2cad-74f3-b22c-7eda5aa1f922",
+          clientId: "local-user-e3",
+          content: [{ type: "text", text: "还有别的吗？", text_elements: [] }]
+        }
+      }
+    });
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "agentMessage",
+          id: "msg_02cfb204474c5af3016a5a6a4aa11c819681f96454886b5fb0",
+          text: "还有一些更偏工程协作和交付的工作。",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual(["item-5", "item-6"]);
+
+    const detail = await gateway.readThread("thread-1");
+    expect(detail.timeline.map((item) => item.id)).toEqual(["item-5", "item-6"]);
+  });
+
+  it("completed history 任一侧同文多候选时失败关闭", async () => {
+    const peer = new MaterializedHistoryOverlayPeer([
+      {
+        type: "agentMessage",
+        id: "item-ambiguous-1",
+        text: "允许重复的正式消息",
+        phase: "final_answer",
+        memoryCitation: null
+      },
+      {
+        type: "agentMessage",
+        id: "item-ambiguous-2",
+        text: "允许重复的正式消息",
+        phase: "final_answer",
+        memoryCitation: null
+      }
+    ]);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "agentMessage",
+          id: "msg-ambiguous",
+          text: "允许重复的正式消息",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual([
+      "item-ambiguous-1",
+      "item-ambiguous-2",
+      "msg-ambiguous"
+    ]);
+  });
+
+  it("completed overlay 侧同文多候选时失败关闭", async () => {
+    const peer = new MaterializedHistoryOverlayPeer([
+      {
+        type: "agentMessage",
+        id: "item-single",
+        text: "无法唯一归属",
+        phase: "final_answer",
+        memoryCitation: null
+      }
+    ]);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    for (const id of ["msg-ambiguous-1", "msg-ambiguous-2"]) {
+      peer.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-e3",
+          item: {
+            type: "agentMessage",
+            id,
+            text: "无法唯一归属",
+            phase: "final_answer",
+            memoryCitation: null
+          }
+        }
+      });
+    }
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual([
+      "item-single",
+      "msg-ambiguous-1",
+      "msg-ambiguous-2"
+    ]);
+  });
+
+  it("completed history 仅前缀兼容时失败关闭", async () => {
+    const peer = new MaterializedHistoryOverlayPeer([
+      {
+        type: "agentMessage",
+        id: "item-complete",
+        text: "完整的最终答复",
+        phase: "final_answer",
+        memoryCitation: null
+      }
+    ]);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "agentMessage",
+          id: "msg-prefix",
+          text: "完整的",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual(["item-complete", "msg-prefix"]);
+  });
+
+  it("completed history 不跨 turn 按同文物化", async () => {
+    const peer = new MaterializedHistoryOverlayPeer([
+      {
+        type: "agentMessage",
+        id: "item-turn-e3",
+        text: "相同正文",
+        phase: "final_answer",
+        memoryCitation: null
+      }
+    ]);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-other",
+        item: {
+          type: "agentMessage",
+          id: "msg-turn-other",
+          text: "相同正文",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual(["item-turn-e3", "msg-turn-other"]);
+  });
+
+  it("缺少 clientUserMessageId 的同文 user 不按正文物化", async () => {
+    const peer = new MaterializedHistoryOverlayPeer([
+      {
+        type: "userMessage",
+        id: "item-user-no-client",
+        clientId: null,
+        content: [{ type: "text", text: "相同用户消息", text_elements: [] }]
+      }
+    ]);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "userMessage",
+          id: "user-overlay-no-client",
+          clientId: null,
+          content: [{ type: "text", text: "相同用户消息", text_elements: [] }]
+        }
+      }
+    });
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+    expect(page.items.map((item) => item.id)).toEqual(["item-user-no-client", "user-overlay-no-client"]);
+  });
+
+  it("长 history page 与满容量 completed overlay 能逐 turn 精确物化", async () => {
+    const historyItemCount = 2_000;
+    const overlayItemCount = 200;
+    const historyItems = Array.from({ length: historyItemCount }, (_value, index) => ({
+      type: "agentMessage",
+      id: `item-large-${index}`,
+      text: `最终答复 ${index}`,
+      phase: "final_answer",
+      memoryCitation: null,
+      turnId: `turn-large-${index}`
+    }));
+    const peer = new MaterializedHistoryOverlayPeer(historyItems);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    for (let index = 0; index < overlayItemCount; index += 1) {
+      peer.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `turn-large-${index}`,
+          item: {
+            type: "agentMessage",
+            id: `msg-large-${index}`,
+            text: `最终答复 ${index}`,
+            phase: "final_answer",
+            memoryCitation: null
+          }
+        }
+      });
+    }
+
+    const page = await gateway.listThreadTurns({ threadId: "thread-1", limit: historyItemCount });
+    expect(page.items).toHaveLength(historyItemCount);
+    expect(page.items.map((item) => item.id)).toEqual(
+      Array.from({ length: historyItemCount }, (_value, index) => `item-large-${index}`)
+    );
+  });
+
+  it("同一 turn 的两条 canonical agent item 即使正文相同也保持独立", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    for (const id of ["agent-canonical-1", "agent-canonical-2"]) {
+      peer.emitNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id,
+            text: "允许重复的正式消息",
+            phase: "final_answer",
+            memoryCitation: null
+          }
+        }
+      });
+    }
+
+    const agents = (await gateway.readThread("thread-1")).timeline.filter((item) => item.role === "agent");
+    expect(agents.map((item) => item.id)).toEqual(["agent-canonical-1", "agent-canonical-2"]);
+  });
+
   it("rollback 后清理被删除 turn 的 overlay", async () => {
     const peer = new NotificationOverlayPeer();
     const gateway = new AppServerGateway(peer);
@@ -1945,7 +2596,12 @@ describe("createAppServerGateway", () => {
 
     expect(rolledBack.timeline.some((item) => item.turnId === "turn-live")).toBe(false);
     if (oldEventId) {
-      expect(gateway.listBrowserEventBacklog(oldEventId).events).toEqual([]);
+      expect(gateway.listBrowserEventBacklog(oldEventId).events).toEqual([
+        expect.objectContaining({
+          type: "codex-event",
+          event: expect.objectContaining({ kind: "timeline_generation_changed", generation: 1 })
+        })
+      ]);
     }
 
     peer.emitNotification({
@@ -1959,6 +2615,42 @@ describe("createAppServerGateway", () => {
     });
 
     expect((await gateway.readThread("thread-1")).timeline.some((item) => item.turnId === "turn-live")).toBe(false);
+  });
+
+  it("rollback generation barrier 会在新历史事件前广播", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const kinds: string[] = [];
+    gateway.onBrowserEvent((event) => {
+      if (event.type === "codex-event") kinds.push(event.event.kind);
+    });
+    await gateway.ensureReady();
+
+    await gateway.rollbackThread("thread-1", 1, { expectedDeletedTurnIds: ["turn-1"] });
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-new", itemId: "agent-new", delta: "new" }
+    });
+
+    expect(kinds).toContain("timeline_generation_changed");
+    expect(kinds.indexOf("timeline_generation_changed")).toBeLessThan(kinds.indexOf("agent_message_delta"));
+  });
+
+  it("rollback 后 latest page 返回上一 generation 的可证明前缀边界", async () => {
+    const peer = new PartialRollbackPeer(["turn-1", "turn-2", "turn-3"]);
+    const gateway = new AppServerGateway(peer);
+    await gateway.ensureReady();
+    const bootId = gateway.getTimelineBootId();
+
+    await gateway.rollbackThread("thread-1", 1);
+    peer.setPageStartIndex(1);
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+
+    expect(page.items.map((item) => item.id)).toEqual(["user-turn-2"]);
+    expect(page).toMatchObject({
+      generation: 1,
+      preservedThrough: JSON.stringify([bootId, 0, "turn-1", "user-turn-1"])
+    });
   });
 
   it("rollback 不会信任 expectedDeletedTurnIds 屏蔽仍存在的 turn", async () => {
@@ -1988,7 +2680,7 @@ describe("createAppServerGateway", () => {
     );
   });
 
-  it("刷新读取合并 snapshot 与 overlay 中同 turn 等价 reasoning，避免重复卡片", async () => {
+  it("刷新读取保留同 turn 下强 identity 不同的等价 reasoning", async () => {
     const peer = new SnapshotReasoningPeer();
     const gateway = new AppServerGateway(peer);
 
@@ -2006,11 +2698,11 @@ describe("createAppServerGateway", () => {
     const detail = await gateway.readThread("thread-1");
     const reasoningItems = detail.timeline.filter((item) => item.role === "reasoning");
 
-    expect(reasoningItems).toHaveLength(1);
-    expect(reasoningItems[0]).toMatchObject({
-      turnId: "turn-1",
-      text: "Checking working directory in Chinese"
-    });
+    expect(reasoningItems).toHaveLength(2);
+    expect(reasoningItems.map((item) => item.id)).toEqual(expect.arrayContaining([
+      "reasoning-snapshot",
+      "reasoning-overlay"
+    ]));
   });
 
   it("刷新读取合并 snapshot 与 overlay 中同 turn 压缩完成系统消息，避免重复分隔线", async () => {
@@ -2117,6 +2809,70 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("刷新详情与历史分页时从 rollout 补齐 app-server 遗漏的 Skill 引用", async () => {
+    const turnMeta = { turn_id: "turn-1" };
+    const line = (text: string) => JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+        internal_chat_message_metadata_passthrough: turnMeta
+      }
+    });
+    const rolloutText = [
+      line("排查活动缺失"),
+      line([
+        "<skill>",
+        "<name>skill-installer</name>",
+        "<path>C:\\Users\\hzy\\.codex\\skills\\.system\\skill-installer\\SKILL.md</path>",
+        "---",
+        "private Skill body",
+        "</skill>"
+      ].join("\n"))
+    ].join("\n");
+
+    await withRolloutText(rolloutText, async (rolloutPath) => {
+      const gateway = new AppServerGateway(new SessionResponseItemsWithTimelineMetaPeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      const detail = await gateway.readThread("thread-1");
+      const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+      const detailUser = detail.timeline.find((item) => item.id === "user-1");
+      const pageUser = page.items.find((item) => item.id === "user-1");
+
+      expect(detailUser?.skillReferences).toEqual([
+        {
+          name: "skill-installer",
+          path: "C:\\Users\\hzy\\.codex\\skills\\.system\\skill-installer\\SKILL.md"
+        }
+      ]);
+      expect(pageUser?.skillReferences).toEqual(detailUser?.skillReferences);
+      expect(JSON.stringify({ detail, page })).not.toContain("private Skill body");
+    });
+  });
+
+  it("app-server 未返回 timeline 时仍从受控 rollout 恢复上下文用量", async () => {
+    await withRolloutText(sessionJsonl(), async (rolloutPath) => {
+      const gateway = new AppServerGateway(new EmptySessionTimelinePeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      const detail = await gateway.readThreadMetadata("thread-1");
+
+      expect(detail.timeline).toEqual([]);
+      expect(detail.contextUsage).toEqual({
+        totalTokens: 52000,
+        inputTokens: 42000,
+        outputTokens: 8000,
+        reasoningOutputTokens: 2000,
+        modelContextWindow: 200000,
+        updatedAt: Date.parse("2026-07-04T19:00:06.800Z")
+      });
+    });
+  });
+
   it("读取会话详情时跳过 oversize rollout supplement 且不读取完整 JSONL", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "codex-web-oversize-rollout-"));
     try {
@@ -2130,6 +2886,118 @@ describe("createAppServerGateway", () => {
       expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "agent-1", "agent-2"]);
       expect(detail.timeline.map((item) => item.id)).not.toContain("fc-read");
       expect(peer.calls.some((call) => call.method === "fs/readFile")).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("超大 rollout 仍从有界尾部补齐当前 turn 的 nested command", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "codex-web-tail-rollout-"));
+    try {
+      const rolloutPath = join(tempDir, "session.jsonl");
+      const turnMeta = { turn_id: "turn-1" };
+      const tail = [
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            id: "tail-functions-exec",
+            call_id: "call-tail-functions-exec",
+            name: "exec",
+            status: "completed",
+            input: [
+              "const result = await tools.exec_command({",
+              '  cmd: "npm test",',
+              '  workdir: "/tmp/workspace"',
+              "});",
+              "text(result.output);"
+            ].join("\n"),
+            internal_chat_message_metadata_passthrough: turnMeta
+          }
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: "call-tail-functions-exec",
+            output: [
+              { type: "input_text", text: "Script completed\nWall time 0.4 seconds\nOutput:\n" },
+              { type: "input_text", text: "all tests passed\n" }
+            ],
+            internal_chat_message_metadata_passthrough: turnMeta
+          }
+        })
+      ].join("\n");
+      await writeFile(rolloutPath, `${"x".repeat(1_100_000)}\n${tail}\n`, "utf8");
+      const peer = new SessionResponseItemsPeer(rolloutPath);
+      const gateway = new AppServerGateway(peer, { assertPathAllowed: (path) => path });
+
+      const detail = await gateway.readThread("thread-1");
+
+      expect(detail.timeline).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "tail-functions-exec:nested:0",
+            turnId: "turn-1",
+            role: "tool",
+            toolKind: "command",
+            actionKind: "command",
+            tool: "npm test",
+            text: "all tests passed\n"
+          })
+        ])
+      );
+      expect(peer.calls.some((call) => call.method === "fs/readFile")).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("历史 turn 即使早于 1 MB 尾窗也能在有界源扫描中恢复活动", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "codex-web-matched-rollout-"));
+    try {
+      const rolloutPath = join(tempDir, "session.jsonl");
+      const turnMeta = { turn_id: "turn-1" };
+      const oldActivity = [
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            id: "old-spawn",
+            call_id: "call-old-spawn",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ task_name: "audit", message: "encrypted" }),
+            internal_chat_message_metadata_passthrough: turnMeta
+          }
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-old-spawn",
+            output: JSON.stringify({ task_name: "/root/audit" }),
+            internal_chat_message_metadata_passthrough: turnMeta
+          }
+        })
+      ].join("\n");
+      await writeFile(rolloutPath, `${oldActivity}\n${"x".repeat(1_100_000)}\n`, "utf8");
+      const gateway = new AppServerGateway(new SessionResponseItemsPeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      const detail = await gateway.readThread("thread-1");
+
+      expect(detail.timeline).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "old-spawn",
+            turnId: "turn-1",
+            role: "tool",
+            server: "sub-agent",
+            tool: "spawn_agent"
+          })
+        ])
+      );
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -2334,7 +3202,12 @@ describe("createAppServerGateway", () => {
     expect((await gateway.readThread("thread-1")).timeline.some((item) => item.id === "cmd-old-late")).toBe(false);
     if (oldEventId) {
       const replay = gateway.listBrowserEventBacklog(oldEventId);
-      expect(replay.events).toEqual([]);
+      expect(replay.events).toEqual([
+        expect.objectContaining({
+          type: "codex-event",
+          event: expect.objectContaining({ kind: "timeline_generation_changed", generation: 1 })
+        })
+      ]);
     }
     unsubscribe();
   });
@@ -2499,6 +3372,100 @@ describe("createAppServerGateway", () => {
         sequence: expect.any(Number),
         revision: expect.any(Number)
       })
+    });
+  });
+
+  it("不同 gateway boot 不会复用首个 timeline event identity", async () => {
+    const peerA = new NotificationOverlayPeer();
+    const peerB = new NotificationOverlayPeer();
+    const gatewayA = new AppServerGateway(peerA);
+    const gatewayB = new AppServerGateway(peerB);
+    const eventsA: Array<{ event?: Record<string, unknown> }> = [];
+    const eventsB: Array<{ event?: Record<string, unknown> }> = [];
+    gatewayA.onBrowserEvent((event) => eventsA.push(event as { event?: Record<string, unknown> }));
+    gatewayB.onBrowserEvent((event) => eventsB.push(event as { event?: Record<string, unknown> }));
+
+    await Promise.all([gatewayA.ensureReady(), gatewayB.ensureReady()]);
+    const notification = {
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "agent-1", delta: "hello" }
+    };
+    peerA.emitNotification(notification);
+    peerB.emitNotification(notification);
+
+    expect(eventsA[0]?.event).toMatchObject({ streamSequence: 1, sequence: 1, fragmentSequence: 1 });
+    expect(eventsB[0]?.event).toMatchObject({ streamSequence: 1, sequence: 1, fragmentSequence: 1 });
+    expect(eventsA[0]?.event?.bootId).not.toBe(eventsB[0]?.event?.bootId);
+    expect(eventsA[0]?.event?.eventId).not.toBe(eventsB[0]?.event?.eventId);
+  });
+
+  it("按 item 和 field 生成 fragmentSequence，同时保持全局 streamSequence", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const events: Array<{ event?: Record<string, unknown> }> = [];
+    gateway.onBrowserEvent((event) => events.push(event as { event?: Record<string, unknown> }));
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "agent-a", delta: "A1" }
+    });
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "agent-b", delta: "B1" }
+    });
+    peer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "agent-a", delta: "A2" }
+    });
+
+    expect(events.map((event) => event.event?.streamSequence)).toEqual([1, 2, 3]);
+    expect(events.map((event) => event.event?.fragmentSequence)).toEqual([1, 1, 2]);
+  });
+
+  it("payload backlog 淘汰后仍使用 owner ledger 返回完整 gap owners", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+    const events: Array<{ event?: Record<string, unknown> }> = [];
+    gateway.onBrowserEvent((event) => events.push(event as { event?: Record<string, unknown> }));
+    await gateway.ensureReady();
+
+    for (let index = 0; index < 510; index += 1) {
+      peer.emitNotification({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: index % 2 === 0 ? "thread-a" : "thread-b",
+          turnId: `turn-${index}`,
+          itemId: `agent-${index}`,
+          delta: String(index)
+        }
+      });
+    }
+    const evictedEventId = events[0]?.event?.eventId;
+    expect(typeof evictedEventId).toBe("string");
+
+    expect(gateway.listBrowserEventBacklog(String(evictedEventId))).toMatchObject({
+      gap: true,
+      gapScope: { scope: "threads", affectedThreadIds: expect.arrayContaining(["thread-a", "thread-b"]) }
+    });
+  });
+
+  it("旧 boot cursor 触发 all-tracked gap", async () => {
+    const oldPeer = new NotificationOverlayPeer();
+    const oldGateway = new AppServerGateway(oldPeer);
+    const oldEvents: Array<{ event?: Record<string, unknown> }> = [];
+    oldGateway.onBrowserEvent((event) => oldEvents.push(event as { event?: Record<string, unknown> }));
+    await oldGateway.ensureReady();
+    oldPeer.emitNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-a", turnId: "turn-a", itemId: "agent-a", delta: "old" }
+    });
+
+    const newGateway = new AppServerGateway(new NotificationOverlayPeer());
+    await newGateway.ensureReady();
+    expect(newGateway.listBrowserEventBacklog(String(oldEvents[0]?.event?.eventId))).toMatchObject({
+      gap: true,
+      gapScope: { scope: "all-tracked" }
     });
   });
 

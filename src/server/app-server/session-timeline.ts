@@ -1,4 +1,4 @@
-import type { MobileThreadContextUsage, MobileTimelineItem } from "../../shared/codex";
+import type { MobileSkillReference, MobileThreadContextUsage, MobileTimelineItem } from "../../shared/codex";
 import {
   boundedTimelineText,
   createOpaqueTimelineContentRef,
@@ -14,16 +14,39 @@ export type SessionTimelineRecord =
       sequence: number;
     }
   | {
+      kind: "skill-reference";
+      turnId: string;
+      anchorText: string;
+      skillReferences: MobileSkillReference[];
+      sequence: number;
+    }
+  | {
       kind: "tool";
       turnId: string;
       item: MobileTimelineItem;
       sequence: number;
       callId: string | null;
+      nestedExec?: boolean;
     };
 type SessionToolRecord = Extract<SessionTimelineRecord, { kind: "tool" }>;
 
-const INTERNAL_CONTROL_TOOL_NAMES = new Set(["update_plan", "write_stdin", "read_thread", "list_threads", "read_thread_terminal"]);
+const INTERNAL_CONTROL_TOOL_NAMES = new Set([
+  "update_plan",
+  "write_stdin",
+  "read_thread",
+  "list_threads",
+  "read_thread_terminal",
+  "wait",
+  "wait_agent",
+  "list_agents",
+  "get_goal",
+  "create_goal",
+  "update_goal"
+]);
+const SUBAGENT_TOOL_NAMES = new Set(["spawn_agent", "followup_task", "send_message", "interrupt_agent"]);
 const DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT = 120;
+const MAX_NESTED_EXEC_CALLS = 24;
+const MAX_NESTED_EXEC_SOURCE_CHARS = 240_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -92,6 +115,24 @@ function rawMessageText(payload: Record<string, unknown>): string {
     .join("\n");
 }
 
+function isAbsoluteSkillPath(value: string): boolean {
+  const absolute = /^\/(?!\/)/.test(value) || /^[A-Za-z]:[\\/]/.test(value);
+  return absolute && /(?:^|[\\/])SKILL\.md$/i.test(value);
+}
+
+function hiddenSkillReference(text: string): MobileSkillReference | null {
+  if (!text.endsWith("</skill>")) {
+    return null;
+  }
+  const match = /^<skill>\r?\n<name>([^<>\r\n]+)<\/name>\r?\n<path>([^<>\r\n]+)<\/path>(?:\r?\n|$)/.exec(text);
+  if (!match) {
+    return null;
+  }
+  const name = match[1]!.trim();
+  const path = match[2]!.trim();
+  return name && isAbsoluteSkillPath(path) ? { name, path } : null;
+}
+
 function parseJsonObject(text: unknown): Record<string, unknown> | null {
   if (isRecord(text)) {
     return text;
@@ -157,7 +198,10 @@ function toolStatusFromOutput(output: string): "running" | "success" | "failed" 
   if (/process running with session id/i.test(output)) {
     return "running";
   }
-  if (/error|failed|exception/i.test(output)) {
+  const explicitFailure = output.split(/\r?\n/).some((line) =>
+    /^\s*(?:Script failed\b|FAIL\b|Failed Tests?\b|Error:|(?:rg|grep|sed|cat|ls|find):.*(?:No such|error)|(?:Test Files|Tests)\s+.*\bfailed\b)/i.test(line)
+  );
+  if (explicitFailure) {
     return "failed";
   }
   return "success";
@@ -181,6 +225,29 @@ function outputText(value: unknown): string {
   return stringifyJson(value);
 }
 
+function outputTextParts(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    const text = outputText(value);
+    return text ? [text] : [];
+  }
+  return value
+    .map((part) => {
+      if (isRecord(part) && typeof part.text === "string") {
+        return part.text;
+      }
+      return stringifyJson(part);
+    })
+    .filter(Boolean);
+}
+
+function nestedExecOutputParts(value: unknown): string[] {
+  const parts = outputTextParts(value);
+  if (/^Script (?:completed|failed|running)\b/i.test(parts[0] ?? "")) {
+    return parts.slice(1);
+  }
+  return parts;
+}
+
 function normalizedToolName(payload: Record<string, unknown>, type: string): string {
   const rawName = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : type;
   return rawName.split(".").at(-1) || rawName;
@@ -195,6 +262,46 @@ function initialToolStatus(payload: Record<string, unknown>): "running" | "succe
     return "failed";
   }
   return "running";
+}
+
+function subagentKind(tool: string): string {
+  if (tool === "spawn_agent") return "started";
+  if (tool === "interrupt_agent") return "interrupted";
+  return "updated";
+}
+
+function subagentPath(value: Record<string, unknown> | null): string {
+  if (!value) return "";
+  for (const key of ["agentPath", "agent_path", "task_name", "target"]) {
+    if (typeof value[key] === "string" && value[key].trim()) {
+      const path = value[key].trim();
+      if (path.startsWith("/")) return path;
+      if (path.startsWith("root/")) return `/${path}`;
+      if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(path)) return "";
+      return `/root/${path}`;
+    }
+  }
+  return "";
+}
+
+function subagentThreadId(value: Record<string, unknown> | null): string {
+  if (!value) return "";
+  for (const key of ["agentThreadId", "agent_thread_id", "agent_id"]) {
+    if (typeof value[key] === "string" && value[key].trim()) {
+      return value[key].trim();
+    }
+  }
+  if (typeof value.target === "string" && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value.target.trim())) {
+    return value.target.trim();
+  }
+  return "";
+}
+
+function subagentResultText(tool: string, input: Record<string, unknown> | null, output?: string): string {
+  const parsedOutput = output ? parseJsonObject(output) : null;
+  const agentPath = subagentPath(parsedOutput) || subagentPath(input);
+  const agentThreadId = subagentThreadId(parsedOutput) || subagentThreadId(input);
+  return JSON.stringify({ agentThreadId, agentPath, kind: subagentKind(tool) });
 }
 
 function patchStats(patch: string): { added: number; removed: number } {
@@ -222,6 +329,266 @@ function patchPrimaryPath(patch: string): string {
   return moveMatch?.[1]?.trim() || "workspace";
 }
 
+type NestedExecCommand = {
+  command: string;
+  workdir: string;
+};
+
+function nestedExecCommands(source: unknown): NestedExecCommand[] {
+  if (typeof source !== "string" || source.length > MAX_NESTED_EXEC_SOURCE_CHARS) {
+    return [];
+  }
+  const calls = directCallArguments(source, "tools.exec_command", MAX_NESTED_EXEC_CALLS);
+  const commands: NestedExecCommand[] = [];
+  for (const call of calls) {
+    const parsed = staticExecCommand(call);
+    if (!parsed) {
+      continue;
+    }
+    commands.push(parsed);
+  }
+  return commands;
+}
+
+function directCallArguments(source: string, callee: string, limit: number): string[] {
+  const calls: string[] = [];
+  let index = 0;
+  while (index < source.length && calls.length < limit) {
+    const char = source[index]!;
+    if (char === '"' || char === "'" || char === "`") {
+      index = skipQuotedSource(source, index, char) + 1;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "/") {
+      index = source.indexOf("\n", index + 2);
+      if (index < 0) break;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      if (end < 0) break;
+      index = end + 2;
+      continue;
+    }
+    if (!source.startsWith(callee, index) || isIdentifierChar(source[index - 1]) || isIdentifierChar(source[index + callee.length])) {
+      index += 1;
+      continue;
+    }
+    let opening = index + callee.length;
+    while (/\s/.test(source[opening] ?? "")) opening += 1;
+    if (source[opening] !== "(") {
+      index += callee.length;
+      continue;
+    }
+    const closing = matchingParenthesis(source, opening);
+    if (closing < 0) {
+      break;
+    }
+    calls.push(source.slice(opening + 1, closing).trim());
+    index = closing + 1;
+  }
+  return calls;
+}
+
+function isIdentifierChar(value: string | undefined): boolean {
+  return Boolean(value && /[A-Za-z0-9_$]/.test(value));
+}
+
+function skipQuotedSource(source: string, start: number, quote: string): number {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === quote) {
+      return index;
+    }
+  }
+  return source.length - 1;
+}
+
+function matchingParenthesis(source: string, opening: number): number {
+  let depth = 0;
+  for (let index = opening; index < source.length; index += 1) {
+    const char = source[index]!;
+    if (char === '"' || char === "'" || char === "`") {
+      index = skipQuotedSource(source, index, char);
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "/") {
+      const end = source.indexOf("\n", index + 2);
+      if (end < 0) return -1;
+      index = end;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      if (end < 0) return -1;
+      index = end + 1;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function staticExecCommand(objectLiteral: string): NestedExecCommand | null {
+  const trimmed = objectLiteral.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  const members = splitStaticObjectMembers(trimmed.slice(1, -1));
+  if (!members) {
+    return null;
+  }
+
+  const properties = new Map<string, string>();
+  const stringKeys = new Set(["cmd", "workdir", "shell", "justification", "sandbox_permissions"]);
+  const numberKeys = new Set(["yield_time_ms", "max_output_tokens"]);
+  const booleanKeys = new Set(["login", "tty"]);
+  for (const member of members) {
+    const match = member.match(/^\s*(?:"([A-Za-z_][A-Za-z0-9_-]*)"|([A-Za-z_][A-Za-z0-9_-]*))\s*:\s*([\s\S]+?)\s*$/);
+    const key = match?.[1] ?? match?.[2];
+    const value = match?.[3];
+    if (!key || value === undefined || properties.has(key)) {
+      return null;
+    }
+    const validValue = stringKeys.has(key)
+      ? decodeStaticJsonString(value) !== null
+      : numberKeys.has(key)
+        ? /^-?\d+(?:\.\d+)?$/.test(value)
+        : booleanKeys.has(key)
+          ? /^(?:true|false)$/.test(value)
+          : key === "prefix_rule"
+            ? isStaticStringArray(value)
+            : false;
+    if (!validValue) {
+      return null;
+    }
+    properties.set(key, value);
+  }
+
+  const command = decodeStaticJsonString(properties.get("cmd") ?? "");
+  const workdir = properties.has("workdir")
+    ? decodeStaticJsonString(properties.get("workdir")!)
+    : "command";
+  return command && workdir !== null ? { command, workdir } : null;
+}
+
+function splitStaticObjectMembers(source: string): string[] | null {
+  const members: string[] = [];
+  let start = 0;
+  const closers: string[] = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]!;
+    if (char === '"') {
+      const end = skipQuotedSource(source, index, char);
+      if (end === source.length - 1 && source[end] !== char) return null;
+      index = end;
+      continue;
+    }
+    if (char === "'" || char === "`" || (char === "/" && (source[index + 1] === "/" || source[index + 1] === "*"))) {
+      return null;
+    }
+    if (char === "(" || char === "[" || char === "{") {
+      closers.push(char === "(" ? ")" : char === "[" ? "]" : "}");
+      continue;
+    }
+    if (char === ")" || char === "]" || char === "}") {
+      if (closers.pop() !== char) return null;
+      continue;
+    }
+    if (char === "," && closers.length === 0) {
+      const member = source.slice(start, index).trim();
+      if (member) members.push(member);
+      start = index + 1;
+    }
+  }
+  if (closers.length) return null;
+  const trailing = source.slice(start).trim();
+  if (trailing) members.push(trailing);
+  return members;
+}
+
+function decodeStaticJsonString(value: string): string | null {
+  if (!/^"(?:\\.|[^"\\])*"$/.test(value)) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isStaticStringArray(value: string): boolean {
+  if (!value.startsWith("[") || !value.endsWith("]")) return false;
+  const members = splitStaticObjectMembers(value.slice(1, -1));
+  return Boolean(members?.every((member) => decodeStaticJsonString(member) !== null));
+}
+
+function nestedExecCommandRecords(
+  payload: Record<string, unknown>,
+  turnId: string,
+  sequence: number
+): SessionToolRecord[] {
+  const type = typeof payload.type === "string" ? payload.type : "";
+  const name = normalizedToolName(payload, type);
+  if (type !== "custom_tool_call" || name !== "exec") {
+    return [];
+  }
+  const commands = nestedExecCommands(payload.input);
+  if (!commands.length) {
+    return [];
+  }
+  const callId = typeof payload.call_id === "string" ? payload.call_id : null;
+  const explicitId = typeof payload.id === "string" ? payload.id : callId;
+  const parentId = explicitId ?? `synthetic:rollout:${encodeURIComponent(turnId)}:${sequence}`;
+  const status = initialToolStatus(payload);
+  return commands.map((command, index) => {
+    const id = `${parentId}:nested:${index}`;
+    const skillName = skillNameFromCommand(command.command);
+    const item: MobileTimelineItem = skillName
+      ? {
+          id,
+          turnId,
+          role: "tool",
+          text: skillName,
+          toolKind: "dynamic",
+          server: "skills",
+          tool: "loaded",
+          arguments: JSON.stringify({ cmd: command.command, workdir: command.workdir }),
+          status
+        }
+      : {
+          id,
+          turnId,
+          role: "tool",
+          text: command.command,
+          toolKind: "command",
+          actionKind: inferCommandActionKind(command.command),
+          server: command.workdir,
+          tool: command.command,
+          arguments: JSON.stringify({ cmd: command.command, workdir: command.workdir }),
+          status
+        };
+    return {
+      kind: "tool" as const,
+      turnId,
+      sequence: sequence + index,
+      callId,
+      nestedExec: true,
+      item
+    };
+  });
+}
+
 function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: string, sequence: number): SessionToolRecord | null {
   const type = typeof payload.type === "string" ? payload.type : "";
   const name = normalizedToolName(payload, type);
@@ -229,11 +596,44 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
     return null;
   }
   const callId = typeof payload.call_id === "string" ? payload.call_id : null;
-  const id = typeof payload.id === "string" ? payload.id : callId ?? `${turnId}-tool-${sequence}`;
+  const explicitId = typeof payload.id === "string" ? payload.id : callId;
+  const id = explicitId ?? `synthetic:rollout:${encodeURIComponent(turnId)}:${sequence}`;
+  const identityMeta = explicitId
+    ? {}
+    : { sourceLocator: { sourceKind: "rollout" as const, sourceId: turnId, absoluteOutputIndex: sequence } };
   const rawArguments = payload.arguments ?? payload.input ?? payload.action;
   const args = parseJsonObject(rawArguments);
   const argumentsText = typeof rawArguments === "string" ? rawArguments : stringifyJson(rawArguments);
   const status = initialToolStatus(payload);
+
+  if (SUBAGENT_TOOL_NAMES.has(name)) {
+    const safeArguments = JSON.stringify({
+      agentPath: subagentPath(args),
+      kind: subagentKind(name)
+    });
+    return {
+      kind: "tool",
+      turnId,
+      sequence,
+      callId,
+      item: {
+        id,
+        ...identityMeta,
+        turnId,
+        role: "tool",
+        text: subagentResultText(name, args),
+        toolKind: "dynamic",
+        server: "sub-agent",
+        tool: name,
+        arguments: safeArguments,
+        status
+      }
+    };
+  }
+
+  if (type === "custom_tool_call" && name === "exec" && !String(rawArguments ?? "").includes("tools.exec_command")) {
+    return null;
+  }
 
   if (name === "exec_command") {
     const command = typeof args?.cmd === "string" ? args.cmd : "";
@@ -247,6 +647,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
         callId,
         item: {
           id,
+          ...identityMeta,
           turnId,
           role: "tool",
           text: skillName,
@@ -266,6 +667,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
       callId,
       item: {
         id,
+        ...identityMeta,
         turnId,
         role: "tool",
         text: command,
@@ -288,6 +690,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
       callId,
       item: {
         id,
+        ...identityMeta,
         turnId,
         role: "tool",
         text: imagePath,
@@ -310,6 +713,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
       callId,
       item: {
         id,
+        ...identityMeta,
         turnId,
         role: "tool",
         text: query,
@@ -334,6 +738,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
       callId,
       item: {
         id,
+        ...identityMeta,
         turnId,
         role: "tool",
         text: patch,
@@ -356,6 +761,7 @@ function toolItemFromFunctionCall(payload: Record<string, unknown>, turnId: stri
     callId,
     item: {
       id,
+      ...identityMeta,
       turnId,
       role: "tool",
       text: argumentsText,
@@ -374,6 +780,14 @@ function applyFunctionOutput(
   contentRefFactory?: (locator: SessionContentRefLocator) => string
 ): void {
   const nextStatus = toolStatusFromOutput(output);
+  if (record.item.server === "sub-agent") {
+    record.item = {
+      ...record.item,
+      text: subagentResultText(record.item.tool ?? "", parseJsonObject(record.item.arguments), output),
+      status: nextStatus
+    };
+    return;
+  }
   if (record.item.server === "skills" && record.item.tool === "loaded") {
     const skillName = skillNameFromOutput(output) ?? record.item.text;
     record.item = {
@@ -551,7 +965,7 @@ export function scanSessionTimelineSupplement(
   options: ScanSessionTimelineSupplementOptions = {}
 ): ScanSessionTimelineSupplementResult {
   const records: SessionTimelineRecord[] = [];
-  const byCallId = new Map<string, SessionToolRecord>();
+  const byCallId = new Map<string, SessionToolRecord[]>();
   const maxSupplementRecords = positiveIntegerLimit(options.maxSupplementRecords);
   const maxScanLines = positiveIntegerLimit(options.maxScanLines);
   const maxScanBytes = positiveIntegerLimit(options.maxScanBytes);
@@ -562,6 +976,7 @@ export function scanSessionTimelineSupplement(
   let scannedLines = 0;
   let scannedBytes = 0;
   let budgetExhausted = false;
+  const lastUserMessageByTurn = new Map<string, string>();
   const iterator = lines[Symbol.iterator]();
 
   while (scannedLines < maxScanLines) {
@@ -611,6 +1026,27 @@ export function scanSessionTimelineSupplement(
 
     if (type === "message" || type === "agent_message") {
       const text = rawMessageText(payload).trim();
+      if (type === "message" && payload.role === "user") {
+        const skillReference = hiddenSkillReference(text);
+        if (skillReference || text.startsWith("<skill>")) {
+          const anchorText = lastUserMessageByTurn.get(turnId);
+          if (skillReference && anchorText && records.length < maxSupplementRecords) {
+            records.push({
+              kind: "skill-reference",
+              turnId,
+              anchorText,
+              skillReferences: [skillReference],
+              sequence
+            });
+          } else if (skillReference && anchorText) {
+            budgetExhausted = true;
+          }
+          continue;
+        }
+        if (text) {
+          lastUserMessageByTurn.set(turnId, text);
+        }
+      }
       if (text) {
         if (records.length < maxSupplementRecords) {
           records.push({ kind: "message", turnId, text, sequence });
@@ -626,11 +1062,22 @@ export function scanSessionTimelineSupplement(
         budgetExhausted = true;
         continue;
       }
-      const record = toolItemFromFunctionCall(payload, turnId, sequence);
-      if (record) {
+      const nestedRecords = nestedExecCommandRecords(payload, turnId, sequence);
+      const nextRecords = nestedRecords.length
+        ? nestedRecords
+        : [toolItemFromFunctionCall(payload, turnId, sequence)].filter(
+            (record): record is SessionToolRecord => Boolean(record)
+          );
+      const availableRecords = nextRecords.slice(0, Math.max(0, maxSupplementRecords - records.length));
+      if (availableRecords.length < nextRecords.length) {
+        budgetExhausted = true;
+      }
+      for (const record of availableRecords) {
         records.push(record);
         if (record.callId) {
-          byCallId.set(record.callId, record);
+          const grouped = byCallId.get(record.callId) ?? [];
+          grouped.push(record);
+          byCallId.set(record.callId, grouped);
         }
       }
       continue;
@@ -642,9 +1089,20 @@ export function scanSessionTimelineSupplement(
       type === "tool_search_output"
     ) {
       const callId = typeof payload.call_id === "string" ? payload.call_id : null;
-      const record = callId ? byCallId.get(callId) : null;
-      if (record) {
-        applyFunctionOutput(record, outputText(payload.output), options.contentRefFactory);
+      const groupedRecords = callId ? byCallId.get(callId) : null;
+      if (groupedRecords?.length) {
+        if (groupedRecords.every((record) => record.nestedExec)) {
+          const parts = nestedExecOutputParts(payload.output);
+          if (groupedRecords.length === 1) {
+            applyFunctionOutput(groupedRecords[0]!, parts.join("\n"), options.contentRefFactory);
+          } else if (parts.length === groupedRecords.length) {
+            groupedRecords.forEach((record, index) => {
+              applyFunctionOutput(record, parts[index] ?? "", options.contentRefFactory);
+            });
+          }
+        } else {
+          applyFunctionOutput(groupedRecords[0]!, outputText(payload.output), options.contentRefFactory);
+        }
       }
     }
   }
@@ -735,10 +1193,6 @@ function equivalentTool(base: MobileTimelineItem, supplement: MobileTimelineItem
   );
 }
 
-function hasEquivalentBaseTool(baseItems: MobileTimelineItem[], supplement: MobileTimelineItem): boolean {
-  return baseItems.some((base) => equivalentTool(base, supplement));
-}
-
 function withBaseTurnMeta(item: MobileTimelineItem, baseItems: MobileTimelineItem[]): MobileTimelineItem {
   const firstWithMeta = baseItems.find((base) => base.turnId === item.turnId);
   return {
@@ -757,10 +1211,41 @@ function mergeTurnSessionRecords(
     return baseItems;
   }
 
+  const recoveredSkillsByUserId = new Map<string, MobileSkillReference[]>();
+  for (const record of records) {
+    if (record.kind !== "skill-reference") {
+      continue;
+    }
+    const matches = baseItems.filter(
+      (item) => item.role === "user" && item.text.trim() === record.anchorText.trim()
+    );
+    if (matches.length !== 1 || matches[0]!.skillReferences?.length) {
+      continue;
+    }
+    const user = matches[0]!;
+    const existing = recoveredSkillsByUserId.get(user.id) ?? [];
+    for (const skill of record.skillReferences) {
+      if (!existing.some((current) => current.name === skill.name && current.path === skill.path)) {
+        existing.push(skill);
+      }
+    }
+    recoveredSkillsByUserId.set(user.id, existing);
+  }
+
   const result: MobileTimelineItem[] = [];
   const usedToolIds = new Set(baseItems.map((item) => item.id));
+  const consumedBaseToolIndexes = new Set<number>();
   let cursor = 0;
   let matchedMessage = false;
+
+  const consumeEquivalentBaseTool = (supplement: MobileTimelineItem): boolean => {
+    const index = baseItems.findIndex(
+      (base, baseIndex) => !consumedBaseToolIndexes.has(baseIndex) && equivalentTool(base, supplement)
+    );
+    if (index < 0) return false;
+    consumedBaseToolIndexes.add(index);
+    return true;
+  };
 
   const collectToolRecords = (endExclusive: number): MobileTimelineItem[] => {
     const items: MobileTimelineItem[] = [];
@@ -769,7 +1254,7 @@ function mergeTurnSessionRecords(
       if (!record || record.kind !== "tool") {
         continue;
       }
-      if (usedToolIds.has(record.item.id) || hasEquivalentBaseTool(baseItems, record.item)) {
+      if (usedToolIds.has(record.item.id) || consumeEquivalentBaseTool(record.item)) {
         continue;
       }
       usedToolIds.add(record.item.id);
@@ -805,7 +1290,12 @@ function mergeTurnSessionRecords(
     const unanchoredToolRecords = collectToolRecords(records.length);
     result.splice(fallbackToolInsertIndex(result), 0, ...unanchoredToolRecords);
   }
-  return result;
+  return result.map((item) => {
+    const skillReferences = recoveredSkillsByUserId.get(item.id);
+    return skillReferences?.length && !item.skillReferences?.length
+      ? { ...item, skillReferences }
+      : item;
+  });
 }
 
 function fallbackToolInsertIndex(items: MobileTimelineItem[]): number {

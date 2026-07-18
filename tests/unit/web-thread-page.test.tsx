@@ -17,6 +17,7 @@ vi.mock("next/navigation", () => ({
 const mockEnsureThread = vi.fn();
 const mockSetThreadEntries = vi.fn();
 const mockMergeThreadEntries = vi.fn();
+const mockReplaceLatestWindow = vi.fn(() => true);
 const mockPrependEntries = vi.fn();
 const mockAppendEntries = vi.fn();
 const mockReplaceOrAddEntry = vi.fn();
@@ -40,6 +41,7 @@ const mockSetPendingRequests = vi.fn();
 const mockResolvePendingRequest = vi.fn();
 const mockThreadState = vi.fn();
 const mockWsState = vi.fn();
+const mockReconnectAttempt = vi.fn();
 
 vi.mock("../../src/web/state/store", () => ({
   useStore: Object.assign(
@@ -57,6 +59,7 @@ function mockStoreState(): unknown {
       ensureThread: mockEnsureThread,
       setThreadEntries: mockSetThreadEntries,
       mergeThreadEntries: mockMergeThreadEntries,
+      replaceLatestWindow: mockReplaceLatestWindow,
       prependEntries: mockPrependEntries,
       appendEntries: mockAppendEntries,
       replaceOrAddEntry: mockReplaceOrAddEntry,
@@ -78,6 +81,7 @@ function mockStoreState(): unknown {
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
       wsState: mockWsState(),
+      reconnectAttempt: mockReconnectAttempt(),
       threads: { "thread-1": mockThreadState() }
   };
 }
@@ -167,6 +171,8 @@ describe("ThreadPage", () => {
     mockEnsureThread.mockClear();
     mockSetThreadEntries.mockClear();
     mockMergeThreadEntries.mockClear();
+    mockReplaceLatestWindow.mockClear();
+    mockReplaceLatestWindow.mockReturnValue(true);
     mockPrependEntries.mockClear();
     mockAppendEntries.mockClear();
     mockReplaceOrAddEntry.mockClear();
@@ -191,6 +197,8 @@ describe("ThreadPage", () => {
     mockResolvePendingRequest.mockClear();
     mockWsState.mockReset();
     mockWsState.mockReturnValue("open");
+    mockReconnectAttempt.mockReset();
+    mockReconnectAttempt.mockReturnValue(0);
     mockResumeThread.mockClear();
     mockListTurnsBefore.mockClear();
     mockListTurnItems.mockClear();
@@ -352,6 +360,23 @@ describe("ThreadPage", () => {
 
     const scroller = container.querySelector('[style*="overflow"]');
     expect(scroller).toBeTruthy();
+  });
+
+  it("重连时在 timeline 末尾显示单一 Wi-Fi 活动行", async () => {
+    mockWsState.mockReturnValue("reconnecting");
+    mockReconnectAttempt.mockReturnValue(2);
+
+    const { container } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+    const scroller = container.querySelector(".cw-thread-scroller");
+    const status = scroller?.querySelector("[data-reconnect-status='true']");
+    expect(status).toBeInTheDocument();
+    expect(status).toHaveTextContent("正在重新连接 2/5");
+    expect(status?.querySelector("svg")).toBeInTheDocument();
+    expect(container.querySelectorAll("[data-reconnect-status='true']")).toHaveLength(1);
   });
 
   it("should store initial history cursor from bounded thread detail", async () => {
@@ -742,18 +767,38 @@ describe("ThreadPage", () => {
       title: "Initial",
       modelProvider: "claude-opus-4",
       status: "idle",
+      bootId: "boot-a",
+      generation: 7,
+      historyStamp: { bootId: "boot-a", generation: 7 },
       timeline: [],
       lastTurnId: "turn-lagging",
       updatedAt: Date.now()
     });
     mockListTurnsBefore.mockResolvedValue({
-      items: [{ id: "user-lagging", turnId: "turn-lagging", role: "user", text: "等待回复" }],
+      bootId: "boot-a",
+      generation: 7,
+      historyStamp: { bootId: "boot-a", generation: 7 },
+      pageWatermark: 12,
+      windowStartAnchor: JSON.stringify(["boot-a", 7, "turn-lagging", "user-lagging"]),
+      windowEndAnchor: JSON.stringify(["boot-a", 7, "turn-lagging", "user-lagging"]),
+      items: [{
+        id: "user-lagging",
+        turnId: "turn-lagging",
+        bootId: "boot-a",
+        generation: 7,
+        historyStamp: { bootId: "boot-a", generation: 7 },
+        role: "user",
+        text: "等待回复"
+      }],
       nextCursor: "older"
     });
     mockThreadState.mockReturnValue({
       entries: [{
         id: "local-user",
         turnId: "turn-lagging",
+        bootId: "boot-a",
+        generation: 7,
+        historyStamp: { bootId: "boot-a", generation: 7 },
         createdAt: Date.now(),
         body: { kind: "user-message", text: "等待回复", status: "sent" }
       }],
@@ -801,6 +846,9 @@ describe("ThreadPage", () => {
       title: "Initial",
       modelProvider: "claude-opus-4",
       status: "idle",
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
       timeline: [{ id: "cached-1", turnId: "turn-old", role: "user", text: "Cached message" }],
       lastTurnId: "turn-old",
       nextCursor: "initial-older",
@@ -812,18 +860,30 @@ describe("ThreadPage", () => {
       title: "Repaired",
       modelProvider: "claude-opus-4",
       status: "idle",
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
       timeline: [{ id: "repair-1", turnId: "turn-new", role: "agent", text: "Repaired tail" }],
       lastTurnId: "turn-new",
       nextCursor: null,
       updatedAt: Date.now()
     };
     mockReadThread.mockResolvedValue(initialDetail);
-    mockListTurnsBefore.mockResolvedValue({ items: initialDetail.timeline, nextCursor: "initial-older" });
+    mockListTurnsBefore.mockResolvedValue({
+      items: initialDetail.timeline,
+      nextCursor: "initial-older",
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 }
+    });
     let threadState = {
       entries: [
         {
           id: "cached-1",
           turnId: "turn-old",
+          bootId: "boot-a",
+          generation: 0,
+          historyStamp: { bootId: "boot-a", generation: 0 },
           createdAt: Date.now(),
           body: { kind: "user-message", text: "Cached message", status: "sent" }
         }
@@ -850,7 +910,16 @@ describe("ThreadPage", () => {
     });
 
     mockReadThread.mockResolvedValue(repairDetail);
-    mockListTurnsBefore.mockResolvedValue({ items: repairDetail.timeline, nextCursor: "repair-older" });
+    mockListTurnsBefore.mockResolvedValue({
+      items: repairDetail.timeline,
+      nextCursor: null,
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
+      pageWatermark: 20,
+      windowStartAnchor: JSON.stringify(["boot-a", 0, "turn-new", "repair-1"]),
+      windowEndAnchor: JSON.stringify(["boot-a", 0, "turn-new", "repair-1"])
+    });
     threadState = { ...threadState, repairRequestedAt: 123 };
     rerender(<ThreadPage />);
 
@@ -2066,6 +2135,8 @@ describe("ThreadPage", () => {
     await waitFor(() => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
+    mockListTurnsBefore.mockClear();
+    mockPrependEntries.mockClear();
 
     const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
     fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
@@ -2080,7 +2151,67 @@ describe("ThreadPage", () => {
     });
   });
 
-  it("should leave prepend scroll anchoring to Timeline without moving the viewport", async () => {
+  it("活动折叠后内容不足一屏时无需滚动即可加载上一页", async () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class MockResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+      observe(): void {}
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "recent",
+          createdAt: Date.now(),
+          body: { kind: "agent-message", text: "Recent message" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: "turn-10",
+      reachedBeginning: false
+    });
+    mockListTurnsBefore.mockResolvedValue({
+      items: [{ id: "older", role: "user", text: "Older message" }],
+      nextCursor: null
+    });
+
+    const { container } = render(<ThreadPage />);
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    mockListTurnsBefore.mockClear();
+    mockPrependEntries.mockClear();
+
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 320 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 640 });
+
+    act(() => {
+      for (const callback of resizeCallbacks) {
+        callback([], {} as ResizeObserver);
+      }
+    });
+
+    await waitFor(() => {
+      expect(mockListTurnsBefore).toHaveBeenCalledTimes(1);
+    });
+    expect(mockPrependEntries).toHaveBeenCalledWith(
+      "thread-1",
+      [expect.objectContaining({ id: "older", body: expect.objectContaining({ kind: "user-message" }) })],
+      null,
+      true
+    );
+  });
+
+  it("历史页 prepend 后按首个可见消息位置恢复，不受其他内容增高影响", async () => {
     const animationFrames: FrameRequestCallback[] = [];
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       animationFrames.push(callback);
@@ -2130,13 +2261,42 @@ describe("ThreadPage", () => {
       configurable: true,
       get: () => 500
     });
+    Object.defineProperty(scroller, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 390,
+        height: 500,
+        top: 0,
+        right: 390,
+        bottom: 500,
+        left: 0,
+        toJSON: () => ({})
+      })
+    });
+    const visibleRow = container.querySelector("[data-timeline-row='true']") as HTMLElement;
+    let visibleRowTop = 120;
+    Object.defineProperty(visibleRow, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: visibleRowTop,
+        width: 390,
+        height: 80,
+        top: visibleRowTop,
+        right: 390,
+        bottom: visibleRowTop + 80,
+        left: 0,
+        toJSON: () => ({})
+      })
+    });
 
     fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
 
     await waitFor(() => {
       expect(mockListTurnsBefore).toHaveBeenCalled();
     });
-    scrollHeight = 1400;
     await act(async () => {
       resolvePage?.({
         items: [{ id: "older", role: "user", text: "Older message" }],
@@ -2146,7 +2306,14 @@ describe("ThreadPage", () => {
     });
 
     expect(scroller.scrollTop).toBe(0);
-    expect(animationFrames).toHaveLength(0);
+    expect(animationFrames).toHaveLength(1);
+
+    scrollHeight = 1600;
+    visibleRowTop = 320;
+    act(() => {
+      animationFrames[0]?.(0);
+    });
+    expect(scroller.scrollTop).toBe(200);
   });
 
   it("should preserve paginated activity before the final assistant message with stable timestamps", async () => {
@@ -4227,6 +4394,11 @@ describe("ThreadPage", () => {
       expect(mockReplaceOrAddEntry).toHaveBeenCalledWith(
         "thread-1",
         expect.objectContaining({
+          clientUserMessageId: expect.stringMatching(/^local-user-/),
+          sendOperation: expect.objectContaining({
+            payloadFingerprint: expect.any(String),
+            outcome: "ambiguous"
+          }),
           body: expect.objectContaining({ kind: "user-message", status: "failed" })
         })
       );
@@ -4235,7 +4407,10 @@ describe("ThreadPage", () => {
       "thread-1",
       [
         expect.objectContaining({
-          body: { kind: "error", text: "发送失败：502 Bad Gateway" }
+          body: {
+            kind: "error",
+            text: "发送结果未确认：502 Bad Gateway。请先刷新恢复，或重试同一发送动作。"
+          }
         })
       ]
     );
@@ -4397,6 +4572,7 @@ describe("ThreadPage", () => {
     expect(mockStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "thread-1",
+        clientUserMessageId: "failed-local",
         text: "retry me",
         imagePaths: [],
         skillReferences
@@ -5050,7 +5226,7 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should still apply a pending initial snapshot after fork-local target resolution fails", async () => {
+  it("should reject a pending initial snapshot after fork-local target resolution mutates the timeline", async () => {
     let resolveInitialRead: (value: unknown) => void = () => undefined;
     mockReadThread.mockReturnValue(new Promise((resolve) => {
       resolveInitialRead = resolve;
@@ -5129,7 +5305,7 @@ describe("ThreadPage", () => {
       await Promise.resolve();
     });
 
-    expect(mockSetThreadEntries).toHaveBeenCalledWith(
+    expect(mockSetThreadEntries).not.toHaveBeenCalledWith(
       "thread-1",
       [expect.objectContaining({ id: "auth-user" })],
       null

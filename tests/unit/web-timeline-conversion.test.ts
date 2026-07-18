@@ -78,6 +78,89 @@ describe("timeline conversion", () => {
     ]);
   });
 
+  it("restores standalone historical Skill links and removes only those lines from the body", () => {
+    const entry = timelineItemToEntry(
+      {
+        id: "historical-skill-link",
+        role: "user",
+        text: [
+          "请先审查方案",
+          "",
+          "[$grill-with-docs](/Users/huangzy/.cc-switch/skills/grill-with-docs/SKILL.md)",
+          "",
+          "然后继续"
+        ].join("\n")
+      },
+      1003
+    );
+
+    expect(entry.body).toEqual({
+      kind: "user-message",
+      text: "请先审查方案\n\n然后继续",
+      skillReferences: [
+        {
+          name: "grill-with-docs",
+          path: "/Users/huangzy/.cc-switch/skills/grill-with-docs/SKILL.md"
+        }
+      ],
+      status: "sent"
+    });
+  });
+
+  it("restores multiple POSIX and Windows Skill lines with stable deduplication", () => {
+    const entry = timelineItemToEntry(
+      {
+        id: "historical-multiple-skills",
+        role: "user",
+        text: [
+          "[$grilling](/Users/huangzy/.cc-switch/skills/grilling/SKILL.md)",
+          "[$grilling](/Users/huangzy/.cc-switch/skills/grilling/SKILL.md)",
+          "[$domain-modeling](C:\\Users\\huangzy\\skills\\domain-modeling\\SKILL.md)"
+        ].join("\n")
+      },
+      1004
+    );
+
+    expect((entry.body as any).text).toBe("");
+    expect((entry.body as any).skillReferences).toEqual([
+      { name: "grilling", path: "/Users/huangzy/.cc-switch/skills/grilling/SKILL.md" },
+      { name: "domain-modeling", path: "C:\\Users\\huangzy\\skills\\domain-modeling\\SKILL.md" }
+    ]);
+  });
+
+  it("keeps inline, quoted, fenced, and incomplete Skill-like Markdown as authored text", () => {
+    const text = [
+      "正文中的 [$grilling](/Users/me/grilling/SKILL.md) 不应恢复。",
+      "> [$quoted](/Users/me/quoted/SKILL.md)",
+      "```md",
+      "[$coded](/Users/me/coded/SKILL.md)",
+      "```",
+      "[$incomplete](/Users/me/incomplete/readme.md)"
+    ].join("\n");
+    const entry = timelineItemToEntry({ id: "skill-like-text", role: "user", text }, 1005);
+
+    expect((entry.body as any).text).toBe(text);
+    expect((entry.body as any).skillReferences).toBeUndefined();
+  });
+
+  it("keeps structured Skill references authoritative without parsing body fallbacks", () => {
+    const rawFallback = "[$other](/Users/me/other/SKILL.md)";
+    const entry = timelineItemToEntry(
+      {
+        id: "structured-skill-authority",
+        role: "user",
+        text: rawFallback,
+        skillReferences: [{ name: "grilling", path: "/Users/me/grilling/SKILL.md" }]
+      },
+      1006
+    );
+
+    expect((entry.body as any).text).toBe(rawFallback);
+    expect((entry.body as any).skillReferences).toEqual([
+      { name: "grilling", path: "/Users/me/grilling/SKILL.md" }
+    ]);
+  });
+
   it("should compute rollback turn count from target entry turn metadata", () => {
     const entries = [
       { id: "u1", turnId: "turn-1", turnIndex: 0, createdAt: 1, body: { kind: "user-message", text: "one" } },
@@ -150,6 +233,141 @@ describe("timeline conversion", () => {
     expect(entry.body.kind).toBe("user-message");
     expect((entry.body as any).text).toBe("请看截图");
     expect((entry.body as any).imagePaths).toEqual(["C:/Users/huang/AppData/Local/Temp/shot.png"]);
+  });
+
+  it("只展示 Codex 注入包装中的真实用户请求并保留消息附件元数据", () => {
+    const item: TimelineItem = {
+      id: "wrapped-user",
+      turnId: "turn-wrapped",
+      clientUserMessageId: "client-wrapped",
+      role: "user",
+      text: `
+# Files mentioned by the user:
+
+## screenshot.png: /tmp/screenshot.png
+
+<in-app-browser-context source="ambient-ui-state">
+This block is automatically supplied ambient UI state, not part of the user's request.
+# In app browser:
+- Current URL: http://127.0.0.1:3000/threads/current
+</in-app-browser-context>
+
+## My request for Codex:
+只显示这句话
+`,
+      imagePaths: ["/tmp/screenshot.png"],
+      skillReferences: [
+        {
+          name: "openspec-apply-change",
+          path: "/repo/.codex/skills/openspec-apply-change/SKILL.md"
+        }
+      ]
+    };
+
+    const entry = timelineItemToEntry(item, 1003);
+
+    expect(entry.clientUserMessageId).toBe("client-wrapped");
+    expect(entry.body).toEqual({
+      kind: "user-message",
+      text: "只显示这句话",
+      imagePaths: ["/tmp/screenshot.png"],
+      skillReferences: [
+        {
+          name: "openspec-apply-change",
+          path: "/repo/.codex/skills/openspec-apply-change/SKILL.md"
+        }
+      ],
+      status: "sent"
+    });
+  });
+
+  it("保留用户主动输入的相似 XML、Markdown 和不完整包装", () => {
+    const authored = [
+      "<in-app-browser-context>",
+      "这是用户自己输入但没有可信 source 的标签",
+      "</in-app-browser-context>",
+      "",
+      "## My request for Codex:",
+      "这也是用户正文"
+    ].join("\n");
+    const incomplete = [
+      '<in-app-browser-context source="ambient-ui-state">',
+      "缺少关闭标签和 request marker"
+    ].join("\n");
+
+    const authoredEntry = timelineItemToEntry(
+      { id: "authored-markup", role: "user", text: authored },
+      1004
+    );
+    const incompleteEntry = timelineItemToEntry(
+      { id: "incomplete-wrapper", role: "user", text: incomplete },
+      1005
+    );
+
+    expect(authoredEntry.body.kind).toBe("user-message");
+    expect((authoredEntry.body as any).text).toBe(authored);
+    expect(incompleteEntry.body.kind).toBe("user-message");
+    expect((incompleteEntry.body as any).text).toBe(incomplete);
+  });
+
+  it("只展示可信 goal continuation 中唯一 objective 的正文", () => {
+    const text = [
+      '<codex_internal_context source="goal">',
+      "Continue working toward the active thread goal.",
+      "",
+      "<objective>",
+      "补充进入当前 OpenSpec，并完成开发改造与真实会话验收",
+      "</objective>",
+      "",
+      "Budget:",
+      "- Tokens used: 0",
+      "",
+      "Completion audit:",
+      "Do not rely on intent or partial progress.",
+      "</codex_internal_context>"
+    ].join("\n");
+
+    const entry = timelineItemToEntry(
+      {
+        id: "goal-continuation",
+        turnId: "turn-goal",
+        clientUserMessageId: "client-goal",
+        role: "user",
+        text
+      },
+      1006
+    );
+
+    expect(entry.clientUserMessageId).toBe("client-goal");
+    expect(entry.body).toEqual({
+      kind: "user-message",
+      text: "补充进入当前 OpenSpec，并完成开发改造与真实会话验收",
+      status: "sent"
+    });
+  });
+
+  it("保留普通、不完整或包含多个 objective 的相似 goal XML", () => {
+    const authored = "<objective>这是用户主动输入的 XML</objective>";
+    const incomplete = [
+      '<codex_internal_context source="goal">',
+      "<objective>缺少完整外层结束标签</objective>"
+    ].join("\n");
+    const ambiguous = [
+      '<codex_internal_context source="goal">',
+      "<objective>第一个目标</objective>",
+      "<objective>第二个目标</objective>",
+      "</codex_internal_context>"
+    ].join("\n");
+
+    for (const [id, text] of [
+      ["authored-objective", authored],
+      ["incomplete-goal", incomplete],
+      ["ambiguous-goal", ambiguous]
+    ] as const) {
+      const entry = timelineItemToEntry({ id, role: "user", text }, 1007);
+      expect(entry.body.kind).toBe("user-message");
+      expect((entry.body as any).text).toBe(text);
+    }
   });
 
   it("should convert agent message", () => {

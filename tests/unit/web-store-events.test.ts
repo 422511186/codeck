@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getContextUsage } from "../../src/web/storage/contextUsage";
 import { useStore } from "../../src/web/state/store";
+import { timelineEventLedgerKey } from "../../src/web/state/timeline-engine";
 
 describe("web store codex events", () => {
   beforeEach(() => {
@@ -250,6 +251,63 @@ describe("web store codex events", () => {
         id: "agent-1",
         turnId: "turn-1",
         body: { kind: "agent-message", text: "第一段第二段" }
+      })
+    ]);
+  });
+
+  it("keeps item_updated completion on the same stamped identity as its live deltas", () => {
+    const bootId = "boot-live-item-update";
+    const threadId = "thread-live-item-update";
+    const turnId = "turn-live-item-update";
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        eventId: "item-created",
+        threadId,
+        turnId,
+        bootId,
+        generation: 0,
+        revision: 1,
+        item: { id: "msg-live", role: "agent", text: "" }
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        eventId: "delta-live",
+        threadId,
+        turnId,
+        itemId: "msg-live",
+        bootId,
+        generation: 0,
+        revision: 2,
+        fragmentSequence: 1,
+        delta: "实时回复"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        eventId: "item-completed",
+        threadId,
+        turnId,
+        bootId,
+        generation: 0,
+        revision: 3,
+        item: { id: "msg-live", role: "agent", text: "实时回复" }
+      }
+    });
+
+    expect(useStore.getState().threads[threadId]?.entries).toEqual([
+      expect.objectContaining({
+        id: "msg-live",
+        bootId,
+        historyStamp: { bootId, generation: 0 },
+        body: { kind: "agent-message", text: "实时回复" }
       })
     ]);
   });
@@ -594,7 +652,7 @@ describe("web store codex events", () => {
 
     unsubscribe();
     expect(notifications).toBe(1);
-    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("evt-visible-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has(timelineEventLedgerKey(0, "evt-visible-delta"))).toBe(true);
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
@@ -621,6 +679,7 @@ describe("web store codex events", () => {
         {
           id: "agent-1",
           turnId: "turn-1",
+          snapshotSequence: 10,
           createdAt: 1,
           body: { kind: "agent-message", text: "已处理" }
         }
@@ -861,7 +920,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("merges equivalent live and completed agent/reasoning entries in the same turn even when item ids differ", () => {
+  it("只将不同 ID 的 live agent provisional 收敛到 canonical，并保持 reasoning 独立", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -913,7 +972,7 @@ describe("web store codex events", () => {
     });
 
     const entries = useStore.getState().threads["thread-1"]?.entries ?? [];
-    expect(entries.filter((entry) => entry.body.kind === "reasoning")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.body.kind === "reasoning")).toHaveLength(2);
     expect(entries.filter((entry) => entry.body.kind === "agent-message")).toHaveLength(1);
     expect(entries).toEqual(
       expect.arrayContaining([
@@ -927,6 +986,51 @@ describe("web store codex events", () => {
         })
       ])
     );
+    expect(entries.some((entry) => entry.id === "agent-live-id")).toBe(false);
+    expect(useStore.getState().__getTimelineDiagnostics?.()?.agentAliasReconciliations).toBe(1);
+  });
+
+  it("双向收敛 raw response item 与 canonical item 的不同 ID", () => {
+    const dispatchItem = (
+      turnId: string,
+      id: string,
+      text: string,
+      raw: boolean,
+      eventId: string
+    ) => useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId,
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId,
+        item: {
+          id,
+          role: "agent",
+          text,
+          ...(raw
+            ? {
+                sourceLocator: {
+                  sourceKind: "response" as const,
+                  sourceId: `response-${turnId}`,
+                  absoluteOutputIndex: 0
+                }
+              }
+            : {})
+        }
+      }
+    });
+
+    dispatchItem("turn-raw-first", "agent-raw-1", "raw 先到", true, "raw-first");
+    dispatchItem("turn-raw-first", "agent-canonical-1", "raw 先到", false, "canonical-second");
+    dispatchItem("turn-canonical-first", "agent-canonical-2", "canonical 先到", false, "canonical-first");
+    dispatchItem("turn-canonical-first", "agent-raw-2", "canonical 先到", true, "raw-second");
+
+    expect(
+      useStore.getState().threads["thread-1"]?.entries
+        .filter((entry) => entry.body.kind === "agent-message")
+        .map((entry) => entry.id)
+    ).toEqual(["agent-canonical-1", "agent-canonical-2"]);
   });
 
   it("keeps identical agent replies from different turns distinct", () => {
@@ -946,6 +1050,91 @@ describe("web store codex events", () => {
     ]);
 
     expect(useStore.getState().threads["thread-1"]?.entries.filter((entry) => entry.body.kind === "agent-message")).toHaveLength(2);
+  });
+
+  it("keeps two canonical agent replies with identical text in the same turn distinct", () => {
+    for (const id of ["agent-canonical-1", "agent-canonical-2"]) {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          eventId: `complete-${id}`,
+          kind: "item_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id, role: "agent", text: "允许重复的正式消息" }
+        }
+      });
+    }
+
+    expect(
+      useStore.getState().threads["thread-1"]?.entries
+        .filter((entry) => entry.body.kind === "agent-message")
+        .map((entry) => entry.id)
+    ).toEqual(["agent-canonical-1", "agent-canonical-2"]);
+  });
+
+  it("keeps ambiguous live agent aliases fail closed", () => {
+    for (const id of ["agent-live-1", "agent-live-2"]) {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          eventId: `delta-${id}`,
+          kind: "agent_message_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: id,
+          delta: "无法唯一归属"
+        }
+      });
+    }
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "complete-agent-canonical",
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "agent-canonical", role: "agent", text: "无法唯一归属" }
+      }
+    });
+
+    expect(
+      useStore.getState().threads["thread-1"]?.entries
+        .filter((entry) => entry.body.kind === "agent-message")
+        .map((entry) => entry.id)
+    ).toEqual(["agent-live-1", "agent-live-2", "agent-canonical"]);
+    expect(useStore.getState().__getTimelineDiagnostics?.()?.agentAliasAmbiguities).toBe(1);
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toBeNull();
+  });
+
+  it("keeps conflicting live and canonical agent text fail closed without generic text repair", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "delta-agent-conflict",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-live",
+        delta: "第一条正文"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "complete-agent-conflict",
+        kind: "item_updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "agent-canonical", role: "agent", text: "完全不同的正文" }
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-1"]!;
+    expect(thread.entries.filter((entry) => entry.body.kind === "agent-message")).toHaveLength(2);
+    expect(thread.timelineEngine.diagnostics.agentAliasReconciliations).toBe(0);
+    expect(thread.timelineEngine.diagnostics.agentAliasAmbiguities).toBe(0);
+    expect(thread.repairRequest).toBeNull();
   });
 
   it("does not append replayed deltas already covered by a snapshot repair", () => {
@@ -970,6 +1159,7 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "agent-1",
+        sequence: 8,
         delta: "hello "
       }
     });
@@ -981,6 +1171,7 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "agent-1",
+        sequence: 9,
         delta: "world"
       }
     });
@@ -992,6 +1183,7 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "agent-1",
+        sequence: 11,
         delta: "!"
       }
     });
@@ -1011,6 +1203,7 @@ describe("web store codex events", () => {
         {
           id: "agent-1",
           turnId: "turn-1",
+          snapshotSequence: 10,
           createdAt: 1,
           body: { kind: "agent-message", text: "hello world" }
         }
@@ -1031,13 +1224,14 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "agent-1",
+        sequence: 9,
         delta: "hello "
       }
     });
 
     unsubscribe();
     expect(notifications).toBe(0);
-    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("replay-covered-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has(timelineEventLedgerKey(0, "replay-covered-delta"))).toBe(true);
     expect(useStore.getState().threads["thread-1"]?.entries).toBe(entriesBeforeReplay);
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
@@ -1045,6 +1239,40 @@ describe("web store codex events", () => {
         body: { kind: "agent-message", text: "hello world" }
       })
     ]);
+  });
+
+  it("requests repair instead of using text-prefix suppression for a sequence-less delta", () => {
+    useStore.getState().setThreadEntries(
+      "thread-1",
+      [
+        {
+          id: "agent-1",
+          turnId: "turn-1",
+          createdAt: 1,
+          body: { kind: "agent-message", text: "hello" }
+        }
+      ],
+      null
+    );
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        eventId: "sequence-less-h",
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "h"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({ id: "agent-1", body: { kind: "agent-message", text: "hello" } })
+    ]);
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(
+      expect.objectContaining({ reason: "timeline-gap" })
+    );
   });
 
   it("does not append replayed middle deltas already covered by a snapshot repair", () => {
@@ -1173,8 +1401,8 @@ describe("web store codex events", () => {
       ]
     });
 
-    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("covered-delta")).toBe(true);
-    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has("tail-delta")).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has(timelineEventLedgerKey(0, "covered-delta"))).toBe(true);
+    expect(useStore.getState().threads["thread-1"]?.processedEventIds.has(timelineEventLedgerKey(0, "tail-delta"))).toBe(true);
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
@@ -1473,6 +1701,36 @@ describe("web store codex events", () => {
 
     expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeUndefined();
     expect(useStore.getState().threads["thread-2"]?.repairRequestedAt).toEqual(expect.any(Number));
+  });
+
+  it("marks every affected thread for repair from a multi-owner gap", () => {
+    useStore.getState().ensureThread("thread-a");
+    useStore.getState().ensureThread("thread-b");
+
+    useStore.getState().dispatchEvent({
+      type: "timeline-gap",
+      scope: "threads",
+      affectedThreadIds: ["thread-a", "thread-b"],
+      lastEventId: "missing"
+    });
+
+    expect(useStore.getState().threads["thread-a"]?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(useStore.getState().threads["thread-b"]?.repairRequestedAt).toEqual(expect.any(Number));
+  });
+
+  it("repairs every cached thread for an all-tracked barrier", () => {
+    useStore.getState().ensureThread("thread-a");
+    useStore.getState().ensureThread("thread-b");
+
+    useStore.getState().dispatchEvent({
+      type: "timeline-gap",
+      scope: "all-tracked",
+      bootId: "boot-new",
+      lastEventId: "old-boot"
+    });
+
+    expect(useStore.getState().threads["thread-a"]?.repairRequestedAt).toEqual(expect.any(Number));
+    expect(useStore.getState().threads["thread-b"]?.repairRequestedAt).toEqual(expect.any(Number));
   });
 
   it("does not repair the active thread when a timeline gap has no reliable owner", () => {
@@ -2224,6 +2482,7 @@ describe("web store codex events", () => {
       [
         {
           id: "agent-live",
+          turnId: "turn-1",
           createdAt: 20,
           body: { kind: "agent-message", text: "直播输出完成" }
         }
@@ -2303,7 +2562,7 @@ describe("web store codex events", () => {
       "thread-1",
       [
         {
-          id: "tool-snapshot",
+          id: "tool-live",
           turnId: "turn-1",
           createdAt: 2,
           body: {
@@ -2333,6 +2592,7 @@ describe("web store codex events", () => {
     useStore.getState().appendEntries("thread-1", [
       {
         id: "local-user-1",
+        clientUserMessageId: "send-1",
         createdAt: 100,
         body: { kind: "user-message", text: "帮我看一下母乳结构", status: "sending" }
       },
@@ -2348,6 +2608,7 @@ describe("web store codex events", () => {
       [
         {
           id: "server-user-1",
+          clientUserMessageId: "send-1",
           createdAt: 102,
           body: { kind: "user-message", text: "帮我看一下母乳结构", status: "sent" }
         }
@@ -2403,7 +2664,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("dedupes duplicate local user messages before the server confirms them", () => {
+  it("keeps same-text local user messages distinct when operation ids differ", () => {
     useStore.getState().appendEntries("thread-1", [
       {
         id: "local-user-1",
@@ -2419,8 +2680,9 @@ describe("web store codex events", () => {
       }
     ]);
 
-    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
-      expect.objectContaining({ id: "local-user-1" })
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "local-user-1",
+      "local-user-2"
     ]);
   });
 
@@ -2450,6 +2712,7 @@ describe("web store codex events", () => {
     useStore.getState().replaceOrAddEntry("thread-1", {
       id: "server-user-2",
       turnId: "turn-2",
+      clientUserMessageId: "local-user-2",
       createdAt: 102,
       body: { kind: "user-message", text: "继续", status: "sent" }
     });
@@ -2480,6 +2743,7 @@ describe("web store codex events", () => {
     useStore.getState().replaceOrAddEntry("thread-1", {
       id: "server-user-skill",
       turnId: "turn-1",
+      clientUserMessageId: "local-user-skill",
       createdAt: 101,
       body: { kind: "user-message", text: "分析 bug", status: "sent" }
     });
@@ -2542,6 +2806,7 @@ describe("web store codex events", () => {
         {
           id: "server-user-activity",
           turnId: "turn-1",
+          clientUserMessageId: "local-user-activity",
           createdAt: 103,
           body: { kind: "user-message", text: "看截图", status: "sent" }
         }
@@ -2598,6 +2863,7 @@ describe("web store codex events", () => {
     useStore.getState().replaceOrAddEntry("thread-1", {
       id: "server-user-same-2",
       turnId: "turn-2",
+      clientUserMessageId: "local-user-same-2",
       createdAt: 102,
       body: { kind: "user-message", text: "继续", status: "sent" }
     });
@@ -2614,6 +2880,7 @@ describe("web store codex events", () => {
     useStore.getState().appendEntries("thread-1", [
       {
         id: "local-user-1",
+        clientUserMessageId: "send-confirm-1",
         createdAt: 100,
         body: { kind: "user-message", text: "确认我", status: "sending" }
       },
@@ -2626,6 +2893,7 @@ describe("web store codex events", () => {
 
     useStore.getState().replaceOrAddEntry("thread-1", {
       id: "server-user-1",
+      clientUserMessageId: "send-confirm-1",
       createdAt: 102,
       body: { kind: "user-message", text: "确认我", status: "sent" }
     });
@@ -2738,6 +3006,94 @@ describe("web store codex events", () => {
     expect(thread?.repairRequest).toBeNull();
   });
 
+  it("shows context compaction while running, completes in place, and never regresses", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
+    });
+
+    const runningItem = {
+      id: "context-compaction-item",
+      role: "system" as const,
+      text: "正在自动压缩上下文",
+      toolKind: "system" as const,
+      systemKind: "context-compaction" as const,
+      status: "running" as const
+    };
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        eventId: "compact-started",
+        revision: 1,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 100,
+        item: runningItem
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({ id: "turn-1-reasoning-pending" }),
+      expect.objectContaining({
+        id: "context-compaction-item",
+        body: {
+          kind: "system",
+          text: "正在自动压缩上下文",
+          systemKind: "context-compaction",
+          status: "running"
+        }
+      })
+    ]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        eventId: "compact-completed",
+        revision: 2,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 200,
+        item: { ...runningItem, text: "压缩上下文已完成", status: "success" as const }
+      }
+    });
+
+    const completedEntries = useStore.getState().threads["thread-1"]?.entries ?? [];
+    expect(completedEntries.filter((entry) => entry.id === "context-compaction-item")).toEqual([
+      expect.objectContaining({
+        body: {
+          kind: "system",
+          text: "压缩上下文已完成",
+          systemKind: "context-compaction",
+          status: "success"
+        }
+      })
+    ]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        eventId: "compact-started-late",
+        revision: 3,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 300,
+        item: runningItem
+      }
+    });
+
+    expect(
+      useStore.getState().threads["thread-1"]?.entries.find((entry) => entry.id === "context-compaction-item")?.body
+    ).toEqual({
+      kind: "system",
+      text: "压缩上下文已完成",
+      systemKind: "context-compaction",
+      status: "success"
+    });
+  });
+
   it("keeps streamed output after turn completion without requesting snapshot repair", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -2769,7 +3125,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("merges snapshot context compaction with the live completion event", () => {
+  it("keeps compaction sources distinct without a shared operation identity", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "context_compacted", threadId: "thread-1", turnId: "turn-1" }
@@ -2794,7 +3150,7 @@ describe("web store codex events", () => {
         (entry) => entry.body.kind === "system" && entry.body.text === "压缩上下文已完成"
       );
 
-    expect(compactionEntries).toHaveLength(1);
+    expect(compactionEntries).toHaveLength(2);
   });
 
   it("stores context usage updates and caches them by thread id", () => {
@@ -3046,7 +3402,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("authoritatively replaces a fallback live partial with a differently identified completed item", () => {
+  it("keeps unresolved live partial separate from a differently identified completed item", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -3070,6 +3426,10 @@ describe("web store codex events", () => {
     });
 
     expect(useStore.getState().threads["thread-fallback-completed"]?.entries).toEqual([
+      expect.objectContaining({
+        id: expect.stringContaining("unresolved:"),
+        completeness: expect.objectContaining({ status: "repair-required" })
+      }),
       expect.objectContaining({
         id: "agent-server",
         body: { kind: "agent-message", text: "authoritative final" }
@@ -3304,6 +3664,101 @@ describe("web store codex events", () => {
     expect(thread.entries[1]).toEqual(
       expect.objectContaining({ body: { kind: "agent-message", text: "hello world" } })
     );
+  });
+
+  it("replaces only the authoritative latest window and preserves post-watermark live state", () => {
+    const stamp = { bootId: "boot-a", generation: 2 };
+    const entry = (id: string, turnId: string, text: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      turnId,
+      bootId: stamp.bootId,
+      generation: stamp.generation,
+      historyStamp: stamp,
+      createdAt: Date.now(),
+      ...extra,
+      body: { kind: "agent-message" as const, text }
+    });
+    useStore.getState().setThreadEntries("thread-window", [
+      entry("older", "turn-0", "older", { baselineWatermark: 5 }),
+      entry("window-start", "turn-1", "old start", { baselineWatermark: 5 }),
+      entry("stale-tail", "turn-1", "stale", { streamSequence: 8 }),
+      entry("late-live", "turn-2", "late", { streamSequence: 15 })
+    ], "older-cursor");
+    useStore.getState().appendEntries("thread-window", [{
+      id: "local-user-pending",
+      clientUserMessageId: "local-user-pending",
+      createdAt: Date.now(),
+      body: { kind: "user-message", text: "pending", status: "sending" }
+    }]);
+    const authoritative = [
+      entry("window-start", "turn-1", "new start", { baselineWatermark: 10 }),
+      entry("window-end", "turn-1", "new end", { baselineWatermark: 10 })
+    ];
+
+    const applied = useStore.getState().replaceLatestWindow("thread-window", authoritative, null, {
+      historyStamp: stamp,
+      pageWatermark: 10,
+      windowStartAnchor: JSON.stringify(["boot-a", 2, "turn-1", "window-start"]),
+      windowEndAnchor: JSON.stringify(["boot-a", 2, "turn-1", "window-end"])
+    });
+
+    expect(applied).toBe(true);
+    expect(useStore.getState().threads["thread-window"]?.entries.map((item) => item.id)).toEqual([
+      "older",
+      "window-start",
+      "window-end",
+      "late-live",
+      "local-user-pending"
+    ]);
+  });
+
+  it("跨 generation repair 只迁移 preservedThrough 证明的旧页前缀", () => {
+    const oldStamp = { bootId: "boot-a", generation: 1 };
+    const nextStamp = { bootId: "boot-a", generation: 2 };
+    const oldEntry = (id: string, turnId: string, text: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      turnId,
+      historyStamp: oldStamp,
+      bootId: oldStamp.bootId,
+      generation: oldStamp.generation,
+      createdAt: Date.now(),
+      ...extra,
+      body: { kind: "agent-message" as const, text }
+    });
+    useStore.getState().setThreadEntries("thread-generation-rebase", [
+      oldEntry("older-page", "turn-0", "older page"),
+      oldEntry("preserved", "turn-1", "preserved"),
+      oldEntry("old-window", "turn-2", "old window"),
+      oldEntry("old-live-tail", "turn-3", "must disappear", { streamSequence: 99 })
+    ], "older-cursor");
+    const authoritative = [{
+      id: "new-window",
+      turnId: "turn-2",
+      historyStamp: nextStamp,
+      bootId: nextStamp.bootId,
+      generation: nextStamp.generation,
+      baselineWatermark: 10,
+      createdAt: Date.now(),
+      body: { kind: "agent-message" as const, text: "new window" }
+    }];
+
+    const applied = useStore.getState().replaceLatestWindow(
+      "thread-generation-rebase",
+      authoritative,
+      null,
+      {
+        historyStamp: nextStamp,
+        pageWatermark: 10,
+        preservedThrough: JSON.stringify(["boot-a", 1, "turn-1", "preserved"]),
+        windowStartAnchor: JSON.stringify(["boot-a", 2, "turn-2", "new-window"]),
+        windowEndAnchor: JSON.stringify(["boot-a", 2, "turn-2", "new-window"])
+      }
+    );
+
+    expect(applied).toBe(true);
+    const entries = useStore.getState().threads["thread-generation-rebase"]!.entries;
+    expect(entries.map((entry) => entry.id)).toEqual(["older-page", "preserved", "new-window"]);
+    expect(entries.every((entry) => entry.historyStamp?.generation === 2)).toBe(true);
   });
 
   it("routes thread entry actions through timeline engine inputs", () => {
