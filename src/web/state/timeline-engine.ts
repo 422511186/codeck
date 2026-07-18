@@ -2001,6 +2001,10 @@ function identityKey(entry: TimelineEntry, stateGeneration: number): string | nu
   }
 }
 
+export function timelineEntryIdentityKey(entry: TimelineEntry, stateGeneration = 0): string | null {
+  return identityKey(entry, stateGeneration);
+}
+
 function isLocalUserEntry(entry: TimelineEntry): boolean {
   return entry.body.kind === "user-message" && entry.id.startsWith("local-user-");
 }

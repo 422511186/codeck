@@ -36,6 +36,7 @@ import {
   timelineEntriesForPresentation,
   type ActivityPresentationItem
 } from "../state/timeline-presentation";
+import { timelineEntryIdentityKey } from "../state/timeline-engine";
 
 const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
@@ -336,9 +337,10 @@ export function Timeline({
         ) : null}
         {visibleBlocks.map((block, visibleIndex) => (
           <div
-            key={block.id}
+            key={block.reactKey}
             data-timeline-row="true"
             data-timeline-block-id={block.id}
+            data-timeline-block-identity={block.identity}
             data-timeline-block-version={block.version}
             data-timeline-entry-id={timelineRenderBlockEntryId(block)}
             style={timelineRowStyle}
@@ -380,8 +382,16 @@ export function Timeline({
 }
 
 export type TimelineRenderBlock =
-  | { kind: "entry"; id: string; version: string; entry: TimelineEntry }
-  | { kind: "inline-activity-log"; id: string; version: string; turnId?: string; entries: TimelineEntry[] };
+  | { kind: "entry"; id: string; identity: string; reactKey: string; version: string; entry: TimelineEntry }
+  | {
+      kind: "inline-activity-log";
+      id: string;
+      identity: string;
+      reactKey: string;
+      version: string;
+      turnId?: string;
+      entries: TimelineEntry[];
+    };
 
 function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
   return block.kind === "entry" ? block.entry.id : block.entries.at(-1)?.id ?? block.id;
@@ -389,11 +399,24 @@ function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
 
 export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
   const blocks: TimelineRenderBlock[] = [];
+  const stateGeneration = entries.reduce(
+    (generation, entry) => Math.max(generation, entry.generation ?? entry.historyStamp?.generation ?? 0),
+    0
+  );
+  const normalizedEntries = normalizeTimelineRenderEntries(entries, stateGeneration);
   let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index]!;
+  while (index < normalizedEntries.length) {
+    const entry = normalizedEntries[index]!;
+    const identity = timelineEntryIdentityKey(entry, stateGeneration) ?? `entry:${entry.id}:${index}`;
     if (!isActivityEntry(entry)) {
-      blocks.push({ kind: "entry", id: entry.id, version: timelineEntryDerivationKey(entry), entry });
+      blocks.push({
+        kind: "entry",
+        id: entry.id,
+        identity,
+        reactKey: timelineEntryReactKey(entry),
+        version: timelineEntryDerivationKey(entry),
+        entry
+      });
       index += 1;
       continue;
     }
@@ -401,8 +424,8 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
     const turnId = entry.turnId;
     const activityEntries: TimelineEntry[] = [entry];
     index += 1;
-    while (index < entries.length) {
-      const next = entries[index]!;
+    while (index < normalizedEntries.length) {
+      const next = normalizedEntries[index]!;
       if (!isActivityEntry(next) || next.turnId !== turnId) {
         break;
       }
@@ -413,12 +436,49 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
     blocks.push({
       kind: "inline-activity-log",
       id: `inline-activity-${turnId ?? "no-turn"}-${activityEntries[0]!.id}`,
+      identity: `inline-activity:${identity}`,
+      reactKey: `inline-activity:${timelineEntryReactKey(activityEntries[0]!)}`,
       version: inlineActivitySectionsCacheKey(activityEntries),
       ...(turnId ? { turnId } : {}),
       entries: activityEntries
     });
   }
-  return blocks;
+  return disambiguateTimelineBlockReactKeys(blocks);
+}
+
+function timelineEntryReactKey(entry: TimelineEntry): string {
+  if (entry.body.kind === "user-message" && entry.clientUserMessageId) {
+    return `user:client:${entry.clientUserMessageId}`;
+  }
+  return `${entry.body.kind}:${entry.turnId ?? "no-turn"}:${entry.id}`;
+}
+
+function disambiguateTimelineBlockReactKeys(blocks: TimelineRenderBlock[]): TimelineRenderBlock[] {
+  const counts = new Map<string, number>();
+  for (const block of blocks) {
+    counts.set(block.reactKey, (counts.get(block.reactKey) ?? 0) + 1);
+  }
+  return blocks.map((block) =>
+    (counts.get(block.reactKey) ?? 0) > 1
+      ? { ...block, reactKey: `${block.reactKey}:${block.identity}` }
+      : block
+  );
+}
+
+function normalizeTimelineRenderEntries(entries: TimelineEntry[], stateGeneration: number): TimelineEntry[] {
+  const normalized: TimelineEntry[] = [];
+  const indexesByIdentity = new Map<string, number>();
+  for (const entry of entries) {
+    const identity = timelineEntryIdentityKey(entry, stateGeneration) ?? `entry:${entry.id}:${normalized.length}`;
+    const existingIndex = indexesByIdentity.get(identity);
+    if (typeof existingIndex === "number") {
+      normalized[existingIndex] = entry;
+      continue;
+    }
+    indexesByIdentity.set(identity, normalized.length);
+    normalized.push(entry);
+  }
+  return normalized;
 }
 
 function timelineRenderBlockEntries(blocks: TimelineRenderBlock[]): TimelineEntry[] {
@@ -487,12 +547,12 @@ function measureTimelineRowHeight(row: HTMLElement): number | null {
 function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<string, number>): boolean {
   let changed = false;
   root.querySelectorAll<HTMLElement>("[data-timeline-row='true']").forEach((row) => {
-    const blockId = row.dataset.timelineBlockId;
+    const blockIdentity = row.dataset.timelineBlockIdentity;
     const blockVersion = row.dataset.timelineBlockVersion;
-    if (!blockId || !blockVersion) {
+    if (!blockIdentity || !blockVersion) {
       return;
     }
-    const cacheKey = `${blockId}\u0000${blockVersion}`;
+    const cacheKey = `${blockIdentity}\u0000${blockVersion}`;
     const measuredHeight = measureTimelineRowHeight(row);
     if (measuredHeight === null) {
       return;
@@ -507,7 +567,7 @@ function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<strin
 }
 
 function timelineBlockHeightCacheKey(block: TimelineRenderBlock): string {
-  return `${block.id}\u0000${block.version}`;
+  return `${block.identity}\u0000${block.version}`;
 }
 
 function timelineWindowRangeForScroll(
@@ -569,7 +629,7 @@ function captureTimelineScrollAnchor(
     return null;
   }
   return {
-    blockId: block.id,
+    blockId: block.identity,
     entryId: timelineRenderBlockEntryId(block),
     beforeEntryId: blockIndex > 0 ? timelineRenderBlockLastEntryId(blocks[blockIndex - 1]!) : null,
     afterEntryId: blockIndex + 1 < blocks.length ? timelineRenderBlockEntryId(blocks[blockIndex + 1]!) : null,
@@ -587,7 +647,7 @@ function timelineScrollOffsetForAnchor(
   if (blocks.length === 0) {
     return null;
   }
-  let blockIndex = blocks.findIndex((block) => block.id === anchor.blockId);
+  let blockIndex = blocks.findIndex((block) => block.identity === anchor.blockId);
   let preserveIntraBlockOffset = blockIndex >= 0;
   if (blockIndex < 0) {
     blockIndex = blocks.findIndex((block) => timelineRenderBlockContainsEntryId(block, anchor.entryId));
