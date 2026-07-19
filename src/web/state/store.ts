@@ -1254,6 +1254,9 @@ export const useStore = create<State & Actions>((set, get) => ({
             });
             break;
           }
+          if (ev.willRetry === true) {
+            break;
+          }
           get().replaceOrAddEntry(threadId, {
             id: `${turnId}-error`,
             ...(typeof ev.turnId === "string" ? { turnId: ev.turnId } : {}),

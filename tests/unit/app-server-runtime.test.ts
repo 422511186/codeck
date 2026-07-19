@@ -2049,6 +2049,84 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("retryable turn error 不进入刷新 timeline，最终失败仍保留", async () => {
+    const peer = new LatestPageOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "Reconnecting... 1/5",
+          additionalDetails: "503 Service Unavailable",
+          codexErrorInfo: null
+        }
+      }
+    });
+
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items.map((item) => item.id))
+      .not.toContain("turn-1-error");
+
+    peer.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: false,
+        error: {
+          message: "stream disconnected before completion",
+          additionalDetails: null,
+          codexErrorInfo: null
+        }
+      }
+    });
+
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "turn-1-error",
+          turnId: "turn-1",
+          role: "error",
+          text: "stream disconnected before completion"
+        })
+      ])
+    );
+  });
+
+  it("成功完成会清理兼容旧状态留下的 turn error overlay", async () => {
+    const peer = new LatestPageOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        willRetry: false,
+        error: {
+          message: "旧版本留下的临时错误",
+          additionalDetails: null,
+          codexErrorInfo: null
+        }
+      }
+    });
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items.map((item) => item.id))
+      .toContain("turn-1-error");
+
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+    });
+
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items.map((item) => item.id))
+      .not.toContain("turn-1-error");
+  });
+
   it("latest page 上游读取期间到达的事件包含在随后捕获的 overlay watermark", async () => {
     const peer = new DelayedLatestPageOverlayPeer();
     const gateway = new AppServerGateway(peer);

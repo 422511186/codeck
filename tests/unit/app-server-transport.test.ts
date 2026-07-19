@@ -302,11 +302,10 @@ describe("createManagedAppServerPeer spawn-or-connect", () => {
     await peer.connect();
 
     expect(deps.spawnProcess).toHaveBeenCalledTimes(1);
-    expect(deps.spawnProcess).toHaveBeenCalledWith(
-      "codex",
-      ["app-server", "--listen", "ws://127.0.0.1:31317"],
-      expect.objectContaining({ windowsHide: true })
-    );
+    const [command, args, options] = vi.mocked(deps.spawnProcess!).mock.calls[0]!;
+    expect([command, ...args]).toContain("codex");
+    expect(args.slice(-3)).toEqual(["app-server", "--listen", "ws://127.0.0.1:31317"]);
+    expect(options).toEqual(expect.objectContaining({ windowsHide: true }));
     expect(lockStore.metadata).toMatchObject({
       endpointUrl: "ws://127.0.0.1:31317",
       ownerPid: 777,

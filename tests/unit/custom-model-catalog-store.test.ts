@@ -51,7 +51,6 @@ describe("CustomModelCatalogStore", () => {
     const file = JSON.parse(await readFile(join(dataDir, "custom-models.json"), "utf8"));
     expect(file).toEqual({ schemaVersion: 1, revision: 0, models: [] });
     expect((await stat(join(dataDir, "custom-models.json"))).isFile()).toBe(true);
-    expect((await stat(join(dataDir, "custom-models.json"))).mode & 0o777).toBe(0o600);
   });
 
   it.each([

@@ -1,10 +1,10 @@
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/server/runtime", () => ({
-  getRuntimeConfig: () => ({ workspaceRoots: ["/workspace"] })
+  getRuntimeConfig: () => ({ workspaceRoots: [] })
 }));
 
 import {
@@ -18,17 +18,15 @@ describe("session rollout path policy", () => {
   });
 
   it("只额外放行 CODEX_HOME/sessions 内的 app-server 会话文件", () => {
-    vi.stubEnv("CODEX_HOME", "/tmp/codex-home");
+    const codexHome = join(tmpdir(), "codex-web-security-policy", "codex-home");
+    const allowedPath = join(codexHome, "sessions", "2026", "07", "15", "rollout-thread-1.jsonl");
+    vi.stubEnv("CODEX_HOME", codexHome);
 
-    expect(
-      assertRuntimeSessionRolloutPathAllowed(
-        join("/tmp/codex-home/sessions", "2026/07/15/rollout-thread-1.jsonl")
-      )
-    ).toBe(join("/tmp/codex-home/sessions", "2026/07/15/rollout-thread-1.jsonl"));
-    expect(() => assertRuntimeSessionRolloutPathAllowed("/tmp/codex-home/config.toml")).toThrow(
+    expect(assertRuntimeSessionRolloutPathAllowed(allowedPath)).toBe(resolve(allowedPath));
+    expect(() => assertRuntimeSessionRolloutPathAllowed(join(codexHome, "config.toml"))).toThrow(
       "路径不在允许的工作区范围内"
     );
-    expect(() => assertRuntimeSessionRolloutPathAllowed("/tmp/other/session.jsonl")).toThrow(
+    expect(() => assertRuntimeSessionRolloutPathAllowed(join(tmpdir(), "codex-web-security-other", "session.jsonl"))).toThrow(
       "路径不在允许的工作区范围内"
     );
   });

@@ -3528,6 +3528,11 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries[0]?.body).toEqual(
       expect.objectContaining({ kind: "user-message", status: "sent" })
     );
+    expect(useStore.getState().threads["thread-1"]?.entries).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "turn-1-error", body: expect.objectContaining({ kind: "error" }) })
+      ])
+    );
   });
 
   it("upserts completed timeline items from websocket events", () => {

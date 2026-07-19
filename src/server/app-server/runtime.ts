@@ -3899,14 +3899,16 @@ export class AppServerGateway {
         }
         break;
       case "turn_error":
+        if (event.willRetry === true) {
+          this.removeTimelineOverlayItem(event.threadId, `${event.turnId}-error`);
+          break;
+        }
         this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
           id: `${event.turnId}-error`,
           role: "error",
           text: event.message
         });
-        if (event.willRetry !== true) {
-          this.finishTurnTimelineOverlay(event.threadId, event.turnId, "failed");
-        }
+        this.finishTurnTimelineOverlay(event.threadId, event.turnId, "failed");
         break;
       default:
         break;
@@ -4016,6 +4018,11 @@ export class AppServerGateway {
     const failed = /fail|error|cancel|interrupt/i.test(status);
     for (const [id, entry] of overlay) {
       if (entry.turnId !== turnId) {
+        continue;
+      }
+
+      if (!failed && entry.item.role === "error") {
+        overlay.delete(id);
         continue;
       }
 

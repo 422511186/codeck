@@ -1778,6 +1778,10 @@ function finishTurnEntries(state: TimelineEngineState, turnId: string, status: s
   let changed = false;
   const entries: TimelineEntry[] = state.entries.flatMap<TimelineEntry>((entry) => {
     if (entry.turnId !== turnId) return [entry];
+    if (!failed && entry.body.kind === "error") {
+      changed = true;
+      return [];
+    }
     if (entry.body.kind === "reasoning" && entry.body.done === false) {
       changed = true;
       const hasContinuationOrDiagnostic = Boolean(
