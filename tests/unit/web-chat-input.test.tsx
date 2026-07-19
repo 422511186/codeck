@@ -573,4 +573,33 @@ describe("ChatInput", () => {
     expect(modelButton).not.toHaveTextContent("⌄");
     expect(screen.getByRole("button", { name: "推理强度 Medium" })).toHaveTextContent("Medium");
   });
+
+  it("权限 pending 状态切换为已生效时不混用边框 shorthand", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { rerender, props } = renderInput({
+      permissionLabel: "权限状态待确认",
+      permissionPending: true
+    });
+    const pendingChip = screen.getByRole("button", { name: "权限 权限状态待确认" });
+
+    expect(pendingChip.style.border).toBe("");
+    expect(pendingChip.style.borderWidth).toBe("1px");
+    expect(pendingChip.style.borderStyle).toBe("solid");
+    expect(pendingChip.style.borderColor).toContain("var(--cw-warning)");
+
+    rerender(
+      <ChatInput
+        {...props}
+        permissionLabel="完全访问权限"
+        permissionPending={false}
+      />
+    );
+
+    const styleWarnings = consoleError.mock.calls.filter((call) =>
+      call.some((value) => String(value).includes("Removing a style property during rerender"))
+    );
+    consoleError.mockRestore();
+
+    expect(styleWarnings).toEqual([]);
+  });
 });
