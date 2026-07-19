@@ -9,7 +9,11 @@ import {
 } from "../storage/contextUsage";
 import { loadJson, saveJson, threadNoticeDismissalsKey } from "../storage/localStore";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
-import { extractLegacyWarningNotices, isLegacyAppServerWarningText } from "./timeline-adapter";
+import {
+  extractLegacyWarningNotices,
+  isLegacyAppServerWarningText,
+  normalizedLegacyAppServerWarningText
+} from "./timeline-adapter";
 import {
   applyTimelineInput,
   createTimelineEngineState,
@@ -1228,11 +1232,12 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         case "warning": {
           const message = typeof ev.message === "string" ? ev.message : "收到配置提示";
+          const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
           get().upsertThreadNotice(threadId, {
-            id: `app-server-warning:${message}`,
+            id: `app-server-warning:${noticeText}`,
             kind: "warning",
             source: "app-server",
-            text: message
+            text: noticeText
           });
           break;
         }
@@ -1240,11 +1245,12 @@ export const useStore = create<State & Actions>((set, get) => ({
           const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
           const message = typeof ev.message === "string" ? ev.message : "运行失败";
           if (isLegacyAppServerWarningText(message)) {
+            const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
             get().upsertThreadNotice(threadId, {
-              id: `app-server-warning:${message}`,
+              id: `app-server-warning:${noticeText}`,
               kind: "warning",
               source: "app-server",
-              text: message
+              text: noticeText
             });
             break;
           }

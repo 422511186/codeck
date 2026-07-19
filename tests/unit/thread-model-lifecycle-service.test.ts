@@ -30,7 +30,7 @@ function appModel(): MobileModelOption {
     model: "gpt-5.6-sol",
     label: "GPT-5.6",
     isDefault: true,
-    supportedReasoningEfforts: ["medium", "high"],
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
     defaultReasoningEffort: "medium",
     inputModalities: ["text", "image"]
   };
@@ -66,6 +66,7 @@ class FakeLifecycleGateway {
   readonly updateCalls: unknown[] = [];
   readonly deleteCalls: string[] = [];
   failSettings = false;
+  defaultStartReasoningEffort: string | null = null;
   nextThreadId = "thread-new";
   resumeIdOverride: string | null = null;
 
@@ -83,7 +84,10 @@ class FakeLifecycleGateway {
     reasoningEffort?: string | null;
   }): Promise<MobileThreadSummary> {
     this.startCalls.push(structuredClone(input));
-    return summary(this.nextThreadId, input);
+    return summary(this.nextThreadId, {
+      ...input,
+      reasoningEffort: input.reasoningEffort ?? this.defaultStartReasoningEffort
+    });
   }
 
   async resumeThread(
@@ -200,6 +204,21 @@ function stateForTest() {
 }
 
 describe("ThreadModelLifecycleService start/resume", () => {
+  it("默认模型 start 返回目录驱动的完整 modelState", async () => {
+    const fixture = await createFixture();
+    fixture.gateway.defaultStartReasoningEffort = "xhigh";
+
+    const thread = await fixture.service.startThread({ cwd: "/workspace" });
+
+    expect(thread.modelState).toMatchObject({
+      selection: { source: "app-server", model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultReasoningEffort: "medium",
+      reasoningEffort: "xhigh"
+    });
+  });
+
   it("自定义 start 一次传入目标配置，并在返回前提交 binding", async () => {
     const fixture = await createFixture();
 

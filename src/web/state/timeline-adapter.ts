@@ -30,6 +30,7 @@ export type ThreadDetailTimelineSources = {
 
 const legacyModelResumeWarningPattern = /^This session was recorded with model `[^`]+` but is resuming with `[^`]+`\. Consider switching back to `[^`]+` as it may affect Codex performance\.$/;
 const legacyModelMetadataWarningPattern = /^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
+const legacyLongThreadWarningPattern = /^Heads up: Long threads and multiple compactions can cause the model to be less accurate\. Start a new thread when possible to keep threads small and targeted\.$/;
 
 export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
   entries: TimelineEntry[];
@@ -38,7 +39,7 @@ export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
   const notices = new Map<string, ThreadNoticeInput>();
   const keptEntries = entries.filter((entry) => {
     if (entry.body.kind !== "error" || !isLegacyAppServerWarningText(entry.body.text)) return true;
-    const text = entry.body.text;
+    const text = normalizedLegacyAppServerWarningText(entry.body.text) ?? entry.body.text;
     notices.set(`app-server-warning:${text}`, {
       id: `app-server-warning:${text}`,
       kind: "warning",
@@ -52,7 +53,16 @@ export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
 }
 
 export function isLegacyAppServerWarningText(text: string): boolean {
-  return legacyModelResumeWarningPattern.test(text) || legacyModelMetadataWarningPattern.test(text);
+  return normalizedLegacyAppServerWarningText(text) !== null;
+}
+
+export function normalizedLegacyAppServerWarningText(text: string): string | null {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return legacyModelResumeWarningPattern.test(normalized) ||
+    legacyModelMetadataWarningPattern.test(normalized) ||
+    legacyLongThreadWarningPattern.test(normalized)
+    ? normalized
+    : null;
 }
 
 export function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {

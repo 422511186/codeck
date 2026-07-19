@@ -103,7 +103,19 @@ class FakeSwitchGateway {
 
   async resumeThread(): Promise<MobileThreadDetail> {
     this.resumeCalls += 1;
+    if (this.detail.turnManifest?.turnIds.length === 0) {
+      throw new Error("no rollout found for thread id thread-1");
+    }
     return structuredClone(this.detail);
+  }
+
+  async readThreadMetadata(): Promise<MobileThreadDetail> {
+    return structuredClone(this.detail);
+  }
+
+  async readThreadMaterialization(): Promise<"unmaterialized" | "materialized" | "unknown"> {
+    if (!this.detail.turnManifest) return "materialized";
+    return this.detail.turnManifest.turnIds.length ? "materialized" : "unmaterialized";
   }
 
   async updateThreadSettings(input: {
@@ -339,7 +351,7 @@ describe("ThreadModelSwitchService 成功路径", () => {
       }
     ]);
     expect(fixture.gateway.reloadCalls).toEqual([]);
-    expect(fixture.gateway.resumeCalls).toBe(2);
+    expect(fixture.gateway.resumeCalls).toBe(0);
     await expect(fixture.bindingStore.getThreadState("thread-1")).resolves.toMatchObject({
       binding: { customModelId: "custom-a" },
       operation: null
@@ -471,6 +483,7 @@ describe("ThreadModelSwitchService 失败和恢复", () => {
       "gpt-5.6-sol"
     ]);
     expect(fixture.gateway.reloadCalls).toEqual([]);
+    expect(fixture.gateway.resumeCalls).toBe(0);
     await expect(fixture.bindingStore.getOperation("thread-1")).resolves.toBeNull();
   });
 
@@ -488,6 +501,7 @@ describe("ThreadModelSwitchService 失败和恢复", () => {
       code: "SWITCH_RECOVERY_FAILED"
     });
     expect(fixture.gateway.reloadCalls).toEqual([]);
+    expect(fixture.gateway.resumeCalls).toBe(0);
     await expect(fixture.bindingStore.getOperation("thread-1")).resolves.toMatchObject({
       operationId: "operation-test"
     });

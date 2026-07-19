@@ -33,6 +33,25 @@ describe("ReasoningEffortPicker", () => {
     expect(onSelect).toHaveBeenCalledWith("low");
   });
 
+  it("uses readable labels for every official reasoning effort", () => {
+    render(
+      <ReasoningEffortPicker
+        current={{
+          ...current,
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+          reasoningEffort: "xhigh"
+        }}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "选择推理强度" });
+    for (const label of ["Low", "Medium", "High", "Xhigh", "Max", "Ultra"]) {
+      expect(within(dialog).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
   it("shows an explicit empty state when the model has no effort options", () => {
     render(
       <ReasoningEffortPicker

@@ -172,7 +172,20 @@ export class ThreadModelLifecycleService {
     expectedCatalogRevision?: number
   ): Promise<MobileThreadSummary> {
     if (!selection) {
-      return this.options.gateway.startThread(input);
+      const [thread, appModels] = await Promise.all([
+        this.options.gateway.startThread(input),
+        this.options.gateway.listModels()
+      ]);
+      return thread.model
+        ? {
+            ...thread,
+            modelState: stateFromAppModel(
+              appModels.find((model) => model.model === thread.model) ?? null,
+              thread.model,
+              thread.reasoningEffort ?? null
+            )
+          }
+        : thread;
     }
     const [catalog, appModels, provider] = await Promise.all([
       this.options.catalogStore.read(),

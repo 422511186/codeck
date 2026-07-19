@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockAuthenticated = vi.fn(() => true);
 const mockAudit = vi.fn();
+const mockStartThread = vi.fn();
 const mockResumeThread = vi.fn();
 const mockReadThreadMetadata = vi.fn();
 const mockForkThread = vi.fn();
@@ -13,11 +14,13 @@ vi.mock("../../src/server/auth", () => ({
 }));
 
 vi.mock("../../src/server/security", () => ({
-  audit: (...args: unknown[]) => mockAudit(...args)
+  audit: (...args: unknown[]) => mockAudit(...args),
+  assertRuntimeWorkspaceRootsAllowed: () => undefined
 }));
 
 vi.mock("../../src/server/custom-models/runtime", () => ({
   getThreadModelLifecycleService: () => ({
+    startThread: (...args: unknown[]) => mockStartThread(...args),
     readThreadMetadata: (...args: unknown[]) => mockReadThreadMetadata(...args),
     resumeThread: (...args: unknown[]) => mockResumeThread(...args),
     forkThread: (...args: unknown[]) => mockForkThread(...args),
@@ -33,11 +36,48 @@ describe("binding-aware thread lifecycle routes", () => {
     mockAuthenticated.mockReturnValue(true);
     mockAudit.mockReset();
     mockAudit.mockResolvedValue(undefined);
+    mockStartThread.mockReset();
     mockResumeThread.mockReset();
     mockReadThreadMetadata.mockReset();
     mockForkThread.mockReset();
     mockDeleteThread.mockReset();
     mockUnarchiveThread.mockReset();
+  });
+
+  it("start route 返回 app-server 当前模型的完整能力状态", async () => {
+    mockStartThread.mockResolvedValue({
+      id: "thread-empty",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+      modelState: {
+        selection: { source: "app-server", model: "gpt-5.6-sol" },
+        model: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        reasoningEffort: "xhigh",
+        blocked: false
+      }
+    });
+    const { POST } = await import("../../src/app/api/codex/threads/start/route");
+    const response = await POST(new Request("http://localhost/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({}),
+      undefined,
+      undefined
+    );
+    expect(body.thread.modelState).toMatchObject({
+      model: "gpt-5.6-sol",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      reasoningEffort: "xhigh"
+    });
   });
 
   it("resume 返回来源身份与绑定状态，并继续裁掉 timeline", async () => {

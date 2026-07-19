@@ -17,13 +17,15 @@ type UnifiedModelPickerProps = {
   onSelect: (selection: ModelSelection, catalogRevision: number) => void | Promise<void>;
   onReapply: (catalogRevision: number) => void | Promise<void>;
   onClose: () => void;
+  loadCatalog?: () => Promise<UnifiedModelCatalog>;
 };
 
 export function UnifiedModelPicker({
   current,
   onSelect,
   onReapply,
-  onClose
+  onClose,
+  loadCatalog
 }: UnifiedModelPickerProps): JSX.Element {
   const [catalog, setCatalog] = useState<UnifiedModelCatalog | null>(null);
   const [query, setQuery] = useState("");
@@ -34,11 +36,11 @@ export function UnifiedModelPicker({
     setCatalog(null);
     setError(null);
     try {
-      setCatalog(await codex.modelCatalog());
+      setCatalog(await (loadCatalog ? loadCatalog() : codex.modelCatalog()));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "无法读取模型目录");
     }
-  }, []);
+  }, [loadCatalog]);
 
   useEffect(() => {
     void load();

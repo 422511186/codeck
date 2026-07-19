@@ -28,6 +28,8 @@ type SwitchGateway = Pick<
   AppServerGateway,
   | "listModels"
   | "readCurrentModelProvider"
+  | "readThreadMetadata"
+  | "readThreadMaterialization"
   | "resumeThread"
   | "assertThreadIdle"
   | "reloadThreadRuntime"
@@ -94,10 +96,6 @@ class KeyedSerialExecutor {
 function safeErrorSummary(error: unknown): string {
   const message = error instanceof Error ? error.message : "模型运行时操作失败";
   return message.replace(/[\r\n\t]+/gu, " ").slice(0, 300);
-}
-
-function isUnmaterializedThread(detail: MobileThreadDetail): boolean {
-  return detail.lastTurnId === null && detail.turnManifest?.turnIds.length === 0;
 }
 
 function permissionSelectionFromDetail(detail: MobileThreadDetail): MobilePermissionSelection {
@@ -292,11 +290,14 @@ export class ThreadModelSwitchService {
         );
       }
 
-      const [detail, appModels, provider] = await Promise.all([
-        this.options.gateway.resumeThread(threadId),
+      const [metadata, materialization, appModels, provider] = await Promise.all([
+        this.options.gateway.readThreadMetadata(threadId),
+        this.options.gateway.readThreadMaterialization(threadId),
         this.options.gateway.listModels(),
         this.options.gateway.readCurrentModelProvider()
       ]);
+      const inPlace = materialization === "unmaterialized";
+      const detail = inPlace ? metadata : await this.options.gateway.resumeThread(threadId);
       const current = snapshotFromCurrent(detail, threadState.binding, appModels);
       const permissionSelection = permissionSelectionFromDetail(detail);
       const latestState = stateView(current);
@@ -408,7 +409,7 @@ export class ThreadModelSwitchService {
         current,
         target,
         provider,
-        isUnmaterializedThread(detail),
+        inPlace,
         permissionSelection
       );
     });
@@ -483,12 +484,13 @@ export class ThreadModelSwitchService {
     const snapshot = action === "retry-target" ? operation.targetState : operation.oldState;
     const provider = await this.options.gateway.readCurrentModelProvider();
     try {
-      const current = await this.options.gateway.resumeThread(threadId);
+      const materialization = await this.options.gateway.readThreadMaterialization(threadId);
+      const inPlace = materialization === "unmaterialized";
       const thread = await this.applySnapshot(
         threadId,
         snapshot,
         provider,
-        isUnmaterializedThread(current),
+        inPlace,
         operation.permissionSelection
       );
       const binding = await this.options.bindingStore.commitOperation(
@@ -607,7 +609,7 @@ export class ThreadModelSwitchService {
         ? { reasoningEffort: snapshot.reasoningEffort }
         : {})
     });
-    const detail = await this.options.gateway.resumeThread(threadId);
+    const detail = await this.options.gateway.readThreadMetadata(threadId);
     verifyThreadRuntime(detail, {
       model: snapshot.model,
       modelProvider: provider,

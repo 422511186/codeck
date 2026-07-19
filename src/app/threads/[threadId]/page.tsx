@@ -46,7 +46,8 @@ import { repairWindowFrom, type HistoryStamp } from "../../../shared/timeline-pr
 import type {
   ModelInputModality,
   ModelSelection,
-  ThreadModelStateView
+  ThreadModelStateView,
+  UnifiedModelCatalog
 } from "../../../shared/custom-models";
 import {
   captureTimelineDomScrollAnchor,
@@ -149,6 +150,7 @@ export default function ThreadPage(): JSX.Element {
     reasoningEffort: null,
     reasoningSummary: null
   });
+  const [modelCatalog, setModelCatalog] = useState<UnifiedModelCatalog | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactPending, setCompactPending] = useState(false);
@@ -192,7 +194,8 @@ export default function ThreadPage(): JSX.Element {
     bindingVersion: threadModelBindingVersion,
     sourceUpdatedAt: threadModelSourceUpdatedAt,
     contextWindow: threadModelContextWindow,
-    inputModalities: threadModelInputModalities
+    inputModalities: threadModelInputModalities,
+    catalog: modelCatalog
   });
   const detailPermissionProfileId =
     detail && "activePermissionProfile" in detail
@@ -343,6 +346,14 @@ export default function ThreadPage(): JSX.Element {
       .catch((err) => {
         if (isRequestAbort(err)) return;
         // Keep the protocol fallback when app-server settings are temporarily unavailable.
+      });
+    requestCoordinatorRef.current.dedupeRequest("codex:model-catalog", () => codex.modelCatalog())
+      .then((catalog) => {
+        if (!cancelled) setModelCatalog(catalog);
+      })
+      .catch((err) => {
+        if (isRequestAbort(err)) return;
+        // The selected value remains available when the catalog is temporarily unavailable.
       });
     return () => {
       cancelled = true;
@@ -1606,6 +1617,7 @@ export default function ThreadPage(): JSX.Element {
           onSelect={(selection, catalogRevision) => onSelectModel(selection, catalogRevision, "switch")}
           onReapply={(catalogRevision) => onSelectModel(currentModelState.selection, catalogRevision, "reapply")}
           onClose={() => setShowModelPicker(false)}
+          loadCatalog={() => requestCoordinatorRef.current.dedupeRequest("codex:model-catalog", () => codex.modelCatalog())}
         />
         ) : null
       ) : null}
@@ -2954,17 +2966,21 @@ function modelStateFromCurrentThread(input: {
   sourceUpdatedAt: string | null;
   contextWindow: number | null;
   inputModalities: ModelInputModality[];
+  catalog: UnifiedModelCatalog | null;
 }): ThreadModelStateView | null {
   if (!input.model) return null;
   const selection = input.selection ?? { source: "app-server" as const, model: input.model };
+  const catalogModel = selection.source === "app-server"
+    ? input.catalog?.models.find((model) => model.source === "app-server" && model.model === input.model)
+    : undefined;
   return {
     selection,
     model: input.model,
-    label: input.model,
-    contextWindow: input.contextWindow,
-    inputModalities: [...input.inputModalities],
-    supportedReasoningEfforts: input.reasoningEffort ? [input.reasoningEffort] : [],
-    defaultReasoningEffort: input.reasoningEffort,
+    label: catalogModel?.label ?? input.model,
+    contextWindow: catalogModel?.contextWindow ?? input.contextWindow,
+    inputModalities: catalogModel ? [...catalogModel.inputModalities] : [...input.inputModalities],
+    supportedReasoningEfforts: catalogModel ? [...catalogModel.supportedReasoningEfforts] : [],
+    defaultReasoningEffort: catalogModel?.defaultReasoningEffort ?? null,
     reasoningEffort: input.reasoningEffort,
     bindingVersion: input.bindingVersion,
     sourceUpdatedAt: input.sourceUpdatedAt,

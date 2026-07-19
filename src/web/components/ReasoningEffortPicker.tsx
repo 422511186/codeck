@@ -80,7 +80,9 @@ function reasoningEffortLabel(value: string): string {
     low: "Low",
     medium: "Medium",
     high: "High",
-    xhigh: "Xhigh"
+    xhigh: "Xhigh",
+    max: "Max",
+    ultra: "Ultra"
   };
   return known[value] ?? value;
 }

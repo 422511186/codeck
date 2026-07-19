@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractLegacyWarningNotices,
+  isLegacyAppServerWarningText,
   repairReconstructedTimelineEntries,
   threadDetailEntries,
   threadDetailEntriesWithTurnItems
@@ -29,6 +30,25 @@ describe("timeline adapter", () => {
       source: "app-server",
       text: expect.stringContaining("Model metadata")
     })]);
+  });
+
+  it("recognizes and normalizes the long-thread warning across refreshed sources", () => {
+    const warning = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+    const wrapped = "Heads up: Long threads and multiple compactions can cause the model to be less accurate.\nStart a new thread when possible to keep threads small and targeted.";
+    expect(isLegacyAppServerWarningText(wrapped)).toBe(true);
+
+    const result = extractLegacyWarningNotices([
+      entry("warning-1", "turn-1", 1, { kind: "error", text: warning }),
+      entry("warning-2", "turn-1", 2, { kind: "error", text: wrapped }),
+      entry("error-1", "turn-1", 3, { kind: "error", text: "真正的执行失败" })
+    ]);
+
+    expect(result.entries.map((item) => item.id)).toEqual(["error-1"]);
+    expect(result.notices).toHaveLength(1);
+    expect(result.notices[0]).toEqual(expect.objectContaining({
+      id: `app-server-warning:${warning}`,
+      text: warning
+    }));
   });
 
   it("normalizes Unix-second snapshot timestamps to milliseconds", () => {

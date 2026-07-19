@@ -3418,6 +3418,28 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("deduplicates long-thread warnings from warning and turn_error sources", () => {
+    const warning = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: warning }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-1",
+        turnId: "turn-long-warning",
+        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate.\nStart a new thread when possible to keep threads small and targeted.",
+        willRetry: false
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.notices).toHaveLength(1);
+    expect(useStore.getState().threads["thread-1"]?.notices[0]?.text).toBe(warning);
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
+  });
+
   it("keeps a dismissed warning hidden after the thread store is recreated", () => {
     const warning = { kind: "warning" as const, threadId: "thread-1", message: "关闭后不要再显示" };
     useStore.getState().dispatchEvent({ type: "codex-event", event: warning });

@@ -4632,6 +4632,71 @@ describe("ThreadPage", () => {
     );
   });
 
+  it("should use the model catalog for an empty thread reasoning effort options", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      model: "gpt-5.6-sol",
+      modelEffort: "xhigh",
+      modelSelection: { source: "app-server", model: "gpt-5.6-sol" },
+      modelBindingVersion: null,
+      modelInputModalities: ["text"],
+      modelSwitchStatus: "idle"
+    });
+    mockReadSettings.mockResolvedValue({
+      model: "gpt-5.6-sol",
+      modelProvider: "apihzy",
+      reasoningEffort: "xhigh",
+      reasoningSummary: null,
+      permissionProfiles: []
+    });
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 1,
+      appServerModelNames: ["gpt-5.6-sol"],
+      models: [{
+        source: "app-server",
+        model: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        isDefault: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        contextWindow: 272_000,
+        inputModalities: ["text", "image"]
+      }]
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Empty Thread",
+      modelProvider: "apihzy",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+      expect(mockModelCatalog).toHaveBeenCalled();
+    });
+    await user.click(screen.getByRole("button", { name: "推理强度 Xhigh" }));
+
+    const dialog = screen.getByRole("dialog", { name: "选择推理强度" });
+    for (const label of ["Low", "Medium", "High", "Xhigh", "Max", "Ultra"]) {
+      expect(within(dialog).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
   it("should include selected reasoning effort when sending a Plan turn", async () => {
     const user = userEvent.setup();
     mockThreadState.mockReturnValue({

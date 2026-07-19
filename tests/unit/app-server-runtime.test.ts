@@ -4479,6 +4479,42 @@ describe("createAppServerGateway", () => {
     expect(gateway.listPendingServerRequests()).toEqual([]);
   });
 
+  it("新建空会话 metadata 保留 runtime identity，并区分未物化状态", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+    const started = await gateway.startThread({
+      cwd: "C:\\Users\\huang\\workspace",
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      reasoningEffort: "xhigh"
+    });
+
+    await expect(gateway.readThreadMetadata(started.id)).resolves.toMatchObject({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      reasoningEffort: "xhigh"
+    });
+    await expect(gateway.readThreadMaterialization(started.id)).resolves.toBe("unmaterialized");
+
+    await gateway.updateThreadSettings({
+      threadId: started.id,
+      model: "gpt-5.6-terra",
+      reasoningEffort: "high"
+    });
+    await expect(gateway.readThreadMetadata(started.id)).resolves.toMatchObject({
+      model: "gpt-5.6-terra",
+      reasoningEffort: "high"
+    });
+    await expect(gateway.readThreadMaterialization(started.id)).resolves.toBe("unmaterialized");
+  });
+
+  it("无法读取最新 turn 时 materialization 状态失败关闭", async () => {
+    const gateway = new AppServerGateway(new ReconnectablePeer());
+    await gateway.ensureReady();
+
+    await expect(gateway.readThreadMaterialization("thread-unknown")).resolves.toBe("unknown");
+  });
+
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
     await gateway.ensureReady();

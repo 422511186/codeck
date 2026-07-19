@@ -3197,6 +3197,8 @@ export type ThreadRuntimeIdentity = {
   reasoningEffort: string | null;
 };
 
+export type ThreadMaterializationState = "unmaterialized" | "materialized" | "unknown";
+
 export class ThreadRuntimeVerificationError extends Error {
   readonly code = "RUNTIME_VERIFICATION_FAILED" as const;
 
@@ -3253,6 +3255,7 @@ export class AppServerGateway {
   private readonly timelineContentCursors = new Map<string, TimelineContentCursorState>();
   private readonly timelineContentCursorByPosition = new Map<string, string>();
   private readonly activeTurnIds = new Map<string, string>();
+  private readonly runtimeIdentitiesByThread = new Map<string, ThreadRuntimeIdentity>();
   private readonly permissionSelectionsByThread = new Map<string, MobilePermissionSelection>();
   private readonly terminalTurnIdsByThread = new Map<string, Set<string>>();
   private readonly threadMutationLocks = new Map<string, Promise<void>>();
@@ -3277,6 +3280,7 @@ export class AppServerGateway {
       if (!decodedMessage) return;
       this.recordProcessNotification(decodedMessage);
       this.recordCommandExecNotification(decodedMessage);
+      this.recordThreadRuntimeIdentityNotification(decodedMessage);
       const event = normalizeAppServerNotification(decodedMessage);
       if (!event) {
         return;
@@ -3661,6 +3665,48 @@ export class AppServerGateway {
       approvalPolicy: event.approvalPolicy as MobileThreadSummary["approvalPolicy"],
       approvalsReviewer: event.approvalsReviewer as MobileThreadSummary["approvalsReviewer"]
     });
+  }
+
+  private recordThreadRuntimeIdentityNotification(message: AppServerNotificationMessage): void {
+    if (message.method !== "thread/settings/updated") {
+      return;
+    }
+    const params = message.params as {
+      threadId?: unknown;
+      threadSettings?: {
+        model?: unknown;
+        modelProvider?: unknown;
+        effort?: unknown;
+      };
+    } | null | undefined;
+    if (!params || typeof params.threadId !== "string" || !params.threadSettings) {
+      return;
+    }
+    this.recordThreadRuntimeIdentity(params.threadId, {
+      model: params.threadSettings.model,
+      modelProvider: params.threadSettings.modelProvider,
+      reasoningEffort: params.threadSettings.effort
+    });
+  }
+
+  private recordThreadRuntimeIdentity(
+    threadId: string,
+    source: { model?: unknown; modelProvider?: unknown; reasoningEffort?: unknown }
+  ): void {
+    if (typeof source.model !== "string" || !source.model.trim() ||
+      typeof source.modelProvider !== "string" || !source.modelProvider.trim()) {
+      return;
+    }
+    this.runtimeIdentitiesByThread.set(threadId, {
+      model: source.model,
+      modelProvider: source.modelProvider,
+      reasoningEffort: typeof source.reasoningEffort === "string" ? source.reasoningEffort : null
+    });
+  }
+
+  private withThreadRuntimeIdentity<T extends MobileThreadSummary>(thread: T): T {
+    const identity = this.runtimeIdentitiesByThread.get(thread.id);
+    return identity ? { ...thread, ...identity } : thread;
   }
 
   private recordPermissionSelection(
@@ -4193,7 +4239,9 @@ export class AppServerGateway {
     const detail = await this.applySessionTimelineSupplement(
       await this.reconcileThreadExecutionStatus(await this.client.readThreadMetadata(threadId))
     );
-    return this.withTimelineGeneration(this.withPermissionSelection(detail));
+    return this.withTimelineGeneration(
+      this.withThreadRuntimeIdentity(this.withPermissionSelection(detail))
+    );
   }
 
   private timelineThreadWithinBudget(detail: MobileThreadDetail): MobileThreadDetail {
@@ -4262,7 +4310,21 @@ export class AppServerGateway {
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     await this.ensureReady();
     const summary = await this.reconcileThreadExecutionStatus(await this.client.readThreadSummary(threadId));
-    return this.withTimelineSummaryVersion(threadId, this.withPermissionSelection(summary));
+    return this.withTimelineSummaryVersion(
+      threadId,
+      this.withThreadRuntimeIdentity(this.withPermissionSelection(summary))
+    );
+  }
+
+  async readThreadMaterialization(threadId: string): Promise<ThreadMaterializationState> {
+    await this.ensureReady();
+    try {
+      return await this.client.readLatestThreadTurnState(threadId)
+        ? "materialized"
+        : "unmaterialized";
+    } catch {
+      return "unknown";
+    }
   }
 
   private async reconcileThreadExecutionStatus<T extends MobileThreadSummary>(thread: T): Promise<T> {
@@ -4532,6 +4594,7 @@ export class AppServerGateway {
     const detail = await this.applySessionTimelineSupplement(
       await this.client.resumeThread(threadId, overrides)
     );
+    this.recordThreadRuntimeIdentity(threadId, detail);
     this.recordPermissionSelection(threadId, detail);
     return this.timelineThreadWithinBudget(
       this.withTimelineGeneration(this.applyTimelineOverlay(this.withPermissionSelection(detail)))
@@ -4541,6 +4604,7 @@ export class AppServerGateway {
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
     await this.ensureReady();
     const thread = await this.client.startThread(input);
+    this.recordThreadRuntimeIdentity(thread.id, thread);
     this.recordPermissionSelection(thread.id, thread);
     return thread;
   }
@@ -4773,12 +4837,21 @@ export class AppServerGateway {
   async deleteThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.deleteThread(threadId);
+    this.runtimeIdentitiesByThread.delete(threadId);
     this.permissionSelectionsByThread.delete(threadId);
   }
 
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
     await this.ensureReady();
     await this.client.updateThreadSettings(input);
+    const previousIdentity = this.runtimeIdentitiesByThread.get(input.threadId);
+    if (previousIdentity) {
+      this.recordThreadRuntimeIdentity(input.threadId, {
+        model: input.model ?? previousIdentity.model,
+        modelProvider: previousIdentity.modelProvider,
+        reasoningEffort: input.reasoningEffort ?? previousIdentity.reasoningEffort
+      });
+    }
     const previous = this.permissionSelectionsByThread.get(input.threadId);
     const permissions = input.permissions !== undefined ? input.permissions : previous?.permissions;
     const inputApprovalPolicy =

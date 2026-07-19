@@ -249,7 +249,7 @@ composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册
 
 ### Requirement: Model reasoning chip display
 
-移动端空闲态 composer MUST 使用两个独立 chip 展示当前模型和推理强度。模型 chip 只显示模型标识并打开模型选择器；推理强度 chip 只显示当前档位并打开独立选择器。两个 chip MUST 使用紧凑英文展示，常见推理强度 MUST 展示为 `Low`、`Medium`、`High`。协议传参 MUST 继续使用 app-server 返回的原始 reasoning effort 值。
+移动端空闲态 composer MUST 使用两个独立 chip 展示当前模型和推理强度。模型 chip 只显示模型标识并打开模型选择器；推理强度 chip 只显示当前档位并打开独立选择器。两个 chip MUST 使用紧凑英文展示，常见推理强度 MUST 展示为 `Low`、`Medium`、`High`、`Xhigh`、`Max`、`Ultra`。协议传参 MUST 继续使用 app-server 返回的原始 reasoning effort 值；选择器的选项 MUST 来自当前模型的完整能力声明。
 
 #### Scenario: Render independent model and reasoning chips
 - **WHEN** 当前模型为 `gpt-5-codex`
@@ -265,12 +265,12 @@ composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册
 #### Scenario: Reasoning chip opens only effort picker
 - **WHEN** 用户点击推理强度 chip
 - **THEN** 系统 MUST 打开独立推理强度选择器
-- **AND** 选择器 MUST 只显示当前模型支持的 effort 选项
+- **AND** 选择器 MUST 只显示当前模型目录或 binding 快照声明的 effort 选项
 
 #### Scenario: Render known reasoning effort labels
-- **WHEN** 选择器显示 reasoning effort 选项 `low`、`medium`、`high`
-- **THEN** 选项 MUST 分别显示为 `Low`、`Medium`、`High`
-- **AND** 选项 MUST NOT 显示为「低」「中」「高」
+- **WHEN** 选择器显示 reasoning effort 选项 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`
+- **THEN** 选项 MUST 分别显示为 `Low`、`Medium`、`High`、`Xhigh`、`Max`、`Ultra`
+- **AND** 选项 MUST NOT 显示为中文翻译
 
 #### Scenario: Preserve reasoning effort protocol value
 - **WHEN** 用户选择显示为 `High` 的 reasoning effort
@@ -328,4 +328,3 @@ composer SHALL 通过 `+` 添加面板提供图片入口，点击仅打开相册
 - **THEN** 目标编辑面板 MUST 保持打开
 - **AND** 面板内 MUST 显示错误提示
 - **AND** 用户已输入的目标描述 MUST 保留
-
