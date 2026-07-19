@@ -32,9 +32,38 @@ describe("Timeline", () => {
     vi.useRealTimers();
   });
 
+  it("发送后的实时事件与快照具有相同结构化身份时只渲染最新条目", () => {
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "item-1",
+            turnId: "turn-1",
+            bootId: "boot-1",
+            generation: 0,
+            snapshotSequence: 10,
+            createdAt: 1,
+            body: { kind: "agent-message", text: "实时旧版本" }
+          },
+          {
+            id: "item-1",
+            turnId: "turn-1",
+            bootId: "boot-1",
+            generation: 0,
+            snapshotSequence: 11,
+            createdAt: 1,
+            body: { kind: "agent-message", text: "快照最新版本" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("实时旧版本")).not.toBeInTheDocument();
+    expect(screen.getByText("快照最新版本")).toBeInTheDocument();
+  });
+
   it("同名 item 位于不同 turn 时都渲染且不产生重复 key 告警", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
     render(
       <Timeline
         entries={[
@@ -88,6 +117,37 @@ describe("Timeline", () => {
 
     expect(blocks).toHaveLength(2);
     expect(new Set(blocks.map((block) => block.identity))).toHaveLength(2);
+  });
+
+  it("同 turn 的不同 generation 复用 item ID 时保留两条且不产生重复 key warning", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "item-1",
+            turnId: "turn-reused",
+            bootId: "boot-1",
+            generation: 0,
+            createdAt: 1,
+            body: { kind: "agent-message", text: "旧历史" }
+          },
+          {
+            id: "item-1",
+            turnId: "turn-reused",
+            bootId: "boot-1",
+            generation: 1,
+            createdAt: 2,
+            body: { kind: "agent-message", text: "新历史" }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByText("旧历史")).toBeInTheDocument();
+    expect(screen.getByText("新历史")).toBeInTheDocument();
+    expect(consoleError.mock.calls.flat().join(" ")).not.toContain("same key");
+    consoleError.mockRestore();
   });
 
   it("完全相同逻辑身份的重复记录只保留最后版本", () => {

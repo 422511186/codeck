@@ -560,12 +560,12 @@ function measureTimelineRowHeight(row: HTMLElement): number | null {
 function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<string, number>): boolean {
   let changed = false;
   root.querySelectorAll<HTMLElement>("[data-timeline-row='true']").forEach((row) => {
-    const blockId = row.dataset.timelineBlockIdentity;
+    const blockIdentity = row.dataset.timelineBlockIdentity;
     const blockVersion = row.dataset.timelineBlockVersion;
-    if (!blockId || !blockVersion) {
+    if (!blockIdentity || !blockVersion) {
       return;
     }
-    const cacheKey = `${blockId}\u0000${blockVersion}`;
+    const cacheKey = `${blockIdentity}\u0000${blockVersion}`;
     const measuredHeight = measureTimelineRowHeight(row);
     if (measuredHeight === null) {
       return;
