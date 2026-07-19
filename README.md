@@ -25,7 +25,7 @@
 - 前端：React 19、Next.js 16 app router、Zustand、react-markdown + mermaid。
 - API 路由：Next.js route handlers，经自定义 Node server 承载。
 - 协议：Codex app-server JSON-RPC/WebSocket。
-- 状态存储：个人模式不使用数据库；配置走环境变量，运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
+- 状态存储：个人模式不使用数据库；自定义模型目录与会话模型绑定保存在 `CODEX_WEB_DATA_DIR` 的版本化 JSON 文件中，其他运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
 - 登录方式：优先使用后端配置的 `CODEX_WEB_ACCESS_TOKEN`；如果没有配置，后端启动时自动生成一个随机长 token 并打印到控制台。
 
 ### 运行架构：单进程全栈
@@ -65,7 +65,8 @@
   - `/projects`：项目列表（localStorage 管理，按 `cwd` 聚合会话）
   - `/projects/[projectId]`：项目内会话列表（进行中 / 已归档）
   - `/threads/[threadId]`：会话页（timeline + composer + Plan/Build + 模型切换 + 底部抽屉）
-  - `/settings`：默认模型与模式、主题、账号状态、Token 用量、登出
+  - `/settings`：默认模型与模式、自定义模型入口、主题、账号状态、Token 用量、登出
+  - `/settings/custom-models`：自定义模型创建、编辑和删除
 - **核心交互**：
   - 会话 timeline：用户消息 + agent 消息（markdown + mermaid）+ 折叠卡片（命令/diff/推理/MCP/系统消息/错误）
   - 历史无限滚动 + 自动滚策略 + 「跳到最新」浮动按钮
@@ -75,11 +76,12 @@
   - `+` 添加面板：列表式 bottom sheet，提供图片、引用 Skill、设定/编辑目标；隐藏尚未支持的文件和插件入口
   - 图片：相册单图、上传进度、失败重试；Skill 引用支持多选并作为结构化输入发送
   - 目标：从添加面板设置、编辑或清除当前会话目标；Web UI 只暴露目标描述，不暴露 token budget
-  - Plan/Build segmented + 模型选择器 + 底部抽屉（重命名/归档/压缩/Fork）
+  - Plan/Build segmented + 来源敏感模型选择器 + 底部抽屉（重命名/归档/压缩/Fork）
+  - 已有会话可在自定义模型与 Codex 目录模型间切换；切换失败时确定恢复原模型或阻塞并显示恢复操作
   - Plan 末尾「转 Build 执行」按钮 + 会话名自动生成（首句）
 - **localStorage 命名空间**：`codex-web:`
   - `codex-web:projects`：项目列表 `{ id, name, path, addedAt, lastUsedAt }[]`
-  - `codex-web:settings`：默认模型、默认模式与主题 `{ defaultModel, defaultMode, theme }`
+  - `codex-web:settings`：来源敏感默认模型、默认模式与主题；自定义默认保存 `customModelId`，Codex 默认保存模型标识
   - `codex-web:drafts`：草稿 `{ [threadId]: string }`
 
 ## 前端目录与调用边界
@@ -99,7 +101,7 @@
 
 - 个人 token 登录和签名 session cookie。
 - app-server JSON-RPC adapter 和连接管理。
-- 会话、turn、turn items、模型、账号、配置、插件、技能、MCP、文件、进程、终端、remote-control、上传图片等后端 API。
+- 会话、turn、turn items、统一模型目录、自定义模型、账号、配置、插件、技能、MCP、文件、进程、终端、remote-control、上传图片等后端 API。
 - Codex app-server 实时事件到本项目 WebSocket 的转发。
 - `spawn`、`external`、`mock`、`off` 四种 app-server 运行模式。
 - workspace allowlist、本地 JSONL 审计日志和敏感字段脱敏。
@@ -120,6 +122,8 @@
 - 浏览器事件通道包括 `/ws` 和 `/api/codex/events`，用于转发 Codex app-server 通知、待确认请求和连接状态。
 - 主要 API 分组：
   - `/api/codex/status`、`/api/codex/models`、`/api/codex/settings`：状态、模型和设置。
+  - `/api/codex/custom-models*`：自定义模型目录 CRUD；mutation 使用目录 revision 做乐观并发控制。
+  - `/api/codex/threads/:threadId/model/switch`、`model/recover`：已有会话的模型切换与失败恢复。
   - `/api/codex/threads*`、`/api/codex/turns*`：会话、turn、回滚、fork、压缩、review、目标、realtime。
   - `/api/codex/uploads/images`、`/api/codex/images/preview`：图片上传和预览。
   - `/api/codex/requests*`：审批、question、MCP elicitation 和动态工具请求处理。
@@ -172,6 +176,7 @@ CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=C:\Users\huang\workspace
 CODEX_WEB_UPLOAD_DIR=C:\Users\huang\workspace\codex-web\uploads
 CODEX_WEB_AUDIT_LOG_PATH=C:\Users\huang\workspace\codex-web\logs\audit.jsonl
+CODEX_WEB_DATA_DIR=C:\Users\huang\workspace\codex-web\data
 CODEX_WEB_BIND_HOST=0.0.0.0
 CODEX_WEB_BIND_PORT=3000
 CODEX_WEB_APP_SERVER_MODE=spawn
@@ -185,7 +190,18 @@ CODEX_WEB_APP_SERVER_MODE=spawn
 - `CODEX_WEB_WORKSPACE_ROOTS` 用来限制后端允许操作的工作区范围。
 - `CODEX_WEB_UPLOAD_DIR` 是图片暂存目录；未配置时默认使用项目当前工作目录下的 `uploads`。
 - `CODEX_WEB_AUDIT_LOG_PATH` 是审计日志路径；未配置时默认使用项目当前工作目录下的 `logs/audit.jsonl`。
+- `CODEX_WEB_DATA_DIR` 保存 `custom-models.json` 和 `thread-model-bindings.json`；未配置时默认使用项目当前工作目录下的 `data`，生产环境必须持久化并备份。
 - 审批、question、WebSocket 连接状态等运行中状态默认放内存；服务重启后从 Codex app-server 重新读取会话即可。
+
+## 自定义模型
+
+自定义模型只定义模型标识和运行时元数据，不管理 provider、base URL 或凭据。新会话、已有会话切换和重启恢复都会读取 Codex 当前配置正在使用的 provider；provider 的名称变化不会删除模型定义或已有绑定。
+
+- 新建自定义模型的上下文窗口默认是 `200000`，允许修改为 `1` 到 `1000000`。
+- 窗口大于 `272000` 时，模型标识必须精确存在于 app-server 的权威 `model/list` 中才能用于新建或切换；本项目不会生成或修改 `model_catalog_json`。
+- 自定义目录编辑不会静默改变已绑定会话。选择器会显示“配置有更新”，用户明确“重新应用”后才重建运行时。
+- 切换不会自动 compact。已知用量达到目标窗口的 90% 时，需先使用现有手动压缩入口。
+- text-only 模型不会删除草稿图片，但在移除图片或切回支持 image 的模型前禁止发送。历史消息中的图片不影响切换。
 
 ## app-server 模式
 
@@ -237,6 +253,7 @@ CODEX_WEB_APP_SERVER_MODE=off
 - 图片上传目录额外允许作为 `localImage` 来源，但不会自动扩大 Files/Terminal 的工作区范围。
 - 发送消息、上传图片、执行终端命令、审批响应、fork、rollback、interrupt、steer、新建会话等敏感动作会写入 append-only JSONL 审计日志。
 - 审计日志会递归脱敏 key 中包含 `token`、`secret`、`password`、`url` 的字段。
+- 自定义模型与绑定文件只由后端在 `CODEX_WEB_DATA_DIR` 下创建，文件权限为 `0600`；浏览器不能指定持久化路径，文件中不保存 provider 配置或凭据。
 - 这是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。对外网开放前需要额外接入反向代理、TLS、IP allowlist 和更强认证。
 
 ## 文档语言约定

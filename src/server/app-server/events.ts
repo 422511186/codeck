@@ -186,6 +186,7 @@ export type BrowserCodexEvent =
       threadId: string;
       model: string | null;
       reasoningEffort: string | null;
+      approvalPolicy: string | null;
       approvalsReviewer: string | null;
       activePermissionProfile: BrowserActivePermissionProfile | null;
       collaborationMode: "plan" | "default" | null;
@@ -1190,6 +1191,7 @@ export function normalizeAppServerNotification(
         threadId: params.threadId,
         model: stringOrNull(params.threadSettings.model),
         reasoningEffort: stringOrNull(params.threadSettings.effort),
+        approvalPolicy: stringOrNull(params.threadSettings.approvalPolicy),
         approvalsReviewer: stringOrNull(params.threadSettings.approvalsReviewer),
         activePermissionProfile: activePermissionProfileOrNull(params.threadSettings.activePermissionProfile),
         collaborationMode: collaborationModeKind(params.threadSettings.collaborationMode)

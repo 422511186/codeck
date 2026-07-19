@@ -1,6 +1,7 @@
 node_modules/
 .worktrees/
 .next/
+.idea
 dist/
 build/
 *.tar.gz

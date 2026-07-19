@@ -131,8 +131,8 @@ export function Timeline({
   );
   const previousBlocksRef = useRef<{ length: number; firstId: string | null; lastId: string | null }>({
     length: allBlocks.length,
-    firstId: allBlocks[0]?.id ?? null,
-    lastId: allBlocks[allBlocks.length - 1]?.id ?? null
+    firstId: allBlocks[0]?.identity ?? null,
+    lastId: allBlocks[allBlocks.length - 1]?.identity ?? null
   });
   const visibleBlocks = useMemo(
     () => allBlocks.slice(windowRange.start, windowRange.end),
@@ -191,8 +191,8 @@ export function Timeline({
 
   useEffect(() => {
     const previous = previousBlocksRef.current;
-    const nextFirstId = allBlocks[0]?.id ?? null;
-    const nextLastId = allBlocks[allBlocks.length - 1]?.id ?? null;
+    const nextFirstId = allBlocks[0]?.identity ?? null;
+    const nextLastId = allBlocks[allBlocks.length - 1]?.identity ?? null;
     const prependedAtHead =
       previous.length > 0 &&
       allBlocks.length > previous.length &&
@@ -237,7 +237,7 @@ export function Timeline({
       firstId: nextFirstId,
       lastId: nextLastId
     };
-  }, [allBlocks.length, allBlocks[0]?.id, allBlocks[allBlocks.length - 1]?.id, followTail]);
+  }, [allBlocks.length, allBlocks[0]?.identity, allBlocks[allBlocks.length - 1]?.identity, followTail]);
 
   useEffect(() => {
     const visibleIds = new Set(allBlocks.map(timelineBlockHeightCacheKey));
@@ -336,9 +336,10 @@ export function Timeline({
         ) : null}
         {visibleBlocks.map((block, visibleIndex) => (
           <div
-            key={block.id}
+            key={block.identity}
             data-timeline-row="true"
             data-timeline-block-id={block.id}
+            data-timeline-block-identity={block.identity}
             data-timeline-block-version={block.version}
             data-timeline-entry-id={timelineRenderBlockEntryId(block)}
             style={timelineRowStyle}
@@ -349,8 +350,10 @@ export function Timeline({
               <TimelineRow
                 entry={block.entry}
                 threadId={threadId}
-                live={rowState.liveAgentEntryIds.has(block.entry.id)}
-                actionAvailable={rowState.messageActionAvailableById.get(block.entry.id) ?? false}
+                live={rowState.liveAgentEntryIds.has(timelineEntryRenderIdentity(block.entry))}
+                actionAvailable={
+                  rowState.messageActionAvailableById.get(timelineEntryRenderIdentity(block.entry)) ?? false
+                }
                 running={running}
                 eagerMarkdown={!longTimeline || visibleIndex >= visibleBlocks.length - EAGER_MARKDOWN_TAIL_ROWS}
                 onResendUser={onResendUser}
@@ -380,20 +383,44 @@ export function Timeline({
 }
 
 export type TimelineRenderBlock =
-  | { kind: "entry"; id: string; version: string; entry: TimelineEntry }
-  | { kind: "inline-activity-log"; id: string; version: string; turnId?: string; entries: TimelineEntry[] };
+  | { kind: "entry"; id: string; identity: string; version: string; entry: TimelineEntry }
+  | {
+      kind: "inline-activity-log";
+      id: string;
+      identity: string;
+      version: string;
+      turnId?: string;
+      entries: TimelineEntry[];
+    };
 
 function timelineRenderBlockEntryId(block: TimelineRenderBlock): string {
   return block.kind === "entry" ? block.entry.id : block.entries.at(-1)?.id ?? block.id;
 }
 
+function timelineRenderBlockEntryIdentity(block: TimelineRenderBlock): string {
+  return block.kind === "entry"
+    ? timelineEntryRenderIdentity(block.entry)
+    : block.entries.at(-1)
+      ? timelineEntryRenderIdentity(block.entries.at(-1)!)
+      : block.identity;
+}
+
 export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
   const blocks: TimelineRenderBlock[] = [];
+  const usedBlockIdentities = new Set<string>();
+  const renderEntries = dedupeTimelineEntriesForRender(entries);
   let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index]!;
+  while (index < renderEntries.length) {
+    const entry = renderEntries[index]!;
     if (!isActivityEntry(entry)) {
-      blocks.push({ kind: "entry", id: entry.id, version: timelineEntryDerivationKey(entry), entry });
+      const entryIdentity = timelineEntryRenderIdentity(entry);
+      blocks.push({
+        kind: "entry",
+        id: entry.id,
+        identity: claimTimelineBlockIdentity(usedBlockIdentities, entryIdentity, entryIdentity),
+        version: timelineEntryDerivationKey(entry),
+        entry
+      });
       index += 1;
       continue;
     }
@@ -401,8 +428,8 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
     const turnId = entry.turnId;
     const activityEntries: TimelineEntry[] = [entry];
     index += 1;
-    while (index < entries.length) {
-      const next = entries[index]!;
+    while (index < renderEntries.length) {
+      const next = renderEntries[index]!;
       if (!isActivityEntry(next) || next.turnId !== turnId) {
         break;
       }
@@ -410,15 +437,61 @@ export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRe
       index += 1;
     }
 
+    const blockId = `inline-activity-${turnId ?? "no-turn"}-${activityEntries[0]!.id}`;
     blocks.push({
       kind: "inline-activity-log",
-      id: `inline-activity-${turnId ?? "no-turn"}-${activityEntries[0]!.id}`,
+      id: blockId,
+      identity: claimTimelineBlockIdentity(
+        usedBlockIdentities,
+        blockId,
+        timelineEntryRenderIdentity(activityEntries[0]!)
+      ),
       version: inlineActivitySectionsCacheKey(activityEntries),
       ...(turnId ? { turnId } : {}),
       entries: activityEntries
     });
   }
   return blocks;
+}
+
+function claimTimelineBlockIdentity(used: Set<string>, preferred: string, collisionIdentity: string): string {
+  let identity = preferred;
+  let collisionIndex = 1;
+  while (used.has(identity)) {
+    identity = JSON.stringify([preferred, collisionIdentity, collisionIndex]);
+    collisionIndex += 1;
+  }
+  used.add(identity);
+  return identity;
+}
+
+function dedupeTimelineEntriesForRender(entries: TimelineEntry[]): TimelineEntry[] {
+  const result: TimelineEntry[] = [];
+  const indexes = new Map<string, number>();
+  for (const entry of entries) {
+    const identity = timelineEntryRenderIdentity(entry);
+    const existingIndex = indexes.get(identity);
+    if (existingIndex === undefined) {
+      indexes.set(identity, result.length);
+      result.push(entry);
+    } else {
+      result[existingIndex] = entry;
+    }
+  }
+  return result;
+}
+
+function timelineEntryRenderIdentity(entry: TimelineEntry): string {
+  if (entry.body.kind === "user-message" && entry.clientUserMessageId) {
+    return JSON.stringify(["user", "client", entry.clientUserMessageId]);
+  }
+  return JSON.stringify([
+    entry.historyStamp?.bootId ?? entry.bootId ?? "legacy",
+    entry.historyStamp?.generation ?? entry.generation ?? "legacy",
+    entry.turnId ?? "none",
+    entry.body.kind,
+    entry.id
+  ]);
 }
 
 function timelineRenderBlockEntries(blocks: TimelineRenderBlock[]): TimelineEntry[] {
@@ -487,7 +560,7 @@ function measureTimelineRowHeight(row: HTMLElement): number | null {
 function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<string, number>): boolean {
   let changed = false;
   root.querySelectorAll<HTMLElement>("[data-timeline-row='true']").forEach((row) => {
-    const blockId = row.dataset.timelineBlockId;
+    const blockId = row.dataset.timelineBlockIdentity;
     const blockVersion = row.dataset.timelineBlockVersion;
     if (!blockId || !blockVersion) {
       return;
@@ -507,7 +580,7 @@ function measureVisibleTimelineRows(root: HTMLElement, rowHeightCache: Map<strin
 }
 
 function timelineBlockHeightCacheKey(block: TimelineRenderBlock): string {
-  return `${block.id}\u0000${block.version}`;
+  return `${block.identity}\u0000${block.version}`;
 }
 
 function timelineWindowRangeForScroll(
@@ -569,10 +642,10 @@ function captureTimelineScrollAnchor(
     return null;
   }
   return {
-    blockId: block.id,
-    entryId: timelineRenderBlockEntryId(block),
+    blockId: block.identity,
+    entryId: timelineRenderBlockEntryIdentity(block),
     beforeEntryId: blockIndex > 0 ? timelineRenderBlockLastEntryId(blocks[blockIndex - 1]!) : null,
-    afterEntryId: blockIndex + 1 < blocks.length ? timelineRenderBlockEntryId(blocks[blockIndex + 1]!) : null,
+    afterEntryId: blockIndex + 1 < blocks.length ? timelineRenderBlockEntryIdentity(blocks[blockIndex + 1]!) : null,
     intraBlockOffset: Math.max(0, scrollTop - (layoutIndex.offsets[blockIndex] ?? 0)),
     absoluteOffset: Math.max(0, scrollTop),
     followTail: layoutIndex.totalHeight - scrollTop - Math.max(0, clientHeight) < 64
@@ -587,7 +660,7 @@ function timelineScrollOffsetForAnchor(
   if (blocks.length === 0) {
     return null;
   }
-  let blockIndex = blocks.findIndex((block) => block.id === anchor.blockId);
+  let blockIndex = blocks.findIndex((block) => block.identity === anchor.blockId);
   let preserveIntraBlockOffset = blockIndex >= 0;
   if (blockIndex < 0) {
     blockIndex = blocks.findIndex((block) => timelineRenderBlockContainsEntryId(block, anchor.entryId));
@@ -609,11 +682,17 @@ function timelineScrollOffsetForAnchor(
 }
 
 function timelineRenderBlockContainsEntryId(block: TimelineRenderBlock, entryId: string): boolean {
-  return block.kind === "entry" ? block.entry.id === entryId : block.entries.some((entry) => entry.id === entryId);
+  return block.kind === "entry"
+    ? timelineEntryRenderIdentity(block.entry) === entryId
+    : block.entries.some((entry) => timelineEntryRenderIdentity(entry) === entryId);
 }
 
 function timelineRenderBlockLastEntryId(block: TimelineRenderBlock): string {
-  return block.kind === "entry" ? block.entry.id : block.entries.at(-1)?.id ?? block.id;
+  return block.kind === "entry"
+    ? timelineEntryRenderIdentity(block.entry)
+    : block.entries.at(-1)
+      ? timelineEntryRenderIdentity(block.entries.at(-1)!)
+      : block.identity;
 }
 
 function clampTimelineWindowRange(range: TimelineWindowRange, entryCount: number): TimelineWindowRange {
@@ -1434,16 +1513,16 @@ function deriveTimelineRowState(
 
     if (running && entry.body.kind === "agent-message") {
       if (activeTurnId && entry.turnId === activeTurnId) {
-        liveAgentEntryIds.add(entry.id);
+        liveAgentEntryIds.add(timelineEntryRenderIdentity(entry));
       } else if (!activeTurnId) {
-        latestAgentAfterLastUser = entry.id;
+        latestAgentAfterLastUser = timelineEntryRenderIdentity(entry);
       }
     }
   }
 
   for (const entry of userMessageEntries) {
     if (entry.turnId && userMessageCountByTurn.get(entry.turnId) === 1) {
-      messageActionAvailableById.set(entry.id, true);
+      messageActionAvailableById.set(timelineEntryRenderIdentity(entry), true);
     }
   }
 

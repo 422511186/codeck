@@ -3,26 +3,35 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { codex, type UpdateThreadSettingsInput } from "../../../web/api/endpoints";
+import {
+  codex,
+  type ModelSwitchApiResult,
+  type UpdateThreadSettingsInput
+} from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { createRequestCoordinator, isRequestAbort } from "../../../web/api/requestCoordinator";
-import { useStore } from "../../../web/state/store";
+import { useStore, type ThreadNotice } from "../../../web/state/store";
 import { hasVisibleTurnOutput, rollbackMetadataForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
+import { UnifiedModelPicker } from "../../../web/components/UnifiedModelPicker";
+import { ReasoningEffortPicker } from "../../../web/components/ReasoningEffortPicker";
 import { ReconnectStatus } from "../../../web/components/ReconnectStatus";
+import { ThreadNotices } from "../../../web/components/ThreadNotices";
 import {
+  extractLegacyWarningNotices,
   repairReconstructedTimelineEntries,
   threadDetailEntries
 } from "../../../web/state/timeline-adapter";
 import {
   DEFAULT_COLLABORATION_MODEL,
   collaborationModeForChatMode,
+  type ApprovalPolicy,
   type ApprovalsReviewer,
   type ChatMode,
-  type ModelOption,
   type PendingServerRequest,
+  type PermissionSelection,
   type SkillReference,
   type ThreadDetail,
   type ThreadSummary,
@@ -34,6 +43,11 @@ import { getContextUsage, type ContextUsageSnapshot } from "../../../web/storage
 import { settingsStore } from "../../../web/storage/settings";
 import { invalidateTimelineEventThread } from "../../../web/events/client";
 import { repairWindowFrom, type HistoryStamp } from "../../../shared/timeline-protocol";
+import type {
+  ModelInputModality,
+  ModelSelection,
+  ThreadModelStateView
+} from "../../../shared/custom-models";
 import {
   captureTimelineDomScrollAnchor,
   restoreTimelineDomScrollAnchor
@@ -42,9 +56,12 @@ import {
 const EMPTY_ENTRIES: TimelineEntry[] = [];
 const EMPTY_APPROVALS: PendingServerRequest[] = [];
 const EMPTY_PLAN: Array<{ text: string; completed: boolean }> = [];
+const EMPTY_NOTICES: ThreadNotice[] = [];
+const DEFAULT_MODEL_INPUT_MODALITIES: ModelInputModality[] = ["text"];
 const ACTIVE_THREAD_SUMMARY_POLL_DELAY_MS = 3_000;
 const SNAPSHOT_REPAIR_RETRY_DELAY_MS = 3_000;
 const MAX_COMPLETION_REPAIR_ATTEMPTS = 4;
+const MAX_INITIAL_BASELINE_REPAIR_ATTEMPTS = 3;
 const DEFAULT_COMPOSER_HEIGHT = 144;
 const COMPACTING_CONTEXT_TEXT = "正在压缩上下文…";
 
@@ -65,15 +82,23 @@ export default function ThreadPage(): JSX.Element {
   const replaceLatestWindow = useStore((s) => s.replaceLatestWindow);
   const prependEntries = useStore((s) => s.prependEntries);
   const appendEntries = useStore((s) => s.appendEntries);
+  const upsertThreadNotice = useStore((s) => s.upsertThreadNotice);
+  const dismissThreadNotice = useStore((s) => s.dismissThreadNotice);
   const replaceOrAddEntry = useStore((s) => s.replaceOrAddEntry);
   const setMode = useStore((s) => s.setMode);
   const setModel = useStore((s) => s.setModel);
+  const setModelState = useStore((s) => s.setModelState);
+  const beginModelSwitch = useStore((s) => s.beginModelSwitch);
+  const applyModelSwitchResult = useStore((s) => s.applyModelSwitchResult);
+  const clearModelSwitchPending = useStore((s) => s.clearModelSwitchPending);
   const setPermissionProfile = useStore((s) => s.setPermissionProfile);
   const setContextUsage = useStore((s) => s.setContextUsage);
   const setThreadStatus = useStore((s) => s.setThreadStatus);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
   const bindLocalUserMessageTurn = useStore((s) => s.bindLocalUserMessageTurn);
   const setTimelineGeneration = useStore((s) => s.setTimelineGeneration);
+  const setAuthoritativeTurnManifest = useStore((s) => s.setAuthoritativeTurnManifest);
+  const registerAuthoritativeTurn = useStore((s) => s.registerAuthoritativeTurn);
   const invalidateTimelineDelivery = useStore((s) => s.invalidateTimelineDelivery);
   const markTurnInterrupted = useStore((s) => s.markTurnInterrupted);
   const markTurnDeleted = useStore((s) => s.markTurnDeleted);
@@ -88,9 +113,19 @@ export default function ThreadPage(): JSX.Element {
   const threadMode = useStore((s) => s.threads[threadId]?.mode ?? "build");
   const threadModel = useStore((s) => s.threads[threadId]?.model ?? null);
   const threadModelEffort = useStore((s) => s.threads[threadId]?.modelEffort ?? null);
+  const threadModelSelection = useStore((s) => s.threads[threadId]?.modelSelection ?? null);
+  const threadModelBindingVersion = useStore((s) => s.threads[threadId]?.modelBindingVersion ?? null);
+  const threadModelSourceUpdatedAt = useStore((s) => s.threads[threadId]?.modelSourceUpdatedAt ?? null);
+  const threadModelContextWindow = useStore((s) => s.threads[threadId]?.modelContextWindow ?? null);
+  const threadModelInputModalities = useStore(
+    (s) => s.threads[threadId]?.modelInputModalities ?? DEFAULT_MODEL_INPUT_MODALITIES
+  );
+  const threadModelSwitchStatus = useStore((s) => s.threads[threadId]?.modelSwitchStatus ?? "idle");
   const threadPermissionProfileId = useStore((s) => s.threads[threadId]?.permissionProfileId);
+  const threadApprovalPolicy = useStore((s) => s.threads[threadId]?.approvalPolicy);
   const threadApprovalsReviewer = useStore((s) => s.threads[threadId]?.approvalsReviewer);
   const threadContextUsage = useStore((s) => s.threads[threadId]?.contextUsage ?? null);
+  const threadNotices = useStore((s) => s.threads[threadId]?.notices ?? EMPTY_NOTICES);
   const repairRequestedAt = useStore((s) => s.threads[threadId]?.repairRequestedAt ?? null);
   const hasCachedEntries = useStore((s) => Boolean(s.threads[threadId]?.entries.length));
   const compactCompletionSeen = useStore((s) => threadHasCompactCompletion(s.threads[threadId]));
@@ -103,8 +138,8 @@ export default function ThreadPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [showSheet, setShowSheet] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showReasoningPicker, setShowReasoningPicker] = useState(false);
   const [showPermissionPicker, setShowPermissionPicker] = useState(false);
-  const [models, setModels] = useState<ModelOption[] | null>(null);
   const [serverDefaults, setServerDefaults] = useState<{
     model: string | null;
     reasoningEffort: string | null;
@@ -123,6 +158,7 @@ export default function ThreadPage(): JSX.Element {
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [contextUsageOpen, setContextUsageOpen] = useState(false);
   const [composerHeight, setComposerHeight] = useState(DEFAULT_COMPOSER_HEIGHT);
+  const [modelRecoveryPending, setModelRecoveryPending] = useState(false);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
@@ -138,14 +174,26 @@ export default function ThreadPage(): JSX.Element {
   const streamDisconnectedRepairKeysRef = useRef(new Set<string>());
   const repairRetryTimerRef = useRef<number | null>(null);
   const completionRepairAttemptsRef = useRef(new Map<string, number>());
+  const initialBaselineRepairAttemptsRef = useRef(new Map<string, number>());
   const requestTokenSequenceRef = useRef(0);
   const activeRepairTokenRef = useRef<number | null>(null);
+  const rollbackOperationIdsRef = useRef(new Map<string, string>());
+  const destructiveActionKeysRef = useRef(new Set<string>());
 
-  const configuredModel = threadModel ?? detail?.model ?? webSettings.defaultModel ?? null;
+  const configuredModel = threadModel ?? detail?.model ?? appServerDefaultModel(webSettings.defaultModel);
   const effectiveModel = configuredModel ?? serverDefaults.model ?? DEFAULT_COLLABORATION_MODEL;
   const configuredReasoningEffort = threadModelEffort ?? detail?.reasoningEffort ?? null;
   const effectiveReasoningEffort = configuredReasoningEffort ?? serverDefaults.reasoningEffort ?? null;
   const effectiveReasoningSummary = serverDefaults.reasoningSummary ?? "detailed";
+  const currentModelState = detail?.modelState ?? modelStateFromCurrentThread({
+    selection: threadModelSelection,
+    model: effectiveModel,
+    reasoningEffort: effectiveReasoningEffort,
+    bindingVersion: threadModelBindingVersion,
+    sourceUpdatedAt: threadModelSourceUpdatedAt,
+    contextWindow: threadModelContextWindow,
+    inputModalities: threadModelInputModalities
+  });
   const detailPermissionProfileId =
     detail && "activePermissionProfile" in detail
       ? detail.activePermissionProfile?.id ?? null
@@ -154,10 +202,16 @@ export default function ThreadPage(): JSX.Element {
     detail && "approvalsReviewer" in detail
       ? detail.approvalsReviewer ?? null
       : undefined;
+  const detailApprovalPolicy =
+    detail && "approvalPolicy" in detail
+      ? detail.approvalPolicy ?? null
+      : undefined;
   const effectivePermissionPayload = resolveEffectivePermissionPayload({
     localProfileId: threadPermissionProfileId,
+    localApprovalPolicy: threadApprovalPolicy,
     localApprovalsReviewer: threadApprovalsReviewer,
     detailProfileId: detailPermissionProfileId,
+    detailApprovalPolicy,
     detailApprovalsReviewer
   });
 
@@ -184,10 +238,24 @@ export default function ThreadPage(): JSX.Element {
     }, SNAPSHOT_REPAIR_RETRY_DELAY_MS);
   }, [clearRepairRetryTimer, requestSnapshotRepair, threadId]);
 
+  const scheduleInitialBaselineRepair = useCallback((generation?: number) => {
+    const key = `${threadId}:${typeof generation === "number" ? generation : "legacy"}`;
+    const attempts = initialBaselineRepairAttemptsRef.current.get(key) ?? 0;
+    if (attempts >= MAX_INITIAL_BASELINE_REPAIR_ATTEMPTS) {
+      return;
+    }
+    initialBaselineRepairAttemptsRef.current.set(key, attempts + 1);
+    scheduleSnapshotRepairRetry({
+      reason: "mutation-retry",
+      ...(typeof generation === "number" ? { generation } : {})
+    });
+  }, [scheduleSnapshotRepairRetry, threadId]);
+
   useEffect(() => {
     compactActionPendingRef.current = false;
     streamDisconnectedRepairKeysRef.current.clear();
     completionRepairAttemptsRef.current.clear();
+    initialBaselineRepairAttemptsRef.current.clear();
     setCompactPending(false);
     clearRepairRetryTimer();
     return clearRepairRetryTimer;
@@ -198,6 +266,33 @@ export default function ThreadPage(): JSX.Element {
       streamDisconnectedRepairKeysRef.current.clear();
     }
   }, [wsState]);
+
+  useEffect(() => {
+    const recoverFromPageRestore = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      const current = useStore.getState().threads[threadId];
+      if (!current) {
+        return;
+      }
+      if (
+        wsState !== "open" ||
+        current.running ||
+        current.status === "active" ||
+        current.status === "unknown"
+      ) {
+        requestSnapshotRepair(threadId, { reason: "baseline-required" });
+      }
+    };
+
+    window.addEventListener("pageshow", recoverFromPageRestore);
+    document.addEventListener("visibilitychange", recoverFromPageRestore);
+    return () => {
+      window.removeEventListener("pageshow", recoverFromPageRestore);
+      document.removeEventListener("visibilitychange", recoverFromPageRestore);
+    };
+  }, [requestSnapshotRepair, threadId, wsState]);
 
   const effectivePermissionMode = permissionModeFromPayload(effectivePermissionPayload);
 
@@ -265,15 +360,22 @@ export default function ThreadPage(): JSX.Element {
       if (targetThreadId === threadId) {
         setDetail(td);
       }
-      const entries: TimelineEntry[] =
+      const rawEntries: TimelineEntry[] =
         entriesOverride ??
         threadDetailEntries(td);
+      const extractedEntries = extractLegacyWarningNotices(rawEntries);
+      const extractedDetailEntries = extractLegacyWarningNotices(detailEntries);
+      for (const notice of [...extractedEntries.notices, ...extractedDetailEntries.notices]) {
+        upsertThreadNotice(targetThreadId, notice);
+      }
+      const entries = extractedEntries.entries;
+      const cleanedDetailEntries = extractedDetailEntries.entries;
       const nextCursor = td.nextCursor ?? null;
       if (mode === "merge") {
         mergeThreadEntries(targetThreadId, entries, nextCursor);
       } else {
-        if (detailEntries.length) {
-          setThreadEntries(targetThreadId, entries, nextCursor, detailEntries);
+        if (cleanedDetailEntries.length) {
+          setThreadEntries(targetThreadId, entries, nextCursor, cleanedDetailEntries);
         } else {
           setThreadEntries(targetThreadId, entries, nextCursor);
         }
@@ -281,7 +383,12 @@ export default function ThreadPage(): JSX.Element {
       if (typeof td.generation === "number") {
         setTimelineGeneration(targetThreadId, td.generation);
       }
-      if (td.model) {
+      if (td.turnManifest) {
+        setAuthoritativeTurnManifest(targetThreadId, td.turnManifest);
+      }
+      if (td.modelState) {
+        setModelState(targetThreadId, td.modelState);
+      } else if (td.model) {
         setModel(targetThreadId, td.model, td.reasoningEffort ?? null);
       }
       if (td.contextUsage) {
@@ -289,39 +396,56 @@ export default function ThreadPage(): JSX.Element {
       }
       if ("activePermissionProfile" in td) {
         const profileId = td.activePermissionProfile?.id ?? null;
+        const approvalPolicy = "approvalPolicy" in td ? td.approvalPolicy ?? null : undefined;
         const approvalsReviewer = "approvalsReviewer" in td ? td.approvalsReviewer ?? null : undefined;
-        setPermissionProfile(targetThreadId, profileId, approvalsReviewer);
-        if (approvalsReviewer !== undefined) {
-          savePermissionSelection(targetThreadId, {
-            permissions: profileId,
-            approvalsReviewer
-          });
+        const selection = normalizePermissionSelection(profileId, approvalPolicy, approvalsReviewer);
+        if (selection) {
+          setPermissionProfile(
+            targetThreadId,
+            selection.permissions,
+            selection.approvalPolicy,
+            selection.approvalsReviewer
+          );
+          savePermissionSelection(targetThreadId, selection);
         }
       }
-      setThreadStatus(targetThreadId, td.status, isThreadRunningStatus(td.status) ? (td.lastTurnId || undefined) : null);
+      setThreadStatus(
+        targetThreadId,
+        td.status,
+        isThreadRunningStatus(td.status) ? (td.activeTurnId ?? td.lastTurnId ?? undefined) : null
+      );
     },
     [
       threadId,
       setThreadEntries,
       mergeThreadEntries,
       setTimelineGeneration,
+      setAuthoritativeTurnManifest,
       setModel,
+      setModelState,
       setContextUsage,
       setPermissionProfile,
-      setThreadStatus
+      setThreadStatus,
+      upsertThreadNotice
     ]
   );
 
   const applyThreadSummaryStatus = useCallback(
     (summary: ThreadSummary) => {
-      setThreadStatus(summary.id, summary.status);
+      if (isThreadRunningStatus(summary.status) && summary.activeTurnId) {
+        setThreadStatus(summary.id, summary.status, summary.activeTurnId);
+      } else {
+        setThreadStatus(summary.id, summary.status);
+      }
       if (summary.id !== threadId) return;
       setDetail((prev) =>
         prev
           ? {
               ...prev,
               ...summary,
-              lastTurnId: isThreadRunningStatus(summary.status) ? prev.lastTurnId : null,
+              lastTurnId: isThreadRunningStatus(summary.status)
+                ? (summary.activeTurnId ?? prev.lastTurnId)
+                : null,
               nextCursor: prev.nextCursor,
               timeline: prev.timeline
             }
@@ -345,7 +469,12 @@ export default function ThreadPage(): JSX.Element {
       )
     );
     if (savedPermissionProfile !== undefined) {
-      setPermissionProfile(threadId, savedPermissionProfile.permissions, savedPermissionProfile.approvalsReviewer);
+      setPermissionProfile(
+        threadId,
+        savedPermissionProfile.permissions,
+        savedPermissionProfile.approvalPolicy,
+        savedPermissionProfile.approvalsReviewer
+      );
     }
     let cancelled = false;
     const requestGuard = captureTimelineRequestGuard(threadId, mutationEpochRef.current);
@@ -357,20 +486,40 @@ export default function ThreadPage(): JSX.Element {
         const td = await requestCoordinatorRef.current.dedupeRequest(
           `thread:${threadId}:detail:${requestStampKey}`,
           () => codex.readThread(threadId)
-        ).catch((err) => recoverInitialThreadDetail(threadId, err));
+        ).catch((err) => {
+          const blocked = recoveryFailedThreadRead(err);
+          if (blocked) {
+            applyModelSwitchResult(threadId, {
+              outcome: "recovery_failed",
+              operationId: blocked.operationId,
+              latestState: blocked.latestState
+            });
+            return blocked.thread;
+          }
+          return recoverInitialThreadDetail(threadId, err);
+        });
         const initialPage = await requestCoordinatorRef.current.dedupeRequest(
           `thread:${threadId}:turns:initial:${requestStampKey}`,
           () => codex.listTurnsBefore(threadId, null)
         );
         if (cancelled) return;
         if (requestToken !== requestTokenSequenceRef.current) return;
-        if (!timelineRequestGuardIsCurrent(threadId, requestGuard, mutationEpochRef.current)) return;
-        if (!responseHistoryStampsAreCompatible(td.historyStamp, initialPage.historyStamp, !requestGuard.hasEntries)) return;
+        if (!timelineRequestGuardIsCurrent(threadId, requestGuard, mutationEpochRef.current)) {
+          scheduleInitialBaselineRepair(useStore.getState().threads[threadId]?.timelineGeneration);
+          return;
+        }
+        if (!responseHistoryStampsAreCompatible(td.historyStamp, initialPage.historyStamp, !requestGuard.hasEntries)) {
+          if (td.historyStamp || initialPage.historyStamp || requestGuard.historyStamp) {
+            scheduleInitialBaselineRepair(initialPage.generation ?? td.generation);
+          }
+          return;
+        }
         applyThreadDetail({
           ...td,
           bootId: initialPage.bootId ?? td.bootId,
           generation: initialPage.generation ?? td.generation,
           historyStamp: initialPage.historyStamp ?? td.historyStamp,
+          turnManifest: initialPage.turnManifest ?? td.turnManifest,
           timeline: initialPage.items,
           nextCursor: initialPage.nextCursor ?? null
         }, "replace");
@@ -387,7 +536,16 @@ export default function ThreadPage(): JSX.Element {
       cancelled = true;
       setActiveThread(null);
     };
-  }, [threadId, ensureThread, applyThreadDetail, setMode, setPermissionProfile, setActiveThread]);
+  }, [
+    threadId,
+    ensureThread,
+    applyThreadDetail,
+    applyModelSwitchResult,
+    setMode,
+    setPermissionProfile,
+    setActiveThread,
+    scheduleInitialBaselineRepair
+  ]);
 
   const repairSignal = repairRequest?.key ?? (repairRequestedAt ? String(repairRequestedAt) : null);
 
@@ -408,11 +566,15 @@ export default function ThreadPage(): JSX.Element {
         const [td, page] = await Promise.all([
           requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:repair:metadata:${repairIdentity}`,
-            () => codex.readThread(threadId)
+            () => codex.readThread(threadId, {
+              repairReason: repairRequest?.reason ?? "mutation-retry"
+            })
           ),
           requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:repair:items:${repairIdentity}`,
-            () => codex.listTurnsBefore(threadId, null)
+            () => codex.listTurnsBefore(threadId, null, undefined, {
+              repairReason: repairRequest?.reason ?? "mutation-retry"
+            })
           )
         ]);
         if (cancelled) return;
@@ -432,11 +594,17 @@ export default function ThreadPage(): JSX.Element {
             "snapshot"
           );
           if (!replaceLatestWindow(threadId, repairEntries, page.nextCursor ?? null, repairWindow)) {
-            requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
+            scheduleSnapshotRepairRetry({
+              reason: "mutation-retry",
+              ...(typeof repairRequest?.generation === "number" ? { generation: repairRequest.generation } : {})
+            });
             return;
           }
         } else if (requestGuard.hasEntries) {
-          requestSnapshotRepair(threadId, repairRequest ?? { reason: "mutation-retry" });
+          scheduleSnapshotRepairRetry({
+            reason: "mutation-retry",
+            ...(typeof repairRequest?.generation === "number" ? { generation: repairRequest.generation } : {})
+          });
           return;
         }
         applyThreadDetail({
@@ -444,6 +612,7 @@ export default function ThreadPage(): JSX.Element {
           bootId: page.bootId ?? td.bootId,
           generation: page.generation ?? td.generation,
           historyStamp: page.historyStamp ?? td.historyStamp,
+          turnManifest: page.turnManifest ?? td.turnManifest,
           timeline: page.items,
           nextCursor: page.nextCursor ?? null
         }, "merge");
@@ -526,12 +695,10 @@ export default function ThreadPage(): JSX.Element {
           }
         } else {
           const activeTurnId = currentThread?.activeTurnId ?? null;
-          const hasVisibleOutput = threadHasVisibleOutput(currentThread, activeTurnId);
           compactActionPendingRef.current = false;
           setCompactPending(false);
           if (
             activeTurnId &&
-            !hasVisibleOutput &&
             !hasEquivalentPendingCompletionRepair(currentThread?.repairRequest, activeTurnId)
           ) {
             requestSnapshotRepair(threadId, {
@@ -683,11 +850,13 @@ export default function ThreadPage(): JSX.Element {
       setThreadStatus(threadId, "active");
       try {
         const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
+        let permissionSelection = effectivePermissionPayload;
         if (currentStatus === "notLoaded") {
-          await requestCoordinatorRef.current.dedupeRequest(
+          const resumed = await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:resume`,
             () => codex.resumeThread(threadId)
           );
+          permissionSelection = permissionSelectionFromDetail(resumed) ?? permissionSelection;
         }
         const currentMode = useStore.getState().threads[threadId]?.mode ?? "build";
         const collaborationMode =
@@ -703,11 +872,11 @@ export default function ThreadPage(): JSX.Element {
           ...(currentMode === "build" && configuredModel ? { model: configuredModel } : {}),
           ...(currentMode === "build" && configuredReasoningEffort ? { reasoningEffort: configuredReasoningEffort } : {}),
           ...(effectiveReasoningSummary ? { reasoningSummary: effectiveReasoningSummary } : {}),
-          permissions: effectivePermissionPayload.permissions,
-          approvalsReviewer: effectivePermissionPayload.approvalsReviewer,
+          ...(permissionSelection ?? {}),
           ...(collaborationMode ? { collaborationMode } : {})
         };
         const started = await codex.startTurn(startInput);
+        registerAuthoritativeTurn(threadId, started.turnId);
         bindLocalUserMessageTurn(threadId, clientUserMessageId, started.turnId);
         const currentThread = useStore.getState().threads[threadId];
         if (currentThread?.running) {
@@ -790,6 +959,7 @@ export default function ThreadPage(): JSX.Element {
       replaceOrAddEntry,
       setThreadStatus,
       setActiveTurnId,
+      registerAuthoritativeTurn,
       bindLocalUserMessageTurn,
       bumpMutationEpoch,
       requestSnapshotRepair
@@ -830,7 +1000,12 @@ export default function ThreadPage(): JSX.Element {
       if (currentThread?.running || entry.body.kind !== "user-message") return;
       const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
-      const rollbackMetadata = target ? rollbackMetadataForEntry(entries, target, { cursor: currentThread?.cursor ?? null }) : null;
+      const rollbackMetadata = target
+        ? rollbackMetadataForEntry(entries, target, {
+            cursor: currentThread?.cursor ?? null,
+            turnManifest: currentThread?.turnManifest
+          })
+        : null;
       if (!target || !rollbackMetadata) {
         appendEntries(threadId, [
           {
@@ -842,16 +1017,29 @@ export default function ThreadPage(): JSX.Element {
         return;
       }
 
+      const operationKey = `${threadId}\u0000${rollbackMetadata.targetTurnId}`;
+      if (destructiveActionKeysRef.current.has(operationKey)) {
+        return;
+      }
+      destructiveActionKeysRef.current.add(operationKey);
+
       try {
         const clientEpoch = invalidateTimelineEventThread(threadId);
         invalidateTimelineDelivery?.(threadId, clientEpoch || undefined);
         bumpMutationEpoch();
+        const operationId = rollbackOperationIdsRef.current.get(operationKey) ?? uniqueTimelineId("rollback");
+        rollbackOperationIdsRef.current.set(operationKey, operationId);
         const rolledBack = await rollbackThreadWithResume(
           threadId,
-          rollbackMetadata.numTurns,
-          rollbackMetadata.expectedDeletedTurnIds
+          {
+            operationId,
+            targetTurnId: rollbackMetadata.targetTurnId,
+            historyStamp: rollbackMetadata.historyStamp,
+            expectedTailTurnIds: rollbackMetadata.expectedTailTurnIds
+          }
         );
-        for (const turnId of rollbackMetadata.expectedDeletedTurnIds) {
+        rollbackOperationIdsRef.current.delete(operationKey);
+        for (const turnId of rollbackMetadata.expectedTailTurnIds) {
           markTurnDeleted(threadId, turnId);
         }
         applyThreadDetail(rolledBack, "replace");
@@ -859,16 +1047,36 @@ export default function ThreadPage(): JSX.Element {
         setDraft(threadId, draftText);
         setDraftOverride({ text: draftText, version: Date.now() });
       } catch (err) {
+        const failure = rollbackFailure(err);
+        if (failure.code === "ROLLBACK_CONFLICT") {
+          rollbackOperationIdsRef.current.delete(operationKey);
+        }
+        if (failure.repairReason) {
+          requestSnapshotRepair(threadId, {
+            reason: failure.repairReason,
+            generation: rollbackMetadata.historyStamp.generation
+          });
+        }
         appendEntries(threadId, [
           {
             id: uniqueTimelineId("rewind-error"),
             createdAt: Date.now(),
-            body: { kind: "error", text: `回滚失败：${errorMessage(err)}` }
+            body: { kind: "error", text: failure.message }
           }
         ]);
+      } finally {
+        destructiveActionKeysRef.current.delete(operationKey);
       }
     },
-    [threadId, applyThreadDetail, appendEntries, markTurnDeleted, bumpMutationEpoch, invalidateTimelineDelivery]
+    [
+      threadId,
+      applyThreadDetail,
+      appendEntries,
+      markTurnDeleted,
+      bumpMutationEpoch,
+      invalidateTimelineDelivery,
+      requestSnapshotRepair
+    ]
   );
 
   const forkFromMessage = useCallback(
@@ -877,7 +1085,12 @@ export default function ThreadPage(): JSX.Element {
       if (currentThread?.running || entry.body.kind !== "user-message") return;
       const entries = currentThread?.entries ?? [];
       const target = resolveCurrentUserMessage(entries, entry);
-      const rollbackMetadata = target ? rollbackMetadataForEntry(entries, target, { cursor: currentThread?.cursor ?? null }) : null;
+      const rollbackMetadata = target
+        ? rollbackMetadataForEntry(entries, target, {
+            cursor: currentThread?.cursor ?? null,
+            turnManifest: currentThread?.turnManifest
+          })
+        : null;
       if (!target || !rollbackMetadata) {
         appendEntries(threadId, [
           {
@@ -889,8 +1102,17 @@ export default function ThreadPage(): JSX.Element {
         return;
       }
 
+      const actionKey = `${threadId}\u0000fork\u0000${rollbackMetadata.targetTurnId}`;
+      if (destructiveActionKeysRef.current.has(actionKey)) {
+        return;
+      }
+      destructiveActionKeysRef.current.add(actionKey);
+
+      let repairThreadId = threadId;
+
       try {
         const forked = await codex.forkThread(threadId);
+        repairThreadId = forked.id;
         const forkEntries = "timeline" in forked && Array.isArray(forked.timeline) ? threadDetailEntries(forked) : [];
         const forkTarget = forkEntries.length ? resolveEquivalentUserMessage(forkEntries, target) : null;
         if (!forkTarget) {
@@ -903,7 +1125,9 @@ export default function ThreadPage(): JSX.Element {
           ]);
           return;
         }
-        const forkRollbackMetadata = rollbackMetadataForEntry(forkEntries, forkTarget);
+        const forkRollbackMetadata = rollbackMetadataForEntry(forkEntries, forkTarget, {
+          turnManifest: forked.turnManifest
+        });
         if (!forkRollbackMetadata) {
           appendEntries(threadId, [
             {
@@ -919,94 +1143,223 @@ export default function ThreadPage(): JSX.Element {
         bumpMutationEpoch();
         const rolledBack = await rollbackThreadWithResume(
           forked.id,
-          forkRollbackMetadata.numTurns,
-          forkRollbackMetadata.expectedDeletedTurnIds
+          {
+            operationId: uniqueTimelineId("fork-rollback"),
+            targetTurnId: forkRollbackMetadata.targetTurnId,
+            historyStamp: forkRollbackMetadata.historyStamp,
+            expectedTailTurnIds: forkRollbackMetadata.expectedTailTurnIds
+          }
         );
-        for (const turnId of forkRollbackMetadata.expectedDeletedTurnIds) {
+        for (const turnId of forkRollbackMetadata.expectedTailTurnIds) {
           markTurnDeleted(forked.id, turnId);
         }
         applyThreadDetail(rolledBack, "replace", forked.id);
         setDraft(forked.id, target.body.kind === "user-message" ? target.body.text : entry.body.text);
         router.push(`/threads/${forked.id}`);
       } catch (err) {
+        const failure = rollbackFailure(err, "fork");
+        if (failure.repairReason) {
+          requestSnapshotRepair(repairThreadId, {
+            reason: failure.repairReason,
+            generation: rollbackMetadata.historyStamp.generation
+          });
+        }
         appendEntries(threadId, [
           {
             id: uniqueTimelineId("fork-error"),
             createdAt: Date.now(),
-            body: { kind: "error", text: `Fork 失败：${errorMessage(err)}` }
+            body: { kind: "error", text: failure.message }
           }
         ]);
+      } finally {
+        destructiveActionKeysRef.current.delete(actionKey);
       }
     },
-    [threadId, applyThreadDetail, appendEntries, markTurnDeleted, router, bumpMutationEpoch, invalidateTimelineDelivery]
+    [
+      threadId,
+      applyThreadDetail,
+      appendEntries,
+      markTurnDeleted,
+      router,
+      bumpMutationEpoch,
+      invalidateTimelineDelivery,
+      requestSnapshotRepair
+    ]
   );
 
-  const openModelPicker = useCallback(async () => {
+  const openModelPicker = useCallback(() => {
+    setShowReasoningPicker(false);
     setShowModelPicker(true);
-    setModels(null);
-    try {
-      setModels(await requestCoordinatorRef.current.dedupeRequest("codex:models", () => codex.models()));
-    } catch {
-      setModels([]);
-    }
   }, []);
 
+  const openReasoningPicker = useCallback(() => {
+    setShowModelPicker(false);
+    setShowReasoningPicker(true);
+  }, []);
+
+  const reportModelError = useCallback((message: string) => {
+    appendEntries(threadId, [{
+      id: uniqueTimelineId("model-error"),
+      createdAt: Date.now(),
+      body: { kind: "error", text: message }
+    }]);
+  }, [appendEntries, threadId]);
+
+  const reportModelWarning = useCallback((message: string) => {
+    upsertThreadNotice(threadId, {
+      id: `model-operation-warning:${message}`,
+      kind: "warning",
+      source: "model-operation",
+      text: message
+    });
+  }, [threadId, upsertThreadNotice]);
+
+  const adoptModelState = useCallback((modelState: ThreadModelStateView) => {
+    setModelState(threadId, modelState);
+    setDetail((previous) => previous ? {
+      ...previous,
+      model: modelState.model,
+      reasoningEffort: modelState.reasoningEffort,
+      modelState
+    } : previous);
+  }, [setModelState, threadId]);
+
   const onSelectModel = useCallback(
-    async (model: ModelOption) => {
-      setShowModelPicker(false);
-      const nextEffort =
-        effectiveReasoningEffort && model.supportedReasoningEfforts.includes(effectiveReasoningEffort)
-          ? effectiveReasoningEffort
-          : null;
-      setModel(threadId, model.id, nextEffort);
+    async (target: ModelSelection, catalogRevision: number, kind: "switch" | "reapply" = "switch") => {
+      if (!currentModelState || threadModelSwitchStatus !== "idle") return;
+      beginModelSwitch(threadId, target);
       try {
-        await enqueueThreadSettings({
-          model: model.id,
-          ...(nextEffort ? { reasoningEffort: nextEffort } : {})
+        const result = await codex.switchThreadModel(threadId, {
+          target,
+          expectedCatalogRevision: catalogRevision,
+          expectedCurrent: {
+            selection: currentModelState.selection,
+            reasoningEffort: currentModelState.reasoningEffort,
+            bindingVersion: currentModelState.bindingVersion
+          },
+          kind
         });
-      } catch (err) {
-        // optimistic — surface error
-        console.warn("update model failed", err);
+        if (isModelSwitchTerminal(result)) {
+          applyModelSwitchResult(threadId, {
+            outcome: result.outcome,
+            operationId: result.operationId,
+            latestState: result.latestState
+          });
+          adoptModelState(result.latestState);
+          if (result.outcome === "recovered") {
+            reportModelWarning(result.error ?? "目标模型不可用，已恢复原模型");
+          } else if (result.outcome === "recovery_failed") {
+            reportModelError(result.error ?? "会话模型恢复失败，需要先恢复运行时");
+          }
+        } else {
+          clearModelSwitchPending(threadId);
+          if (result.latestState) {
+            adoptModelState(result.latestState);
+          }
+          reportModelWarning(result.error ?? modelSwitchCodeMessage(result.code));
+        }
+      } catch (switchError) {
+        clearModelSwitchPending(threadId);
+        reportModelError(`模型切换失败：${errorMessage(switchError)}`);
+      } finally {
+        setShowModelPicker(false);
       }
     },
-    [threadId, effectiveReasoningEffort, setModel, enqueueThreadSettings]
+    [
+      adoptModelState,
+      applyModelSwitchResult,
+      beginModelSwitch,
+      clearModelSwitchPending,
+      currentModelState,
+      reportModelError,
+      reportModelWarning,
+      threadId,
+      threadModelSwitchStatus
+    ]
   );
 
   const onSelectReasoningEffort = useCallback(
     async (effort: string) => {
-      setModel(threadId, effectiveModel, effort);
       try {
-        await enqueueThreadSettings({
-          model: effectiveModel,
-          reasoningEffort: effort
-        });
+        await enqueueThreadSettings({ reasoningEffort: effort });
+        const refreshed = await codex.readThread(threadId);
+        if (refreshed.modelState) {
+          adoptModelState(refreshed.modelState);
+        } else if (refreshed.model) {
+          setModel(threadId, refreshed.model, refreshed.reasoningEffort ?? effort);
+        }
       } catch (err) {
+        reportModelWarning(`推理强度更新失败：${errorMessage(err)}`);
         console.warn("update reasoning effort failed", err);
       }
     },
-    [threadId, effectiveModel, setModel, enqueueThreadSettings]
+    [adoptModelState, enqueueThreadSettings, reportModelWarning, setModel, threadId]
   );
+
+  const recoverThreadModel = useCallback(async (action: "restore-old" | "retry-target") => {
+    if (modelRecoveryPending) return;
+    setModelRecoveryPending(true);
+    try {
+      const result = await codex.recoverThreadModel(threadId, action);
+      if (isModelSwitchTerminal(result)) {
+        applyModelSwitchResult(threadId, {
+          outcome: result.outcome,
+          operationId: result.operationId,
+          latestState: result.latestState
+        });
+        adoptModelState(result.latestState);
+        if (result.outcome === "recovery_failed") {
+          reportModelError(result.error ?? "模型恢复仍未成功");
+        }
+      } else {
+        reportModelWarning(result.error ?? modelSwitchCodeMessage(result.code));
+      }
+    } catch (recoverError) {
+      reportModelError(`模型恢复失败：${errorMessage(recoverError)}`);
+    } finally {
+      setModelRecoveryPending(false);
+    }
+  }, [
+    adoptModelState,
+    applyModelSwitchResult,
+    modelRecoveryPending,
+    reportModelError,
+    reportModelWarning,
+    threadId
+  ]);
 
   const onSelectPermissionMode = useCallback(
     async (modeId: PermissionModeId) => {
       const mode = permissionModeById(modeId);
       const previous = effectivePermissionPayload;
       setShowPermissionPicker(false);
-      setPermissionProfile(threadId, mode.permissions, mode.approvalsReviewer);
+      setPermissionProfile(threadId, mode.permissions, mode.approvalPolicy, mode.approvalsReviewer);
       savePermissionSelection(threadId, mode);
       try {
         await enqueueThreadSettings({
           permissions: mode.permissions,
+          approvalPolicy: mode.approvalPolicy,
           approvalsReviewer: mode.approvalsReviewer
         });
       } catch (err) {
-        setPermissionProfile(threadId, previous.permissions, previous.approvalsReviewer);
-        savePermissionSelection(threadId, previous);
+        setPermissionProfile(
+          threadId,
+          previous?.permissions,
+          previous?.approvalPolicy,
+          previous?.approvalsReviewer
+        );
+        if (previous) {
+          savePermissionSelection(threadId, previous);
+        }
         appendEntries(threadId, [
           {
-            id: uniqueTimelineId("permission-error"),
+            id: uniqueTimelineId("permission-warning"),
             createdAt: Date.now(),
-            body: { kind: "error", text: `权限切换失败：${errorMessage(err)}` }
+            body: {
+              kind: "system",
+              systemKind: "warning",
+              text: `权限切换失败：${errorMessage(err)}`
+            }
           }
         ]);
         console.warn("update permission profile failed", err);
@@ -1080,6 +1433,9 @@ export default function ThreadPage(): JSX.Element {
         title={visibleDetail.title || "新会话"}
         mode={mode}
         contextUsage={threadContextUsage}
+        configuredContextWindow={
+          currentModelState?.selection.source === "custom" ? currentModelState.contextWindow : null
+        }
         onBack={() => router.back()}
         onToggleMode={onToggleMode}
         onOpenContextUsage={() => setContextUsageOpen(true)}
@@ -1087,6 +1443,11 @@ export default function ThreadPage(): JSX.Element {
       />
 
       <ThreadPlanBar threadId={threadId} />
+
+      <ThreadNotices
+        notices={threadNotices}
+        onDismiss={(noticeId) => dismissThreadNotice(threadId, noticeId)}
+      />
 
       <ThreadTimelineViewport
         threadId={threadId}
@@ -1128,20 +1489,44 @@ export default function ThreadPage(): JSX.Element {
         </button>
       ) : null}
 
+      {threadModelSwitchStatus === "recovery_failed" ? (
+        <ModelRecoveryBanner
+          pending={modelRecoveryPending}
+          onRestore={() => void recoverThreadModel("restore-old")}
+          onRetry={() => void recoverThreadModel("retry-target")}
+        />
+      ) : null}
+
       <ThreadComposerDock
         threadId={threadId}
         cwd={visibleDetail?.cwd}
         running={running}
         disabled={!visibleDetail}
+        imageInputSupported={currentModelState?.inputModalities.includes("image") ?? false}
+        sendBlockedReason={
+          threadModelSwitchStatus === "recovery_failed"
+            ? "会话模型恢复失败，请先恢复模型"
+            : threadModelSwitchStatus === "pending"
+              ? "正在切换模型"
+              : undefined
+        }
         draftOverride={draftOverride ?? undefined}
         permissionLabel={effectivePermissionMode.label}
         permissionDescription={effectivePermissionMode.description}
+        permissionPending={effectivePermissionMode.id === "pending"}
         modelLabel={shortModel(modelId)}
         reasoningEffortLabel={effectiveReasoningEffort ? reasoningEffortLabel(effectiveReasoningEffort) : undefined}
         goal={currentGoal}
         onHeightChange={handleComposerHeightChange}
         onOpenPermissionPicker={() => setShowPermissionPicker(true)}
         onOpenModelPicker={openModelPicker}
+        onOpenReasoningPicker={
+          currentModelState && (
+            currentModelState.supportedReasoningEfforts.length > 0 || currentModelState.reasoningEffort
+          )
+            ? openReasoningPicker
+            : undefined
+        }
         onOpenGoalEditor={() => setGoalEditorOpen(true)}
         onSend={onSend}
         onInterrupt={onInterrupt}
@@ -1215,13 +1600,21 @@ export default function ThreadPage(): JSX.Element {
       ) : null}
 
       {showModelPicker ? (
-        <ModelPicker
-          models={models}
-          current={modelId}
-          currentEffort={effectiveReasoningEffort}
-          onSelect={onSelectModel}
-          onSelectEffort={onSelectReasoningEffort}
+        currentModelState ? (
+        <UnifiedModelPicker
+          current={currentModelState}
+          onSelect={(selection, catalogRevision) => onSelectModel(selection, catalogRevision, "switch")}
+          onReapply={(catalogRevision) => onSelectModel(currentModelState.selection, catalogRevision, "reapply")}
           onClose={() => setShowModelPicker(false)}
+        />
+        ) : null
+      ) : null}
+
+      {showReasoningPicker && currentModelState ? (
+        <ReasoningEffortPicker
+          current={currentModelState}
+          onSelect={onSelectReasoningEffort}
+          onClose={() => setShowReasoningPicker(false)}
         />
       ) : null}
 
@@ -1321,6 +1714,7 @@ function ThreadHeader({
   title,
   mode,
   contextUsage,
+  configuredContextWindow,
   onBack,
   onToggleMode,
   onOpenContextUsage,
@@ -1329,6 +1723,7 @@ function ThreadHeader({
   title: string;
   mode: ChatMode;
   contextUsage: ContextUsageSnapshot | null;
+  configuredContextWindow: number | null;
   onBack: () => void;
   onToggleMode: (mode: ChatMode) => void;
   onOpenContextUsage: () => void;
@@ -1361,19 +1756,26 @@ function ThreadHeader({
           </button>
         </div>
       </header>
-      <ContextUsageProgress usage={contextUsage} onOpen={onOpenContextUsage} />
+      <ContextUsageProgress
+        usage={contextUsage}
+        configuredContextWindow={configuredContextWindow}
+        onOpen={onOpenContextUsage}
+      />
     </div>
   );
 }
 
 function ContextUsageProgress({
   usage,
+  configuredContextWindow,
   onOpen
 }: {
   usage: ContextUsageSnapshot | null;
+  configuredContextWindow: number | null;
   onOpen: () => void;
 }): JSX.Element {
   const progress = contextUsageProgress(usage);
+  const mismatch = contextWindowMismatch(usage, configuredContextWindow);
   if (!progress) {
     return (
       <div aria-label="上下文窗口等待用量" style={contextProgressUnavailableStyle}>
@@ -1383,6 +1785,7 @@ function ContextUsageProgress({
     );
   }
   return (
+    <div style={contextProgressShellStyle}>
     <button
       type="button"
       aria-label={`上下文窗口 ${progress.percent}%`}
@@ -1401,6 +1804,8 @@ function ContextUsageProgress({
       </span>
       <span style={{ ...contextProgressLabelStyle, color: progress.color }}>{progress.percent}%</span>
     </button>
+      {mismatch ? <div style={contextMismatchStyle}>{mismatch}</div> : null}
+    </div>
   );
 }
 
@@ -1544,15 +1949,19 @@ function ThreadComposerDock({
   cwd,
   running,
   disabled,
+  imageInputSupported,
+  sendBlockedReason,
   draftOverride,
   permissionLabel,
   permissionDescription,
+  permissionPending,
   modelLabel,
   reasoningEffortLabel,
   goal,
   onHeightChange,
   onOpenPermissionPicker,
   onOpenModelPicker,
+  onOpenReasoningPicker,
   onOpenGoalEditor,
   onSend,
   onInterrupt
@@ -1561,15 +1970,19 @@ function ThreadComposerDock({
   cwd?: string;
   running: boolean;
   disabled: boolean;
+  imageInputSupported: boolean;
+  sendBlockedReason?: string;
   draftOverride?: { text: string; version: number };
   permissionLabel: string;
   permissionDescription?: string;
+  permissionPending?: boolean;
   modelLabel: string;
   reasoningEffortLabel?: string;
   goal?: ThreadGoal | null;
   onHeightChange: (height: number) => void;
   onOpenPermissionPicker: () => void;
   onOpenModelPicker: () => void;
+  onOpenReasoningPicker?: () => void;
   onOpenGoalEditor: () => void;
   onSend: (
     text: string,
@@ -1585,19 +1998,50 @@ function ThreadComposerDock({
       cwd={cwd}
       running={running}
       disabled={disabled}
+      imageInputSupported={imageInputSupported}
+      sendBlockedReason={sendBlockedReason}
       draftOverride={draftOverride}
       permissionLabel={permissionLabel}
       permissionDescription={permissionDescription}
+      permissionPending={permissionPending}
       modelLabel={modelLabel}
       reasoningEffortLabel={reasoningEffortLabel}
       goal={goal}
       onHeightChange={onHeightChange}
       onOpenPermissionPicker={onOpenPermissionPicker}
       onOpenModelPicker={onOpenModelPicker}
+      onOpenReasoningPicker={onOpenReasoningPicker}
       onOpenGoalEditor={onOpenGoalEditor}
       onSend={onSend}
       onInterrupt={onInterrupt}
     />
+  );
+}
+
+function ModelRecoveryBanner({
+  pending,
+  onRestore,
+  onRetry
+}: {
+  pending: boolean;
+  onRestore: () => void;
+  onRetry: () => void;
+}): JSX.Element {
+  return (
+    <section role="alert" style={modelRecoveryStyle}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={modelRecoveryTitleStyle}>会话模型恢复失败</div>
+        <div style={modelRecoveryDescriptionStyle}>运行时状态不确定，恢复成功前不能发送新消息。</div>
+      </div>
+      <div style={modelRecoveryActionsStyle}>
+        <button type="button" onClick={onRestore} disabled={pending} style={modelRecoveryPrimaryStyle}>
+          恢复原模型
+        </button>
+        <button type="button" onClick={onRetry} disabled={pending} style={modelRecoverySecondaryStyle}>
+          重试目标模型
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -1812,99 +2256,12 @@ function SheetItem({
   );
 }
 
-function ModelPicker({
-  models,
-  current,
-  currentEffort,
-  onSelect,
-  onSelectEffort,
-  onClose
-}: {
-  models: ModelOption[] | null;
-  current: string | null;
-  currentEffort: string | null;
-  onSelect: (m: ModelOption) => void;
-  onSelectEffort: (effort: string) => void;
-  onClose: () => void;
-}): JSX.Element {
-  const currentModel = models?.find((model) => model.id === current) ?? null;
-  const efforts = currentModel?.supportedReasoningEfforts ?? [];
-
-  return (
-    <Overlay onClose={onClose} align="bottom">
-      <div style={sheetStyle}>
-        <div style={{ padding: "8px 12px", color: "var(--cw-fg-muted)", fontSize: 13 }}>选择模型</div>
-        {models === null ? (
-          <div style={{ padding: 16, color: "var(--cw-fg-muted)" }}>载入中…</div>
-        ) : models.length === 0 ? (
-          <div style={{ padding: 16, color: "var(--cw-fg-muted)" }}>暂无可用模型</div>
-        ) : (
-          models.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => onSelect(m)}
-              style={{
-                padding: "12px",
-                border: "none",
-                background: "transparent",
-                textAlign: "left",
-                fontSize: 15,
-                color: current === m.id ? "var(--cw-accent)" : "var(--cw-fg)"
-              }}
-            >
-              {m.label}
-              {m.isDefault ? <span style={{ marginLeft: 6, fontSize: 12, color: "var(--cw-fg-subtle)" }}>· 默认</span> : null}
-            </button>
-          ))
-        )}
-        {efforts.length > 0 ? (
-          <div
-            style={{
-              marginTop: 8,
-              padding: "10px 12px 12px",
-              borderTop: "1px solid var(--cw-border)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8
-            }}
-          >
-            <div style={{ color: "var(--cw-fg-muted)", fontSize: 13 }}>推理强度</div>
-            <div style={{ display: "grid", gridTemplateColumns: `repeat(${efforts.length}, 1fr)`, gap: 6 }}>
-              {efforts.map((effort) => {
-                const active = currentEffort === effort;
-                return (
-                  <button
-                    key={effort}
-                    type="button"
-                    onClick={() => onSelectEffort(effort)}
-                    style={{
-                      padding: "9px 6px",
-                      borderRadius: 8,
-                      border: `1px solid ${active ? "var(--cw-accent)" : "var(--cw-border)"}`,
-                      background: active ? "var(--cw-accent)" : "transparent",
-                      color: active ? "#fff" : "var(--cw-fg)",
-                      fontSize: 13
-                    }}
-                  >
-                    {reasoningEffortLabel(effort)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </Overlay>
-  );
-}
-
 function PermissionPicker({
   current,
   onSelect,
   onClose
 }: {
-  current: PermissionModeId;
+  current: PermissionDisplayModeId;
   onSelect: (modeId: PermissionModeId) => void;
   onClose: () => void;
 }): JSX.Element {
@@ -2032,20 +2389,24 @@ function shortModel(id: string | null): string {
   return last.length > 14 ? last.slice(0, 12) + "…" : last;
 }
 
+function appServerDefaultModel(selection: ModelSelection | null): string | null {
+  return selection?.source === "app-server" ? selection.model : null;
+}
+
 type PermissionModeId = "request-approval" | "auto-approve" | "full-access" | "config-default";
+type PermissionDisplayModeId = PermissionModeId | "pending";
 
-type PermissionPayload = {
-  permissions: string | null;
-  approvalsReviewer: ApprovalsReviewer | null;
-};
-
-type PermissionMode = PermissionPayload & {
+type PermissionMode = PermissionSelection & {
   id: PermissionModeId;
   label: string;
   description: string;
 };
 
-type StoredPermissionSelection = PermissionPayload | string | null;
+type PermissionDisplayMode = Pick<PermissionMode, "label" | "description"> & {
+  id: PermissionDisplayModeId;
+};
+
+type StoredPermissionSelection = PermissionSelection | string | null;
 
 const PERMISSION_MODES: PermissionMode[] = [
   {
@@ -2053,6 +2414,7 @@ const PERMISSION_MODES: PermissionMode[] = [
     label: "请求批准",
     description: "编辑外部文件和使用互联网时始终询问",
     permissions: ":workspace",
+    approvalPolicy: "on-request",
     approvalsReviewer: "user"
   },
   {
@@ -2060,6 +2422,7 @@ const PERMISSION_MODES: PermissionMode[] = [
     label: "替我审批",
     description: "仅对检测到的风险操作请求批准",
     permissions: ":workspace",
+    approvalPolicy: "on-request",
     approvalsReviewer: "auto_review"
   },
   {
@@ -2067,6 +2430,7 @@ const PERMISSION_MODES: PermissionMode[] = [
     label: "完全访问权限",
     description: "可不受限制地访问互联网和电脑上的任何文件",
     permissions: ":danger-full-access",
+    approvalPolicy: "never",
     approvalsReviewer: null
   },
   {
@@ -2074,6 +2438,7 @@ const PERMISSION_MODES: PermissionMode[] = [
     label: "自定义 config.toml",
     description: "使用 config.toml 中定义的权限",
     permissions: null,
+    approvalPolicy: null,
     approvalsReviewer: null
   }
 ];
@@ -2084,47 +2449,81 @@ function permissionModeById(id: PermissionModeId): PermissionMode {
   return PERMISSION_MODES.find((mode) => mode.id === id) ?? CONFIG_DEFAULT_PERMISSION_MODE;
 }
 
-function permissionModeFromPayload(payload: PermissionPayload): PermissionMode {
-  if (payload.permissions === ":workspace" && payload.approvalsReviewer === "auto_review") {
+function permissionModeFromPayload(payload: PermissionSelection | undefined): PermissionDisplayMode {
+  if (
+    payload?.permissions === ":workspace" &&
+    payload.approvalPolicy === "on-request" &&
+    payload.approvalsReviewer === "auto_review"
+  ) {
     return permissionModeById("auto-approve");
   }
-  if (payload.permissions === ":workspace") {
+  if (
+    payload?.permissions === ":workspace" &&
+    payload.approvalPolicy === "on-request" &&
+    payload.approvalsReviewer === "user"
+  ) {
     return permissionModeById("request-approval");
   }
-  if (payload.permissions === ":danger-full-access") {
+  if (payload?.permissions === ":danger-full-access" && payload.approvalPolicy === "never") {
     return permissionModeById("full-access");
   }
-  return CONFIG_DEFAULT_PERMISSION_MODE;
+  if (
+    payload?.permissions === null &&
+    payload.approvalPolicy === null &&
+    payload.approvalsReviewer === null
+  ) {
+    return CONFIG_DEFAULT_PERMISSION_MODE;
+  }
+  return {
+    id: "pending",
+    label: "权限状态待确认",
+    description: "后端尚未返回完整权限状态，当前不会覆盖 config.toml"
+  };
 }
 
 function resolveEffectivePermissionPayload({
   localProfileId,
+  localApprovalPolicy,
   localApprovalsReviewer,
   detailProfileId,
+  detailApprovalPolicy,
   detailApprovalsReviewer
 }: {
   localProfileId?: string | null;
+  localApprovalPolicy?: ApprovalPolicy | null;
   localApprovalsReviewer?: ApprovalsReviewer | null;
   detailProfileId?: string | null;
+  detailApprovalPolicy?: ApprovalPolicy | null;
   detailApprovalsReviewer?: ApprovalsReviewer | null;
-}): PermissionPayload {
-  if (localProfileId !== undefined) {
-    return normalizePermissionPayload(localProfileId, localApprovalsReviewer);
+}): PermissionSelection | undefined {
+  const local = normalizePermissionSelection(
+    localProfileId,
+    localApprovalPolicy,
+    localApprovalsReviewer
+  );
+  if (local) {
+    return local;
   }
-  if (detailProfileId !== undefined) {
-    return normalizePermissionPayload(detailProfileId, detailApprovalsReviewer);
-  }
-  return CONFIG_DEFAULT_PERMISSION_MODE;
+  return normalizePermissionSelection(
+    detailProfileId,
+    detailApprovalPolicy,
+    detailApprovalsReviewer
+  );
 }
 
-function normalizePermissionPayload(
+function normalizePermissionSelection(
   permissions: string | null | undefined,
+  approvalPolicy: ApprovalPolicy | null | undefined,
   approvalsReviewer: ApprovalsReviewer | null | undefined
-): PermissionPayload {
+): PermissionSelection | undefined {
+  if (permissions === undefined || approvalPolicy === undefined || approvalsReviewer === undefined) {
+    return undefined;
+  }
   if (permissions === ":workspace" || permissions === "workspace-write" || permissions === "read-only") {
     return {
       permissions: ":workspace",
-      approvalsReviewer: approvalsReviewer === "auto_review" ? "auto_review" : "user"
+      approvalPolicy,
+      approvalsReviewer
     };
   }
   if (
@@ -2134,39 +2533,102 @@ function normalizePermissionPayload(
   ) {
     return {
       permissions: ":danger-full-access",
-      approvalsReviewer: null
+      approvalPolicy,
+      approvalsReviewer
     };
   }
-  return CONFIG_DEFAULT_PERMISSION_MODE;
-}
-
-function savePermissionSelection(threadId: string, selection: PermissionPayload): void {
-  saveJson(threadPermissionProfileKey(threadId), {
-    permissions: selection.permissions,
-    approvalsReviewer: selection.approvalsReviewer
-  });
-}
-
-function normalizeStoredPermissionSelection(value: StoredPermissionSelection | undefined): PermissionPayload | undefined {
-  if (value === undefined) return undefined;
-  if (value === null) return CONFIG_DEFAULT_PERMISSION_MODE;
-  if (typeof value === "string") {
-    return normalizePermissionPayload(value, undefined);
-  }
-  if (typeof value === "object") {
-    const rawPermissions = value.permissions;
-    const permissions = typeof rawPermissions === "string" || rawPermissions === null ? rawPermissions : undefined;
-    return normalizePermissionPayload(permissions, approvalsReviewerOrNull(value.approvalsReviewer));
+  if (permissions === null) {
+    return { permissions, approvalPolicy, approvalsReviewer };
   }
   return undefined;
 }
 
-function approvalsReviewerOrNull(value: unknown): ApprovalsReviewer | null {
-  return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : null;
+function savePermissionSelection(threadId: string, selection: PermissionSelection): void {
+  saveJson(threadPermissionProfileKey(threadId), {
+    permissions: selection.permissions,
+    approvalPolicy: selection.approvalPolicy,
+    approvalsReviewer: selection.approvalsReviewer
+  });
+}
+
+function normalizeStoredPermissionSelection(value: StoredPermissionSelection | undefined): PermissionSelection | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value === "string") return undefined;
+  if (typeof value === "object") {
+    const stored = value as Record<string, unknown>;
+    const rawPermissions = stored.permissions;
+    const permissions = typeof rawPermissions === "string" || rawPermissions === null ? rawPermissions : undefined;
+    return normalizePermissionSelection(
+      permissions,
+      approvalPolicyOrUndefined(stored.approvalPolicy),
+      approvalsReviewerOrUndefined(stored.approvalsReviewer)
+    );
+  }
+  return undefined;
+}
+
+function permissionSelectionFromDetail(detail: ThreadDetail): PermissionSelection | undefined {
+  if (!("activePermissionProfile" in detail)) return undefined;
+  return normalizePermissionSelection(
+    detail.activePermissionProfile?.id ?? null,
+    "approvalPolicy" in detail ? detail.approvalPolicy ?? null : undefined,
+    "approvalsReviewer" in detail ? detail.approvalsReviewer ?? null : undefined
+  );
+}
+
+function approvalsReviewerOrUndefined(value: unknown): ApprovalsReviewer | null | undefined {
+  if (value === null) return null;
+  return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : undefined;
+}
+
+function approvalPolicyOrUndefined(value: unknown): ApprovalPolicy | null | undefined {
+  if (value === null) return null;
+  return value === "untrusted" || value === "on-request" || value === "never" ? value : undefined;
 }
 
 function isThreadNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && /thread not found|找不到会话/i.test(error.message);
+}
+
+function rollbackFailure(
+  error: unknown,
+  action: "rollback" | "fork" = "rollback"
+): {
+  code: string | null;
+  message: string;
+  repairReason: "mutation-retry" | "baseline-required" | null;
+} {
+  const body = error instanceof ApiError && error.body && typeof error.body === "object"
+    ? error.body as Record<string, unknown>
+    : null;
+  const code = typeof body?.code === "string" ? body.code : null;
+  const label = action === "fork" ? "Fork 后回滚" : "回滚";
+  if (code === "ROLLBACK_CONFLICT") {
+    return {
+      code,
+      message: `${label}位置已过期：会话记录已在其他设备更新，正在刷新，请重新选择。`,
+      repairReason: "mutation-retry"
+    };
+  }
+  if (code === "ROLLBACK_UNRESOLVED") {
+    return {
+      code,
+      message: `${label}结果无法确认：服务进程已变化，正在重新建立基线。`,
+      repairReason: "baseline-required"
+    };
+  }
+  if (code === "REPAIR_EXHAUSTED") {
+    return {
+      code,
+      message: `${label}已提交，但最新记录尚未收敛，正在重新建立基线。`,
+      repairReason: "baseline-required"
+    };
+  }
+  return {
+    code,
+    message: `${label}失败：${errorMessage(error)}`,
+    repairReason: null
+  };
 }
 
 type TimelineRequestGuard = {
@@ -2365,17 +2827,21 @@ function uniqueTimelineId(prefix: string): string {
 
 async function rollbackThreadWithResume(
   threadId: string,
-  numTurns: number,
-  expectedDeletedTurnIds: string[] = []
+  input: {
+    operationId: string;
+    targetTurnId: string;
+    historyStamp: NonNullable<ThreadDetail["historyStamp"]>;
+    expectedTailTurnIds: string[];
+  }
 ): Promise<ThreadDetail> {
   try {
-    return await codex.rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
+    return await codex.rollbackThread(threadId, input);
   } catch (err) {
     if (!isThreadNotFoundError(err)) {
       throw err;
     }
     await codex.resumeThread(threadId);
-    return codex.rollbackThread(threadId, numTurns, { expectedDeletedTurnIds });
+    return codex.rollbackThread(threadId, input);
   }
 }
 
@@ -2406,6 +2872,28 @@ async function recoverInitialThreadDetail(threadId: string, error: unknown): Pro
     throw error;
   }
   return codex.resumeThread(threadId);
+}
+
+function recoveryFailedThreadRead(error: unknown): {
+  operationId: string;
+  latestState: ThreadModelStateView;
+  thread: ThreadDetail;
+} | null {
+  if (!(error instanceof ApiError) || !error.body || typeof error.body !== "object") return null;
+  const body = error.body as Record<string, unknown>;
+  if (
+    body.outcome !== "recovery_failed" ||
+    typeof body.operationId !== "string" ||
+    !body.latestState || typeof body.latestState !== "object" ||
+    !body.thread || typeof body.thread !== "object"
+  ) {
+    return null;
+  }
+  return {
+    operationId: body.operationId,
+    latestState: body.latestState as ThreadModelStateView,
+    thread: body.thread as ThreadDetail
+  };
 }
 
 function isRecoverableThreadReadError(error: unknown): boolean {
@@ -2458,6 +2946,49 @@ function isAmbiguousStartError(error: unknown): boolean {
   return error instanceof TypeError || (error instanceof Error && /timeout|network|connection|响应/i.test(error.message));
 }
 
+function modelStateFromCurrentThread(input: {
+  selection: ModelSelection | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  bindingVersion: string | null;
+  sourceUpdatedAt: string | null;
+  contextWindow: number | null;
+  inputModalities: ModelInputModality[];
+}): ThreadModelStateView | null {
+  if (!input.model) return null;
+  const selection = input.selection ?? { source: "app-server" as const, model: input.model };
+  return {
+    selection,
+    model: input.model,
+    label: input.model,
+    contextWindow: input.contextWindow,
+    inputModalities: [...input.inputModalities],
+    supportedReasoningEfforts: input.reasoningEffort ? [input.reasoningEffort] : [],
+    defaultReasoningEffort: input.reasoningEffort,
+    reasoningEffort: input.reasoningEffort,
+    bindingVersion: input.bindingVersion,
+    sourceUpdatedAt: input.sourceUpdatedAt,
+    blocked: false,
+    operationId: null
+  };
+}
+
+function isModelSwitchTerminal(result: ModelSwitchApiResult): result is ModelSwitchApiResult & {
+  outcome: "switched" | "recovered" | "recovery_failed";
+  operationId: string;
+  latestState: ThreadModelStateView;
+} {
+  return Boolean(result.outcome && result.operationId && result.latestState);
+}
+
+function modelSwitchCodeMessage(code?: string): string {
+  if (code === "CATALOG_REVISION_CONFLICT") return "模型目录已更新，请重新选择";
+  if (code === "CURRENT_MODEL_STALE") return "当前模型状态已变化，请重新选择";
+  if (code === "THREAD_BUSY") return "会话正在运行，暂时不能切换模型";
+  if (code === "CONTEXT_COMPACTION_REQUIRED") return "当前上下文过大，请先手动压缩";
+  return "模型切换未开始，请刷新状态后重试";
+}
+
 function contextUsageProgress(
   usage: ContextUsageSnapshot | null
 ): { percent: number; fillPercent: number; color: string } | null {
@@ -2472,6 +3003,20 @@ function contextUsageProgress(
     fillPercent: Math.max(0, Math.min(100, rawPercent)),
     color: contextUsageColor(percent)
   };
+}
+
+function contextWindowMismatch(
+  usage: ContextUsageSnapshot | null,
+  configuredContextWindow: number | null
+): string | null {
+  const actual = usage?.modelContextWindow ?? null;
+  if (!actual || !configuredContextWindow || actual === configuredContextWindow) return null;
+  return `实际 ${formatContextWindow(actual)} / 配置 ${formatContextWindow(configuredContextWindow)}`;
+}
+
+function formatContextWindow(value: number): string {
+  if (value >= 1_000_000) return `${formatCompactNumber(value / 1_000_000)}M`;
+  return `${formatCompactNumber(value / 1_000)}k`;
 }
 
 function contextUsageColor(percent: number): string {
@@ -2526,6 +3071,20 @@ const contextProgressButtonStyle: React.CSSProperties = {
   font: "inherit"
 };
 
+const contextProgressShellStyle: React.CSSProperties = {
+  borderTop: "1px solid var(--cw-border)",
+  background: "var(--cw-bg)"
+};
+
+const contextMismatchStyle: React.CSSProperties = {
+  minHeight: 20,
+  padding: "0 10px 4px",
+  color: "var(--cw-warning, #d97706)",
+  fontSize: 11,
+  lineHeight: "16px",
+  textAlign: "right"
+};
+
 const contextProgressUnavailableStyle: React.CSSProperties = {
   width: "100%",
   height: 16,
@@ -2536,6 +3095,53 @@ const contextProgressUnavailableStyle: React.CSSProperties = {
   gridTemplateColumns: "1fr 44px",
   alignItems: "center",
   gap: 8
+};
+
+const modelRecoveryStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 12px",
+  borderTop: "1px solid var(--cw-danger)",
+  background: "color-mix(in srgb, var(--cw-danger) 9%, var(--cw-bg))"
+};
+
+const modelRecoveryTitleStyle: React.CSSProperties = {
+  color: "var(--cw-danger)",
+  fontSize: 13,
+  fontWeight: 650
+};
+
+const modelRecoveryDescriptionStyle: React.CSSProperties = {
+  marginTop: 2,
+  color: "var(--cw-fg-muted)",
+  fontSize: 11,
+  lineHeight: "16px"
+};
+
+const modelRecoveryActionsStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: 4
+};
+
+const modelRecoveryPrimaryStyle: React.CSSProperties = {
+  minHeight: 32,
+  padding: "5px 10px",
+  border: "none",
+  borderRadius: 8,
+  background: "var(--cw-danger)",
+  color: "#fff",
+  fontSize: 12
+};
+
+const modelRecoverySecondaryStyle: React.CSSProperties = {
+  ...modelRecoveryPrimaryStyle,
+  border: "1px solid var(--cw-border)",
+  background: "transparent",
+  color: "var(--cw-fg)"
 };
 
 const contextProgressTrackStyle: React.CSSProperties = {

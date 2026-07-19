@@ -12,6 +12,7 @@ const mockStartTurn = vi.fn();
 const mockWriteFile = vi.fn();
 const mockStartProcessSession = vi.fn();
 const mockListInstalledPlugins = vi.fn();
+const mockEnsureThreadReady = vi.fn();
 
 const defaultRuntimeConfig = {
   accessToken: "test-token",
@@ -51,6 +52,13 @@ vi.mock("../../src/server/app-server/runtime", () => ({
   })
 }));
 
+vi.mock("../../src/server/custom-models/runtime", () => ({
+  getThreadModelLifecycleService: () => ({
+    startThread: (...args: unknown[]) => mockStartThread(...args),
+    ensureThreadReady: (...args: unknown[]) => mockEnsureThreadReady(...args)
+  })
+}));
+
 function jsonRequest(pathname: string, body: unknown): Request {
   return new Request(`http://localhost${pathname}`, {
     method: "POST",
@@ -72,6 +80,8 @@ describe("codex proxy input boundaries", () => {
     vi.resetModules();
     runtimeConfig = { ...defaultRuntimeConfig };
     mockAudit.mockReset();
+    mockEnsureThreadReady.mockReset();
+    mockEnsureThreadReady.mockResolvedValue(undefined);
     mockAssertRuntimePathAllowed.mockReset();
     mockAssertRuntimePathAllowed.mockImplementation((path: string) => {
       if (path.startsWith("/outside")) {

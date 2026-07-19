@@ -4,7 +4,8 @@ import { userEvent } from "@testing-library/user-event";
 import {
   Timeline,
   __getTimelineDerivationDiagnostics,
-  __resetTimelineDerivationDiagnostics
+  __resetTimelineDerivationDiagnostics,
+  deriveTimelineRenderBlocks
 } from "../../src/web/components/Timeline";
 import { __getMarkdownDiagnostics, __resetMarkdownDiagnostics } from "../../src/web/components/Markdown";
 import { __getDiffViewDiagnostics, __resetDiffViewDiagnostics } from "../../src/web/components/cards/DiffCard";
@@ -29,6 +30,126 @@ describe("Timeline", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("同名 item 位于不同 turn 时都渲染且不产生重复 key 告警", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    render(
+      <Timeline
+        entries={[
+          {
+            id: "item-1",
+            turnId: "turn-1",
+            generation: 1,
+            createdAt: 1,
+            body: { kind: "agent-message", text: "第一个 turn" }
+          },
+          {
+            id: "item-1",
+            turnId: "turn-2",
+            generation: 1,
+            createdAt: 2,
+            body: { kind: "agent-message", text: "第二个 turn" }
+          }
+        ]}
+      />
+    );
+
+    const duplicateKeyWarnings = consoleError.mock.calls.filter((call) =>
+      call.some((value) => String(value).includes("same key"))
+    );
+    consoleError.mockRestore();
+
+    expect(screen.getByText("第一个 turn")).toBeInTheDocument();
+    expect(screen.getByText("第二个 turn")).toBeInTheDocument();
+    expect(duplicateKeyWarnings).toEqual([]);
+  });
+
+  it("同名 item 位于不同 generation 时生成不同的稳定渲染身份", () => {
+    const blocks = deriveTimelineRenderBlocks([
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        bootId: "boot-1",
+        generation: 1,
+        createdAt: 1,
+        body: { kind: "agent-message", text: "旧 generation" }
+      },
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        bootId: "boot-1",
+        generation: 2,
+        createdAt: 2,
+        body: { kind: "agent-message", text: "新 generation" }
+      }
+    ]);
+
+    expect(blocks).toHaveLength(2);
+    expect(new Set(blocks.map((block) => block.identity))).toHaveLength(2);
+  });
+
+  it("完全相同逻辑身份的重复记录只保留最后版本", () => {
+    const blocks = deriveTimelineRenderBlocks([
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        historyStamp: { bootId: "boot-1", generation: 1 },
+        createdAt: 1,
+        body: { kind: "error", text: "旧错误" }
+      },
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        historyStamp: { bootId: "boot-1", generation: 1 },
+        createdAt: 2,
+        body: { kind: "error", text: "新错误" }
+      }
+    ]);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      kind: "entry",
+      entry: { body: { kind: "error", text: "新错误" } }
+    });
+  });
+
+  it("被普通消息分隔的同名 activity block 仍生成唯一身份", () => {
+    const blocks = deriveTimelineRenderBlocks([
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        generation: 1,
+        createdAt: 1,
+        body: {
+          kind: "tool",
+          tool: "first",
+          status: "success"
+        }
+      },
+      {
+        id: "agent-divider",
+        turnId: "turn-1",
+        generation: 2,
+        createdAt: 2,
+        body: { kind: "agent-message", text: "分隔消息" }
+      },
+      {
+        id: "item-1",
+        turnId: "turn-1",
+        generation: 2,
+        createdAt: 3,
+        body: {
+          kind: "tool",
+          tool: "second",
+          status: "success"
+        }
+      }
+    ]);
+
+    expect(blocks).toHaveLength(3);
+    expect(new Set(blocks.map((block) => block.identity))).toHaveLength(3);
   });
 
   it("不为用户、助手和 activity 消息显示相对时间", () => {
@@ -202,6 +323,50 @@ describe("Timeline", () => {
     expect(container.querySelector("[data-context-compaction-status='success'] svg")).not.toBeNull();
   });
 
+  it("操作级 warning 使用紧凑非折叠状态提示", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "warning-1",
+            createdAt: 1,
+            body: {
+              kind: "system",
+              systemKind: "warning" as const,
+              text: "目标模型未生效，已恢复原模型"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("目标模型未生效，已恢复原模型");
+    expect(container.querySelector("[data-system-warning='true']")).not.toBeNull();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByText("出错了")).not.toBeInTheDocument();
+  });
+
+  it("真正错误使用紧凑操作失败 alert，不渲染折叠卡片或嵌套 pre", () => {
+    const { container } = render(
+      <Timeline
+        entries={[
+          {
+            id: "error-1",
+            createdAt: 1,
+            body: { kind: "error", text: "运行时无法恢复" }
+          }
+        ]}
+      />
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("操作失败");
+    expect(alert).toHaveTextContent("运行时无法恢复");
+    expect(screen.queryByText("出错了")).not.toBeInTheDocument();
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
   it("不为排序占位 createdAt 显示错误的远古相对时间", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00.000Z"));
@@ -307,6 +472,40 @@ describe("Timeline", () => {
 
     expect(container.textContent).toContain("```ts");
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+  });
+
+  it("同名 item 不会把旧 turn 的助手消息误标为 live", () => {
+    const { container } = render(
+      <Timeline
+        running
+        activeTurnId="turn-live"
+        entries={[
+          {
+            id: "item-1",
+            turnId: "turn-old",
+            generation: 1,
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst historical = true;\n```"
+            }
+          },
+          {
+            id: "item-1",
+            turnId: "turn-live",
+            generation: 1,
+            createdAt: 2,
+            body: {
+              kind: "agent-message",
+              text: "```ts\nconst streaming = true;\n```"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain("```ts");
+    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(1);
   });
 
   it("运行中但 activeTurnId 尚未到位时，最新助手消息也先按纯文本渲染", () => {
@@ -1302,8 +1501,7 @@ describe("Timeline", () => {
     vi.unstubAllGlobals();
   });
 
-  it("窗口化后仍渲染尾部系统消息、错误卡片和审批卡片", async () => {
-    const user = userEvent.setup();
+  it("窗口化后仍渲染尾部系统消息、错误提示和审批卡片", () => {
     const entries = [
       ...Array.from({ length: 100 }, (_value, index) => ({
         id: `agent-${index}`,
@@ -1341,9 +1539,8 @@ describe("Timeline", () => {
 
     expect(container.querySelectorAll("[data-timeline-row='true']").length).toBeLessThanOrEqual(80);
     expect(screen.getByText("系统提示仍可见")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /出错了/ })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /出错了/ }));
-    expect(screen.getByText("错误提示仍可见")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("错误提示仍可见");
+    expect(screen.queryByText("出错了")).not.toBeInTheDocument();
     expect(screen.getByText("执行命令需要授权")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "同意" })).toBeInTheDocument();
   });

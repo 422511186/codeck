@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractLegacyWarningNotices,
   repairReconstructedTimelineEntries,
   threadDetailEntries,
   threadDetailEntriesWithTurnItems
@@ -12,6 +13,24 @@ function entry(id: string, turnId: string, createdAt: number, body: TimelineEntr
 }
 
 describe("timeline adapter", () => {
+  it("extracts legacy app-server warning errors without removing real errors", () => {
+    const result = extractLegacyWarningNotices([
+      entry("warning-1", "turn-1", 1, {
+        kind: "error",
+        text: "Model metadata for `mimo-v2.5-pro` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+      }),
+      entry("error-1", "turn-1", 2, { kind: "error", text: "网络请求失败" })
+    ]);
+
+    expect(result.entries.map((item) => item.id)).toEqual(["error-1"]);
+    expect(result.notices).toEqual([expect.objectContaining({
+      id: expect.stringContaining("app-server-warning:"),
+      kind: "warning",
+      source: "app-server",
+      text: expect.stringContaining("Model metadata")
+    })]);
+  });
+
   it("normalizes Unix-second snapshot timestamps to milliseconds", () => {
     const updatedAtSeconds = 1_783_991_271;
     const detail = {

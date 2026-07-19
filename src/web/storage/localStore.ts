@@ -44,7 +44,8 @@ export const StorageKeys = {
   ContextUsage: "context-usage",
   ChatDraftPrefix: "draft:", // 完整 key = `draft:${threadId}`
   ThreadModePrefix: "thread-mode:", // 完整 key = `thread-mode:${threadId}`
-  ThreadPermissionProfilePrefix: "thread-permission-profile:" // 完整 key = `thread-permission-profile:${threadId}`
+  ThreadPermissionProfilePrefix: "thread-permission-profile:", // 完整 key = `thread-permission-profile:${threadId}`
+  ThreadNoticeDismissalsPrefix: "thread-notice-dismissals:" // 完整 key = `thread-notice-dismissals:${threadId}`
 } as const;
 
 export function draftKey(threadId: string): string {
@@ -57,4 +58,8 @@ export function threadModeKey(threadId: string): string {
 
 export function threadPermissionProfileKey(threadId: string): string {
   return `${StorageKeys.ThreadPermissionProfilePrefix}${threadId}`;
+}
+
+export function threadNoticeDismissalsKey(threadId: string): string {
+  return `${StorageKeys.ThreadNoticeDismissalsPrefix}${threadId}`;
 }

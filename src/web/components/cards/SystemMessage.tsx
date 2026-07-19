@@ -1,9 +1,40 @@
 "use client";
 
-import { Check, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, RefreshCw } from "lucide-react";
 import type { SystemEntry } from "../../state/timeline";
 
 export function SystemMessage({ entry }: { entry: SystemEntry }): JSX.Element {
+  if (entry.systemKind === "warning") {
+    return (
+      <div
+        role="status"
+        data-system-warning="true"
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          minWidth: 0,
+          margin: "4px 0",
+          padding: "9px 10px",
+          borderLeft: "3px solid var(--cw-warning)",
+          borderRadius: 6,
+          background: "var(--cw-warning-bg)",
+          color: "var(--cw-fg)",
+          fontSize: 13,
+          lineHeight: 1.45
+        }}
+      >
+        <AlertTriangle
+          aria-hidden="true"
+          size={16}
+          strokeWidth={1.8}
+          style={{ flex: "0 0 auto", marginTop: 1, color: "var(--cw-warning)" }}
+        />
+        <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{entry.text}</span>
+      </div>
+    );
+  }
+
   if (entry.systemKind === "context-compaction") {
     const running = entry.status === "running";
     return (

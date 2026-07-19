@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ProjectThreadsPage from "../../src/app/projects/[projectId]/page";
+import { ApiError } from "../../src/web/api/client";
 
 vi.setConfig({ testTimeout: 15_000 });
 
@@ -21,10 +22,14 @@ vi.mock("../../src/web/storage/projects", () => ({
 }));
 
 const mockLoadSettings = vi.fn();
+const mockUpdateSettings = vi.fn();
+const mockMigrateLegacyDefaultModel = vi.fn();
 vi.mock("../../src/web/storage/settings", () => ({
   settingsStore: {
-    load: () => mockLoadSettings()
-  }
+    load: () => mockLoadSettings(),
+    update: (...args: unknown[]) => mockUpdateSettings(...args)
+  },
+  migrateLegacyDefaultModel: (...args: unknown[]) => mockMigrateLegacyDefaultModel(...args)
 }));
 
 const mockSaveJson = vi.fn();
@@ -40,6 +45,7 @@ const mockReadSettings = vi.fn();
 const mockCollaborationModes = vi.fn();
 const mockArchiveThread = vi.fn();
 const mockUnarchiveThread = vi.fn();
+const mockModelCatalog = vi.fn();
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     listThreadsForCwd: (...args: unknown[]) => mockListThreadsForCwd(...args),
@@ -48,7 +54,8 @@ vi.mock("../../src/web/api/endpoints", () => ({
     collaborationModes: () => mockCollaborationModes(),
     updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args),
     archiveThread: (...args: unknown[]) => mockArchiveThread(...args),
-    unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args)
+    unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args),
+    modelCatalog: (...args: unknown[]) => mockModelCatalog(...args)
   }
 }));
 
@@ -82,6 +89,24 @@ describe("ProjectThreadsPage", () => {
     mockUnarchiveThread.mockResolvedValue({});
     mockSaveJson.mockClear();
     mockLoadSettings.mockReturnValue({ defaultMode: "build", defaultModel: null });
+    mockMigrateLegacyDefaultModel.mockImplementation(() => mockLoadSettings());
+    mockUpdateSettings.mockReset();
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 3,
+      appServerModelNames: ["openai/gpt-5"],
+      models: [
+        {
+          source: "app-server",
+          model: "openai/gpt-5",
+          label: "GPT-5",
+          contextWindow: null,
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+          defaultReasoningEffort: null,
+          isDefault: false
+        }
+      ]
+    });
   });
 
   it("should redirect to /projects if project not found", () => {
@@ -562,7 +587,10 @@ describe("ProjectThreadsPage", () => {
 
   it("should use settings defaults when starting a new thread", async () => {
     const user = userEvent.setup();
-    mockLoadSettings.mockReturnValue({ defaultMode: "plan", defaultModel: "openai/gpt-5" });
+    mockLoadSettings.mockReturnValue({
+      defaultMode: "plan",
+      defaultModel: { source: "app-server", model: "openai/gpt-5" }
+    });
     mockStartThread.mockResolvedValue({ id: "new-thread" });
 
     render(<ProjectThreadsPage />);
@@ -573,7 +601,8 @@ describe("ProjectThreadsPage", () => {
     await waitFor(() => {
       expect(mockStartThread).toHaveBeenCalledWith({
         cwd: "C:/test",
-        model: "openai/gpt-5",
+        modelSelection: { source: "app-server", model: "openai/gpt-5" },
+        catalogRevision: 3,
         clientOperationId: expect.any(String)
       });
       expect(mockSaveJson).toHaveBeenCalledWith("thread-mode:new-thread", "plan");
@@ -591,9 +620,40 @@ describe("ProjectThreadsPage", () => {
     });
   });
 
+  it("失效自定义默认会清除并直接回退服务端默认创建", async () => {
+    const user = userEvent.setup();
+    mockLoadSettings.mockReturnValue({
+      defaultMode: "build",
+      defaultModel: { source: "custom", customModelId: "deleted-custom" }
+    });
+    mockStartThread
+      .mockRejectedValueOnce(
+        new ApiError("自定义模型不存在", 409, {
+          ok: false,
+          code: "CUSTOM_MODEL_NOT_FOUND"
+        })
+      )
+      .mockResolvedValueOnce({ id: "thread-fallback" });
+
+    render(<ProjectThreadsPage />);
+    await user.click(screen.getByLabelText("新建会话"));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/threads/thread-fallback"));
+    expect(mockStartThread).toHaveBeenCalledTimes(2);
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({
+      modelSelection: { source: "custom", customModelId: "deleted-custom" },
+      catalogRevision: 3
+    });
+    expect(mockStartThread.mock.calls[1][0]).not.toHaveProperty("modelSelection");
+    expect(mockUpdateSettings).toHaveBeenCalledWith({ defaultModel: null });
+  });
+
   it("should still sync default Plan when collaboration mode presets fail", async () => {
     const user = userEvent.setup();
-    mockLoadSettings.mockReturnValue({ defaultMode: "plan", defaultModel: "openai/gpt-5" });
+    mockLoadSettings.mockReturnValue({
+      defaultMode: "plan",
+      defaultModel: { source: "app-server", model: "openai/gpt-5" }
+    });
     mockStartThread.mockResolvedValue({ id: "new-thread" });
     mockCollaborationModes.mockRejectedValueOnce(new Error("preset request failed"));
 
@@ -647,7 +707,10 @@ describe("ProjectThreadsPage", () => {
 
   it("should still navigate when default mode sync fails after thread creation", async () => {
     const user = userEvent.setup();
-    mockLoadSettings.mockReturnValue({ defaultMode: "plan", defaultModel: "openai/gpt-5" });
+    mockLoadSettings.mockReturnValue({
+      defaultMode: "plan",
+      defaultModel: { source: "app-server", model: "openai/gpt-5" }
+    });
     mockStartThread.mockResolvedValue({ id: "new-thread" });
     mockUpdateThreadSettings.mockRejectedValueOnce(new Error("settings unavailable"));
 

@@ -3,10 +3,12 @@ import { sanitizePublicErrorMessage } from "../../shared/errors";
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly body: unknown;
+  constructor(message: string, status: number, body: unknown = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -91,17 +93,21 @@ export async function api<T = Record<string, unknown>>(
       if (!options.skipSessionRedirect && sessionInvalidHandler) {
         sessionInvalidHandler();
       }
-      throw new ApiError("未登录或 session 已失效", 401);
+      throw new ApiError("未登录或 session 已失效", 401, body);
     }
 
     if (!response.ok) {
       const message =
         sanitizePublicErrorMessage((body as ApiErr)?.error ?? "", `请求失败 (${response.status})`);
-      throw new ApiError(message, response.status);
+      throw new ApiError(message, response.status, body);
     }
 
     if (body && typeof body === "object" && (body as ApiResponse<T>).ok === false) {
-      throw new ApiError(sanitizePublicErrorMessage((body as ApiErr).error ?? "", "请求失败"), response.status);
+      throw new ApiError(
+        sanitizePublicErrorMessage((body as ApiErr).error ?? "", "请求失败"),
+        response.status,
+        body
+      );
     }
 
     return body as ApiOk<T>;

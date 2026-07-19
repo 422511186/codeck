@@ -1,6 +1,16 @@
-import { api } from "./client";
+import { ApiError, api } from "./client";
+import type {
+  CustomModelCatalog,
+  CustomModelInput,
+  ModelSelection,
+  ModelSwitchRequest,
+  SelectableModel,
+  ThreadModelStateView,
+  UnifiedModelCatalog
+} from "../../shared/custom-models";
 import type {
   AppServerStatus,
+  ApprovalPolicy,
   ApprovalsReviewer,
   CodexSettings,
   CollaborationModePayload,
@@ -48,8 +58,104 @@ export async function getAppServerStatus(): Promise<AppServerStatus> {
 }
 
 export async function listModels(): Promise<ModelOption[]> {
-  const data = await api<{ models: ModelOption[] }>("/api/codex/models");
-  return data.models ?? [];
+  const catalog = await getModelCatalog();
+  return catalog.models.map((model) => ({
+    ...model,
+    id: model.source === "custom" ? model.customModelId : model.model
+  })) as ModelOption[];
+}
+
+export async function getModelCatalog(): Promise<UnifiedModelCatalog> {
+  const data = await api<UnifiedModelCatalog>("/api/codex/models");
+  return {
+    catalogRevision: data.catalogRevision ?? 0,
+    appServerModelNames: data.appServerModelNames ?? [],
+    models: data.models ?? []
+  };
+}
+
+export async function getCustomModels(): Promise<CustomModelCatalog> {
+  const data = await api<CustomModelCatalog>("/api/codex/custom-models");
+  return { revision: data.revision, models: data.models ?? [] };
+}
+
+export async function createCustomModel(
+  input: CustomModelInput,
+  expectedRevision: number
+): Promise<CustomModelCatalog> {
+  const data = await api<CustomModelCatalog>("/api/codex/custom-models", {
+    method: "POST",
+    body: { expectedRevision, ...input }
+  });
+  return { revision: data.revision, models: data.models ?? [] };
+}
+
+export async function replaceCustomModel(
+  customModelId: string,
+  input: CustomModelInput,
+  expectedRevision: number
+): Promise<CustomModelCatalog> {
+  const data = await api<CustomModelCatalog>(
+    `/api/codex/custom-models/${encodeURIComponent(customModelId)}`,
+    { method: "PUT", body: { expectedRevision, ...input } }
+  );
+  return { revision: data.revision, models: data.models ?? [] };
+}
+
+export async function deleteCustomModel(
+  customModelId: string,
+  expectedRevision: number
+): Promise<CustomModelCatalog> {
+  const data = await api<CustomModelCatalog>(
+    `/api/codex/custom-models/${encodeURIComponent(customModelId)}`,
+    { method: "DELETE", body: { expectedRevision } }
+  );
+  return { revision: data.revision, models: data.models ?? [] };
+}
+
+export type ModelSwitchApiResult = {
+  ok?: boolean;
+  outcome?: "switched" | "recovered" | "recovery_failed";
+  code?: string;
+  operationId: string | null;
+  latestState: ThreadModelStateView | null;
+  catalog?: CustomModelCatalog | null;
+  thread?: ThreadDetail | null;
+  error?: string;
+};
+
+async function structuredModelTerminal(
+  path: string,
+  body: unknown
+): Promise<ModelSwitchApiResult> {
+  try {
+    return await api<ModelSwitchApiResult>(path, { method: "POST", body });
+  } catch (error) {
+    if (error instanceof ApiError && typeof error.body === "object" && error.body !== null) {
+      return error.body as ModelSwitchApiResult;
+    }
+    throw error;
+  }
+}
+
+export function switchThreadModel(
+  threadId: string,
+  input: ModelSwitchRequest
+): Promise<ModelSwitchApiResult> {
+  return structuredModelTerminal(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/model/switch`,
+    input
+  );
+}
+
+export function recoverThreadModel(
+  threadId: string,
+  action: "restore-old" | "retry-target"
+): Promise<ModelSwitchApiResult> {
+  return structuredModelTerminal(
+    `/api/codex/threads/${encodeURIComponent(threadId)}/model/recover`,
+    { action }
+  );
 }
 
 export async function listSkills(
@@ -105,9 +211,22 @@ export async function listThreads(params: ListThreadsParams = {}): Promise<Threa
   return { threads: data.threads ?? [], nextCursor: data.nextCursor ?? null };
 }
 
-export async function readThread(threadId: string): Promise<ThreadDetail> {
+export type TimelineRepairReason =
+  | "manual"
+  | "mutation-retry"
+  | "timeline-gap"
+  | "turn-completed"
+  | "summary-idle"
+  | "stream-disconnected"
+  | "baseline-required";
+
+export async function readThread(
+  threadId: string,
+  options: { repairReason?: TimelineRepairReason } = {}
+): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
-    `/api/codex/threads/${encodeURIComponent(threadId)}`
+    `/api/codex/threads/${encodeURIComponent(threadId)}`,
+    { query: { repairReason: options.repairReason } }
   );
   return data.thread;
 }
@@ -130,11 +249,12 @@ export async function resumeThread(threadId: string): Promise<ThreadDetail> {
 export async function listTurnsBefore(
   threadId: string,
   cursor?: string | null,
-  limit?: number
+  limit?: number,
+  options: { repairReason?: TimelineRepairReason } = {}
 ): Promise<TimelinePage> {
   const data = await api<{ page: TimelinePage }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/turns`,
-    { query: { cursor, limit } }
+    { query: { cursor, limit, repairReason: options.repairReason } }
   );
   return {
     ...data.page,
@@ -176,8 +296,10 @@ export async function readTimelineContent(
 export type StartThreadInput = {
   cwd: string;
   workspaceRoots?: string[];
-  model?: string;
+  modelSelection?: ModelSelection;
+  catalogRevision?: number;
   permissions?: string | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   clientOperationId?: string;
 };
@@ -200,6 +322,7 @@ export type StartTurnInput = {
   reasoningEffort?: string;
   reasoningSummary?: string;
   permissions?: string | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   additionalContext?: Record<string, { value: string; kind: "untrusted" | "application" }>;
   collaborationMode?: CollaborationModePayload;
@@ -224,15 +347,21 @@ export async function interruptTurn(threadId: string, turnId?: string): Promise<
 
 export async function rollbackThread(
   threadId: string,
-  numTurns = 1,
-  options?: { expectedDeletedTurnIds?: string[] }
+  input: RollbackThreadInput
 ): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/rollback`,
-    { method: "POST", body: { numTurns, ...(options?.expectedDeletedTurnIds ? { expectedDeletedTurnIds: options.expectedDeletedTurnIds } : {}) } }
+    { method: "POST", body: input }
   );
   return data.thread;
 }
+
+export type RollbackThreadInput = {
+  operationId: string;
+  targetTurnId: string;
+  historyStamp: NonNullable<ThreadDetail["historyStamp"]>;
+  expectedTailTurnIds: string[];
+};
 
 export async function archiveThread(threadId: string): Promise<void> {
   await api(`/api/codex/threads/${encodeURIComponent(threadId)}/archive`, { method: "POST" });
@@ -267,9 +396,9 @@ export async function compactThread(threadId: string): Promise<void> {
 }
 
 export type UpdateThreadSettingsInput = {
-  model?: string;
   reasoningEffort?: string;
   permissions?: string | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   collaborationMode?: CollaborationModePayload;
 };
@@ -397,6 +526,13 @@ export const codex = {
   status: getAppServerStatus,
   settings: readCodexSettings,
   models: listModels,
+  modelCatalog: getModelCatalog,
+  customModels: getCustomModels,
+  createCustomModel,
+  replaceCustomModel,
+  deleteCustomModel,
+  switchThreadModel,
+  recoverThreadModel,
   skills: listSkills,
   collaborationModes: listCollaborationModes,
   listThreads: async (params: { cwd?: string; archived?: boolean; cursor?: string | null; limit?: number; search?: string } = {}) => {

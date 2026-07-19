@@ -3,6 +3,12 @@ export type HistoryStamp = {
   generation: number;
 };
 
+export type AuthoritativeTurnManifest = {
+  turnIds: string[];
+  historyStamp?: HistoryStamp;
+  pageWatermark?: number;
+};
+
 export type TimelineSequences = {
   streamSequence?: number;
   fragmentSequence?: number;
@@ -19,6 +25,17 @@ export type TimelineRepairWindow = {
   windowEndAnchor: string;
   preservedThrough?: string;
 };
+
+const EMPTY_TIMELINE_WINDOW_ITEM_ID = "$empty";
+
+export function timelineEmptyWindowAnchor(historyStamp: HistoryStamp): string {
+  return JSON.stringify([
+    historyStamp.bootId,
+    historyStamp.generation,
+    null,
+    EMPTY_TIMELINE_WINDOW_ITEM_ID
+  ]);
+}
 
 export type TimelineProtocolMetadata = {
   bootId?: string;

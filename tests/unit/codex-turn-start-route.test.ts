@@ -6,6 +6,7 @@ const mockReadThreadSummary = vi.fn();
 const mockListThreadTurns = vi.fn();
 const mockListSkills = vi.fn();
 const mockAudit = vi.fn();
+const mockEnsureThreadReady = vi.fn();
 let mockBootId = "boot-a";
 
 vi.mock("../../src/server/auth", () => ({
@@ -34,6 +35,12 @@ vi.mock("../../src/server/app-server/runtime", () => ({
   })
 }));
 
+vi.mock("../../src/server/custom-models/runtime", () => ({
+  getThreadModelLifecycleService: () => ({
+    ensureThreadReady: (...args: unknown[]) => mockEnsureThreadReady(...args)
+  })
+}));
+
 describe("codex turn start route", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -43,6 +50,8 @@ describe("codex turn start route", () => {
     mockListThreadTurns.mockReset();
     mockListSkills.mockReset();
     mockAudit.mockReset();
+    mockEnsureThreadReady.mockReset();
+    mockEnsureThreadReady.mockResolvedValue(undefined);
     mockBootId = "boot-a";
     mockStartTurn.mockResolvedValue({ turnId: "turn-1" });
     mockListSkills.mockResolvedValue({
@@ -80,6 +89,29 @@ describe("codex turn start route", () => {
       updatedAt: 1
     });
     mockListThreadTurns.mockResolvedValue({ items: [], nextCursor: null });
+  });
+
+  it("pending operation 恢复失败时在 turn/start 前返回阻塞终态", async () => {
+    mockEnsureThreadReady.mockRejectedValue({
+      code: "SWITCH_RECOVERY_FAILED",
+      httpStatus: 500,
+      result: {
+        outcome: "recovery_failed",
+        operationId: "operation-1",
+        latestState: { blocked: true }
+      }
+    });
+    const { POST } = await import("../../src/app/api/codex/turns/start/route");
+    const response = await POST(
+      new Request("http://localhost/api/codex/turns/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ threadId: "thread-1", text: "不能发送" })
+      })
+    );
+
+    expect(response.status).toBe(500);
+    expect(mockStartTurn).not.toHaveBeenCalled();
   });
 
   it("把 additionalContext 从 HTTP body 转发给 app-server", async () => {
@@ -157,6 +189,7 @@ describe("codex turn start route", () => {
           threadId: "thread-1",
           text: "替我审批",
           permissions: ":workspace",
+          approvalPolicy: "on-request",
           approvalsReviewer: "auto_review"
         })
       })
@@ -168,6 +201,7 @@ describe("codex turn start route", () => {
         threadId: "thread-1",
         text: "替我审批",
         permissions: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review"
       })
     );
@@ -184,6 +218,7 @@ describe("codex turn start route", () => {
           threadId: "thread-1",
           text: "回到配置默认权限",
           permissions: null,
+          approvalPolicy: null,
           approvalsReviewer: null
         })
       })
@@ -195,6 +230,7 @@ describe("codex turn start route", () => {
         threadId: "thread-1",
         text: "回到配置默认权限",
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       })
     );

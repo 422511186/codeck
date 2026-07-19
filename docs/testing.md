@@ -1,6 +1,6 @@
 # 测试与人工验收
 
-本文档记录 Codex Web 后端的自动化验证和真实 Codex app-server 人工验收流程。当前仓库不包含前端页面、UI 原型、视觉审计或浏览器 E2E 测试。
+本文档记录 Codex Web 的自动化验证、手机页面视觉检查和真实 Codex app-server 人工验收流程。
 
 ## 自动化验证
 
@@ -58,6 +58,7 @@ $env:CODEX_WEB_ACCESS_TOKEN="sk-替换成你的-web-登录-token"
 $env:CODEX_WEB_WORKSPACE_ROOTS="C:\Users\huang\workspace"
 $env:CODEX_WEB_UPLOAD_DIR="C:\Users\huang\workspace\codex-web\uploads"
 $env:CODEX_WEB_AUDIT_LOG_PATH="C:\Users\huang\workspace\codex-web\logs\audit.jsonl"
+$env:CODEX_WEB_DATA_DIR="C:\Users\huang\workspace\codex-web\data"
 $env:CODEX_WEB_BIND_HOST="0.0.0.0"
 $env:CODEX_WEB_BIND_PORT="3000"
 $env:CODEX_WEB_APP_SERVER_MODE="spawn"
@@ -68,6 +69,7 @@ $env:CODEX_WEB_APP_SERVER_MODE="spawn"
 - Web 登录 token 独立于模型/API key。
 - 模型/API key 继续放在 Codex 自身配置或后端环境里。
 - `CODEX_WEB_WORKSPACE_ROOTS` 只放你愿意让后端操作的目录。
+- `CODEX_WEB_DATA_DIR` 使用独立持久目录；验收前备份该目录，不要与临时上传目录混用。
 - 如果本机已经有多个 app-server 进程，先不要直接清理。需要复用时优先改为 `external` 并显式指定同一个 `CODEX_WEB_APP_SERVER_URL`；本机开发想自动复用时使用 `spawn-or-connect` 和固定 `CODEX_WEB_APP_SERVER_PORT`。
 
 ### 2. 启动服务
@@ -126,6 +128,24 @@ npm run dev
 - 尝试读取 workspace 外文件应返回错误。
 - 尝试在 workspace 外 cwd 执行终端命令应返回错误。
 - 审计日志只保存在后端机器本地，不通过 API 暴露。
+
+### 6. 自定义模型验收
+
+1. 在“设置 -> 自定义模型”创建 `mimo-v2.5-pro`，保留默认窗口 `200000`，确认列表显示 text 能力且页面没有 provider、URL 或凭据字段。
+2. 将它设为设备默认并新建会话，确认新会话第一次启动就使用该模型，不发生“先默认创建再切换”。
+3. 打开一个已有 Codex 会话，从 composer 模型选择器切换到该自定义模型；确认 thread ID、历史、文本草稿、图片和 Skill 不丢失。
+4. 编辑目录窗口或 reasoning，确认已有会话仍使用绑定快照，选择器显示“配置有更新”；点击“重新应用”后才采用新配置。
+5. 切换到 text-only 模型时保留草稿图片但禁用发送；移除图片或切回支持 image 的模型后恢复发送。历史图片不得阻止切换。
+6. 构造目标 resume 失败，确认返回 `recovered` 时 UI 保持原模型；再构造目标和旧状态都失败，确认页面显示“恢复原模型”和“重试目标模型”，且没有忽略继续入口。
+7. 重启 Web 后端并恢复自定义会话，确认绑定仍使用当前 Codex provider；fork 后的新会话继承独立绑定，删除目录定义不影响已有绑定。
+8. 将窗口修改为 `1000000`。若 app-server 权威目录没有精确的 `mimo-v2.5-pro`，新建/切换必须被前置阻止；配置权威目录后再验证放行。
+9. 当 token usage 的实际窗口与配置窗口不同，页面应同时显示“实际 / 配置”，进度按实际窗口计算，目录 revision 不应改变。
+
+定向自动化命令：
+
+```bash
+npm run test -- tests/unit/custom-model-validation.test.ts tests/unit/custom-model-catalog-store.test.ts tests/unit/thread-model-binding-store.test.ts tests/unit/thread-model-switch-service.test.ts tests/unit/thread-model-lifecycle-service.test.ts tests/unit/codex-custom-model-routes.test.ts tests/unit/codex-thread-model-switch-route.test.ts tests/unit/web-model-selection-storage.test.ts tests/unit/web-unified-model-picker.test.tsx tests/unit/web-custom-models-page.test.tsx tests/unit/web-chat-input.test.tsx
+```
 
 ## 已知边界
 

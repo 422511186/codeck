@@ -4,6 +4,8 @@ import { CodexAppServerClient, type AppServerPeer } from "../../src/server/app-s
 class FakePeer implements AppServerPeer {
   readonly calls: Array<{ method: string; params: unknown }> = [];
   readonly notifications: Array<{ method: string; params: unknown }> = [];
+  rollbackApplied = false;
+  staleRollbackPages = 0;
 
   async request(method: string, params: unknown): Promise<unknown> {
     this.calls.push({ method, params });
@@ -221,6 +223,11 @@ class FakePeer implements AppServerPeer {
     }
 
     if (method === "thread/resume") {
+      const resumeParams = params as {
+        model?: string;
+        modelProvider?: string;
+        config?: Record<string, unknown>;
+      };
       return {
         thread: {
           id: "thread-1",
@@ -229,7 +236,7 @@ class FakePeer implements AppServerPeer {
           parentThreadId: null,
           preview: "帮我修复登录",
           ephemeral: false,
-          modelProvider: "openai",
+          modelProvider: resumeParams.modelProvider || "openai",
           createdAt: 100,
           updatedAt: 250,
           status: { type: "idle" },
@@ -244,8 +251,8 @@ class FakePeer implements AppServerPeer {
           name: "登录修复",
           turns: []
         },
-        model: "gpt-5-codex",
-        modelProvider: "openai",
+        model: resumeParams.model || "gpt-5-codex",
+        modelProvider: resumeParams.modelProvider || "openai",
         serviceTier: null,
         cwd: "C:\\Users\\huang\\workspace\\demo",
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
@@ -254,7 +261,9 @@ class FakePeer implements AppServerPeer {
         approvalsReviewer: "user",
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: null,
-        reasoningEffort: "medium",
+        reasoningEffort: typeof resumeParams.config?.model_reasoning_effort === "string"
+          ? resumeParams.config.model_reasoning_effort
+          : "medium",
         initialTurnsPage: {
           data: [
             {
@@ -289,6 +298,13 @@ class FakePeer implements AppServerPeer {
     }
 
     if (method === "thread/turns/list") {
+      if (this.rollbackApplied) {
+        if (this.staleRollbackPages > 0) {
+          this.staleRollbackPages -= 1;
+        } else {
+          return { data: [], nextCursor: null, backwardsCursor: null };
+        }
+      }
       const listParams = params as { cursor?: string | null; sortDirection?: string | null } | undefined;
       if (!listParams?.cursor && listParams?.sortDirection === "desc") {
         return {
@@ -366,6 +382,11 @@ class FakePeer implements AppServerPeer {
     }
 
     if (method === "thread/start") {
+      const startParams = params as {
+        model?: string;
+        modelProvider?: string;
+        config?: Record<string, unknown>;
+      };
       return {
         thread: {
           id: "new-thread-1",
@@ -374,7 +395,7 @@ class FakePeer implements AppServerPeer {
           parentThreadId: null,
           preview: "",
           ephemeral: false,
-          modelProvider: "openai",
+          modelProvider: startParams.modelProvider || "openai",
           createdAt: 300,
           updatedAt: 300,
           status: { type: "idle" },
@@ -389,8 +410,8 @@ class FakePeer implements AppServerPeer {
           name: null,
           turns: []
         },
-        model: "gpt-5-codex",
-        modelProvider: "openai",
+        model: startParams.model || "gpt-5-codex",
+        modelProvider: startParams.modelProvider || "openai",
         serviceTier: null,
         cwd: "C:\\Users\\huang\\workspace\\demo",
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
@@ -399,7 +420,9 @@ class FakePeer implements AppServerPeer {
         approvalsReviewer: "user",
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: null,
-        reasoningEffort: "medium"
+        reasoningEffort: typeof startParams.config?.model_reasoning_effort === "string"
+          ? startParams.config.model_reasoning_effort
+          : "medium"
       };
     }
 
@@ -442,6 +465,7 @@ class FakePeer implements AppServerPeer {
     }
 
     if (method === "thread/rollback") {
+      this.rollbackApplied = true;
       return {
         thread: {
           id: "thread-1",
@@ -634,7 +658,7 @@ class FakePeer implements AppServerPeer {
         data: [
           {
             id: "gpt-5-codex",
-            model: "gpt-5-codex",
+            model: "openai/gpt-5-codex",
             upgrade: null,
             upgradeInfo: null,
             availabilityNux: null,
@@ -1448,9 +1472,11 @@ describe("CodexAppServerClient", () => {
     expect(models).toEqual([
       {
         id: "gpt-5-codex",
+        model: "openai/gpt-5-codex",
         label: "GPT-5 Codex",
         isDefault: true,
         supportedReasoningEfforts: ["low", "medium", "high"],
+        defaultReasoningEffort: "medium",
         inputModalities: ["text", "image"]
       }
     ]);
@@ -2094,6 +2120,7 @@ describe("CodexAppServerClient", () => {
       workspaceRoots: ["C:\\Users\\huang\\workspace"],
       model: "gpt-5-codex",
       permissions: ":workspace",
+      approvalPolicy: "on-request",
       approvalsReviewer: "auto_review"
     });
 
@@ -2105,9 +2132,123 @@ describe("CodexAppServerClient", () => {
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
         model: "gpt-5-codex",
         permissions: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review"
       }
     });
+  });
+
+  it("thread/start 透传 provider、自定义窗口和 reasoning，并返回实际运行时身份", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    const thread = await client.startThread({
+      cwd: "C:\\Users\\huang\\workspace\\demo",
+      model: "mimo-v2.5-pro",
+      modelProvider: "openai",
+      modelContextWindow: 1_000_000,
+      reasoningEffort: "xhigh"
+    });
+
+    expect(thread).toMatchObject({
+      model: "mimo-v2.5-pro",
+      modelProvider: "openai",
+      reasoningEffort: "xhigh"
+    });
+    expect(peer.calls.at(-1)).toEqual({
+      method: "thread/start",
+      params: {
+        cwd: "C:\\Users\\huang\\workspace\\demo",
+        runtimeWorkspaceRoots: undefined,
+        model: "mimo-v2.5-pro",
+        modelProvider: "openai",
+        config: {
+          model_context_window: 1_000_000,
+          model_reasoning_effort: "xhigh"
+        },
+        permissions: undefined,
+        approvalsReviewer: undefined
+      }
+    });
+  });
+
+  it("thread/resume 透传自定义运行时覆盖", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.resumeThread("thread-1", {
+      model: "mimo-v2.5-pro",
+      modelProvider: "renamed-provider",
+      modelContextWindow: 200_000,
+      reasoningEffort: "vendor-ultra"
+    });
+
+    expect(peer.calls).toContainEqual({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-1",
+        model: "mimo-v2.5-pro",
+        modelProvider: "renamed-provider",
+        config: {
+          model_context_window: 200_000,
+          model_reasoning_effort: "vendor-ultra"
+        },
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 30,
+          sortDirection: "desc",
+          itemsView: "full"
+        }
+      }
+    });
+  });
+
+  it("thread/resume 透传运行时权限覆盖", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.resumeThread("thread-1", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    expect(peer.calls).toContainEqual({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-1",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null,
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 30,
+          sortDirection: "desc",
+          itemsView: "full"
+        }
+      }
+    });
+  });
+
+  it("app-server 目标 resume 省略旧自定义窗口覆盖", async () => {
+    const peer = new FakePeer();
+    const client = new CodexAppServerClient(peer);
+
+    await client.resumeThread("thread-1", {
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      reasoningEffort: "high"
+    });
+
+    const call = [...peer.calls].reverse().find((entry) => entry.method === "thread/resume");
+    expect(call).toMatchObject({
+      params: {
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        config: { model_reasoning_effort: "high" }
+      }
+    });
+    expect((call?.params as { config?: object }).config).not.toHaveProperty("model_context_window");
   });
 
   it("能把文本发送为 turn/start", async () => {
@@ -2121,6 +2262,7 @@ describe("CodexAppServerClient", () => {
       reasoningEffort: "high",
       reasoningSummary: "auto",
       permissions: ":workspace",
+      approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
       additionalContext: {
         "codex-web:collaboration-mode": {
@@ -2148,6 +2290,7 @@ describe("CodexAppServerClient", () => {
         effort: "high",
         summary: "auto",
         permissions: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review",
         additionalContext: {
           "codex-web:collaboration-mode": {
@@ -2175,6 +2318,7 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-1",
       text: "回到配置默认权限",
       permissions: null,
+      approvalPolicy: null,
       approvalsReviewer: null
     });
 
@@ -2183,6 +2327,7 @@ describe("CodexAppServerClient", () => {
       params: {
         threadId: "thread-1",
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       }
     });
@@ -2297,13 +2442,13 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("rollback 后保留最近 turns 窗口的分页 cursor", async () => {
+  it("rollback 后只在 page membership 兼容时补充分页 cursor", async () => {
     const peer = new FakePeer();
     const client = new CodexAppServerClient(peer);
 
     const thread = await client.rollbackThread("thread-1", 1);
 
-    expect(thread.nextCursor).toBe("turn-older");
+    expect(thread.nextCursor).toBeNull();
     expect(peer.calls).toContainEqual({
       method: "thread/turns/list",
       params: {
@@ -2313,6 +2458,18 @@ describe("CodexAppServerClient", () => {
         itemsView: "full"
       }
     });
+  });
+
+  it("rollback mutation response 已删除 turn 时拒绝持续陈旧的紧随 page", async () => {
+    const peer = new FakePeer();
+    peer.staleRollbackPages = 3;
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.rollbackThread("thread-1", 1)).rejects.toMatchObject({
+      code: "REPAIR_EXHAUSTED"
+    });
+    expect(peer.calls.filter((call) => call.method === "thread/rollback")).toHaveLength(1);
+    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toHaveLength(3);
   });
 
   it("能重命名当前会话", async () => {
@@ -2392,6 +2549,7 @@ describe("CodexAppServerClient", () => {
         model: "gpt-5-mini",
         reasoningEffort: "high",
         permissions: ":danger-full-access",
+        approvalPolicy: "never",
         approvalsReviewer: null,
         collaborationMode: {
           mode: "default",
@@ -2411,6 +2569,7 @@ describe("CodexAppServerClient", () => {
         model: "gpt-5-mini",
         effort: "high",
         permissions: ":danger-full-access",
+        approvalPolicy: "never",
         approvalsReviewer: null,
         collaborationMode: {
           mode: "default",
@@ -2432,6 +2591,7 @@ describe("CodexAppServerClient", () => {
       client.updateThreadSettings({
         threadId: "thread-1",
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       })
     ).resolves.toBeUndefined();
@@ -2441,6 +2601,7 @@ describe("CodexAppServerClient", () => {
       params: {
         threadId: "thread-1",
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       }
     });
@@ -3319,7 +3480,8 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
       items: [{ id: "item-page-agent-1", role: "agent", text: "分页 turn" }],
-      nextCursor: "item-next"
+      nextCursor: "item-next",
+      turnManifest: { turnIds: [] }
     });
     expect(peer.calls.at(-1)).toEqual({
       method: "thread/items/list",
@@ -3375,6 +3537,60 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("最新 item page 用 bounded turns page 恢复权威 turn ownership", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        return {
+          data: [{
+            type: "agentMessage",
+            id: "agent-without-owner",
+            text: "最终答复",
+            phase: "final_answer",
+            memoryCitation: null
+          }],
+          nextCursor: null
+        };
+      }
+      if (method === "thread/turns/list") {
+        return {
+          data: [{
+            id: "turn-authoritative",
+            itemsView: "full",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            durationMs: 1,
+            items: [{
+              type: "agentMessage",
+              id: "agent-without-owner",
+              text: "最终答复",
+              phase: "final_answer",
+              memoryCitation: null
+            }]
+          }],
+          nextCursor: null,
+          backwardsCursor: null
+        };
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "thread-1", limit: 30 })).resolves.toEqual({
+      items: [{
+        id: "agent-without-owner",
+        turnId: "turn-authoritative",
+        role: "agent",
+        text: "最终答复"
+      }],
+      nextCursor: null,
+      turnManifest: { turnIds: ["turn-authoritative"] }
+    });
+  });
+
   it.each([
     ["thread/items/list", "thread empty-thread is not materialized yet; unavailable before first user message"],
     ["thread/turns/list", "thread empty-thread is not materialized yet; thread/turns/list is unavailable before first user message"]
@@ -3397,7 +3613,8 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.listThreadTurns({ threadId: "empty-thread", limit: 30 })).resolves.toEqual({
       items: [],
-      nextCursor: null
+      nextCursor: null,
+      turnManifest: { turnIds: [] }
     });
   });
 
@@ -3594,7 +3811,13 @@ describe("CodexAppServerClient", () => {
           text: "新回复"
         }
       ],
-      nextCursor: "older"
+      nextCursor: "older",
+      turnManifest: {
+        turnIds: [
+          "019f5e29-7cfd-7431-887f-ac891cfdcc60",
+          "019f5e2a-80c2-72a2-9b84-e9b54ec7a26e"
+        ]
+      }
     });
     expect(peer.calls.at(-1)).toEqual({
       method: "thread/items/list",

@@ -5,6 +5,7 @@ import {
   type TimelineCompleteness
 } from "../../shared/timeline-content";
 import { timelineItemToEntry, type TimelineEntry } from "./timeline";
+import type { ThreadNoticeInput } from "./store";
 
 const TURN_ITEM_DETAIL_PAGE_LIMIT = 100;
 
@@ -26,6 +27,33 @@ export type ThreadDetailTimelineSources = {
   detailCompleteness: TimelineCompleteness;
   detailBytes: number;
 };
+
+const legacyModelResumeWarningPattern = /^This session was recorded with model `[^`]+` but is resuming with `[^`]+`\. Consider switching back to `[^`]+` as it may affect Codex performance\.$/;
+const legacyModelMetadataWarningPattern = /^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
+
+export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
+  entries: TimelineEntry[];
+  notices: ThreadNoticeInput[];
+} {
+  const notices = new Map<string, ThreadNoticeInput>();
+  const keptEntries = entries.filter((entry) => {
+    if (entry.body.kind !== "error" || !isLegacyAppServerWarningText(entry.body.text)) return true;
+    const text = entry.body.text;
+    notices.set(`app-server-warning:${text}`, {
+      id: `app-server-warning:${text}`,
+      kind: "warning",
+      source: "app-server",
+      text,
+      createdAt: entry.createdAt
+    });
+    return false;
+  });
+  return { entries: keptEntries, notices: [...notices.values()] };
+}
+
+export function isLegacyAppServerWarningText(text: string): boolean {
+  return legacyModelResumeWarningPattern.test(text) || legacyModelMetadataWarningPattern.test(text);
+}
 
 export function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {
   return repairReconstructedTimelineEntries(

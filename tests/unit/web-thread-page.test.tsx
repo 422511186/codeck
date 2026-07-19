@@ -20,9 +20,15 @@ const mockMergeThreadEntries = vi.fn();
 const mockReplaceLatestWindow = vi.fn(() => true);
 const mockPrependEntries = vi.fn();
 const mockAppendEntries = vi.fn();
+const mockUpsertThreadNotice = vi.fn();
+const mockDismissThreadNotice = vi.fn();
 const mockReplaceOrAddEntry = vi.fn();
 const mockSetMode = vi.fn();
 const mockSetModel = vi.fn();
+const mockSetModelState = vi.fn();
+const mockBeginModelSwitch = vi.fn();
+const mockApplyModelSwitchResult = vi.fn();
+const mockClearModelSwitchPending = vi.fn();
 const mockSetPermissionProfile = vi.fn();
 const mockSetContextUsage = vi.fn();
 const mockSetRunning = vi.fn();
@@ -30,6 +36,8 @@ const mockSetThreadStatus = vi.fn();
 const mockSetActiveTurnId = vi.fn();
 const mockBindLocalUserMessageTurn = vi.fn();
 const mockSetTimelineGeneration = vi.fn();
+const mockSetAuthoritativeTurnManifest = vi.fn();
+const mockRegisterAuthoritativeTurn = vi.fn();
 const mockMarkTurnInterrupted = vi.fn();
 const mockMarkTurnDeleted = vi.fn();
 const mockSetActiveThread = vi.fn();
@@ -62,9 +70,15 @@ function mockStoreState(): unknown {
       replaceLatestWindow: mockReplaceLatestWindow,
       prependEntries: mockPrependEntries,
       appendEntries: mockAppendEntries,
+      upsertThreadNotice: mockUpsertThreadNotice,
+      dismissThreadNotice: mockDismissThreadNotice,
       replaceOrAddEntry: mockReplaceOrAddEntry,
       setMode: mockSetMode,
       setModel: mockSetModel,
+      setModelState: mockSetModelState,
+      beginModelSwitch: mockBeginModelSwitch,
+      applyModelSwitchResult: mockApplyModelSwitchResult,
+      clearModelSwitchPending: mockClearModelSwitchPending,
       setPermissionProfile: mockSetPermissionProfile,
       setContextUsage: mockSetContextUsage,
       setRunning: mockSetRunning,
@@ -72,6 +86,8 @@ function mockStoreState(): unknown {
       setActiveTurnId: mockSetActiveTurnId,
       bindLocalUserMessageTurn: mockBindLocalUserMessageTurn,
       setTimelineGeneration: mockSetTimelineGeneration,
+      setAuthoritativeTurnManifest: mockSetAuthoritativeTurnManifest,
+      registerAuthoritativeTurn: mockRegisterAuthoritativeTurn,
       markTurnInterrupted: mockMarkTurnInterrupted,
       markTurnDeleted: mockMarkTurnDeleted,
       setActiveThread: mockSetActiveThread,
@@ -94,6 +110,9 @@ const mockListTurnItems = vi.fn();
 const mockStartTurn = vi.fn();
 const mockInterruptTurn = vi.fn();
 const mockListModels = vi.fn();
+const mockModelCatalog = vi.fn();
+const mockSwitchThreadModel = vi.fn();
+const mockRecoverThreadModel = vi.fn();
 const mockReadSettings = vi.fn();
 const mockCollaborationModes = vi.fn();
 const mockUpdateThreadSettings = vi.fn();
@@ -121,6 +140,21 @@ const sampleGoal = {
   updatedAt: 1
 };
 
+const officialModelState = {
+  selection: { source: "app-server" as const, model: "gpt-5-codex" },
+  model: "gpt-5-codex",
+  label: "GPT-5 Codex",
+  contextWindow: 272_000,
+  inputModalities: ["text", "image"] as Array<"text" | "image">,
+  supportedReasoningEfforts: ["low", "medium", "high"],
+  defaultReasoningEffort: "medium",
+  reasoningEffort: "medium",
+  bindingVersion: null,
+  sourceUpdatedAt: null,
+  blocked: false,
+  operationId: null
+};
+
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     readThread: (...args: unknown[]) => mockReadThread(...args),
@@ -131,6 +165,9 @@ vi.mock("../../src/web/api/endpoints", () => ({
     startTurn: (...args: unknown[]) => mockStartTurn(...args),
     interruptTurn: (...args: unknown[]) => mockInterruptTurn(...args),
     models: () => mockListModels(),
+    modelCatalog: () => mockModelCatalog(),
+    switchThreadModel: (...args: unknown[]) => mockSwitchThreadModel(...args),
+    recoverThreadModel: (...args: unknown[]) => mockRecoverThreadModel(...args),
     settings: () => mockReadSettings(),
     collaborationModes: () => mockCollaborationModes(),
     updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args),
@@ -175,9 +212,15 @@ describe("ThreadPage", () => {
     mockReplaceLatestWindow.mockReturnValue(true);
     mockPrependEntries.mockClear();
     mockAppendEntries.mockClear();
+    mockUpsertThreadNotice.mockClear();
+    mockDismissThreadNotice.mockClear();
     mockReplaceOrAddEntry.mockClear();
     mockSetMode.mockClear();
     mockSetModel.mockClear();
+    mockSetModelState.mockClear();
+    mockBeginModelSwitch.mockClear();
+    mockApplyModelSwitchResult.mockClear();
+    mockClearModelSwitchPending.mockClear();
     mockSetPermissionProfile.mockClear();
     mockSetContextUsage.mockClear();
     mockSetRunning.mockClear();
@@ -185,6 +228,8 @@ describe("ThreadPage", () => {
     mockSetActiveTurnId.mockClear();
     mockBindLocalUserMessageTurn.mockClear();
     mockSetTimelineGeneration.mockClear();
+    mockSetAuthoritativeTurnManifest.mockClear();
+    mockRegisterAuthoritativeTurn.mockClear();
     mockMarkTurnInterrupted.mockClear();
     mockMarkTurnDeleted.mockClear();
     mockSetActiveThread.mockClear();
@@ -203,6 +248,26 @@ describe("ThreadPage", () => {
     mockListTurnsBefore.mockClear();
     mockListTurnItems.mockClear();
     mockUpdateThreadSettings.mockClear();
+    mockModelCatalog.mockReset();
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 1,
+      appServerModelNames: ["gpt-5-codex"],
+      models: []
+    });
+    mockSwitchThreadModel.mockReset();
+    mockSwitchThreadModel.mockResolvedValue({
+      ok: true,
+      outcome: "switched",
+      operationId: "operation-1",
+      latestState: officialModelState
+    });
+    mockRecoverThreadModel.mockReset();
+    mockRecoverThreadModel.mockResolvedValue({
+      ok: true,
+      outcome: "recovered",
+      operationId: "operation-1",
+      latestState: officialModelState
+    });
     mockForkThread.mockClear();
     mockRollbackThread.mockClear();
     mockReadThread.mockReset();
@@ -319,7 +384,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2", "turn-3"]
+      }
     });
   });
 
@@ -349,7 +418,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2", "turn-3"]
+      }
     });
 
     const { container } = render(<ThreadPage />);
@@ -431,7 +504,11 @@ describe("ThreadPage", () => {
       activeTurnId: "turn-known",
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
     });
     mockReadThread.mockResolvedValue({
       id: "thread-1",
@@ -450,6 +527,114 @@ describe("ThreadPage", () => {
       expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "active", undefined);
     });
     expect(mockSetThreadStatus).not.toHaveBeenCalledWith("thread-1", "active", null);
+  });
+
+  it("should restore the authoritative active turn from fresh metadata", async () => {
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      activeTurnId: "turn-active-on-server",
+      timeline: [],
+      lastTurnId: "turn-previous",
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadStatus).toHaveBeenCalledWith(
+        "thread-1",
+        "active",
+        "turn-active-on-server"
+      );
+    });
+  });
+
+  it("should reschedule a bounded baseline when initial metadata and page stamps conflict", async () => {
+    vi.useFakeTimers();
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "cached-user",
+          turnId: "turn-cached",
+          historyStamp: { bootId: "boot-old", generation: 2 },
+          createdAt: 1,
+          body: { kind: "user-message", text: "cached", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      status: "idle",
+      running: false,
+      deliveryEpoch: 0,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Thread",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      historyStamp: { bootId: "boot-new", generation: 2 },
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: 2
+    });
+    mockListTurnsBefore.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      historyStamp: { bootId: "boot-other", generation: 2 },
+      generation: 2
+    });
+
+    render(<ThreadPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3_100);
+      await Promise.resolve();
+    });
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "mutation-retry",
+      generation: 2
+    });
+  });
+
+  it("should request a baseline repair when an active page is restored", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      status: "active",
+      running: true,
+      activeTurnId: "turn-running",
+      plan: [],
+      cursor: null,
+      reachedBeginning: false
+    });
+
+    render(<ThreadPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    mockRequestSnapshotRepair.mockClear();
+
+    fireEvent(window, new Event("pageshow"));
+
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "baseline-required"
+    });
   });
 
   it("should preserve the message page cursor when the first page has no visible items", async () => {
@@ -535,7 +720,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1"]
+      }
     });
 
     render(<ThreadPage />);
@@ -566,7 +755,11 @@ describe("ThreadPage", () => {
       activeTurnId: null,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
     });
 
     render(<ThreadPage />);
@@ -1107,6 +1300,16 @@ describe("ThreadPage", () => {
       status: "active",
       timeline: [],
       lastTurnId: "turn-running",
+      updatedAt: Date.now()
+    });
+    mockReadThreadSummary.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Running Thread",
+      preview: "",
+      modelProvider: "claude-opus-4",
+      status: "active",
+      activeTurnId: "turn-running",
       updatedAt: Date.now()
     });
     mockThreadState.mockReturnValue({
@@ -1797,7 +2000,7 @@ describe("ThreadPage", () => {
     });
   });
 
-  it("should not request snapshot repair when summary becomes idle after visible live output", async () => {
+  it("should final-reconcile when summary becomes idle after partial live output", async () => {
     vi.useFakeTimers();
     mockWsState.mockReturnValue("reconnecting");
     mockReadThread.mockResolvedValue({
@@ -1853,10 +2056,13 @@ describe("ThreadPage", () => {
 
     expect(mockSetThreadStatus).toHaveBeenCalledWith("thread-1", "idle");
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "summary-idle",
+      turnId: "turn-running"
+    });
   });
 
-  it("should not request snapshot repair when summary becomes idle with only tool output", async () => {
+  it("should final-reconcile when summary becomes idle with only tool output", async () => {
     vi.useFakeTimers();
     mockWsState.mockReturnValue("reconnecting");
     mockReadThread.mockResolvedValue({
@@ -1918,7 +2124,10 @@ describe("ThreadPage", () => {
     });
 
     expect(mockReadThreadSummary).toHaveBeenCalledWith("thread-1");
-    expect(mockRequestSnapshotRepair).not.toHaveBeenCalled();
+    expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+      reason: "summary-idle",
+      turnId: "turn-running"
+    });
   });
 
   it("should interrupt the active turn id instead of only toggling local running state", async () => {
@@ -2804,6 +3013,7 @@ describe("ThreadPage", () => {
       lastTurnId: null,
       updatedAt: Date.now(),
       activePermissionProfile: { id: ":workspace", extends: null },
+      approvalPolicy: "on-request",
       approvalsReviewer: "auto_review"
     });
 
@@ -2813,7 +3023,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", ":workspace", "auto_review");
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", ":workspace", "on-request", "auto_review");
     await user.click(screen.getByRole("button", { name: "权限 替我审批" }));
     const picker = screen.getByRole("dialog", { name: "权限模式" });
     expect(within(picker).getByRole("button", { name: /请求批准/ })).toBeInTheDocument();
@@ -2823,10 +3033,11 @@ describe("ThreadPage", () => {
 
     await user.click(within(picker).getByRole("button", { name: /请求批准/ }));
 
-    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", ":workspace", "user");
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", ":workspace", "on-request", "user");
     await waitFor(() => {
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
         permissions: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "user"
       });
     });
@@ -2848,7 +3059,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "权限 自定义 config.toml" }));
+    await user.click(screen.getByRole("button", { name: "权限 权限状态待确认" }));
     const picker = screen.getByRole("dialog", { name: "权限模式" });
 
     expect(within(picker).getByRole("button", { name: /请求批准/ })).toBeInTheDocument();
@@ -2870,6 +3081,7 @@ describe("ThreadPage", () => {
       cursor: null,
       reachedBeginning: false,
       permissionProfileId: ":danger-full-access",
+      approvalPolicy: "never",
       approvalsReviewer: null
     });
 
@@ -2882,10 +3094,11 @@ describe("ThreadPage", () => {
     await user.click(screen.getByRole("button", { name: "权限 完全访问权限" }));
     await user.click(within(screen.getByRole("dialog", { name: "权限模式" })).getByRole("button", { name: /自定义 config\.toml/ }));
 
-    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", null, null);
+    expect(mockSetPermissionProfile).toHaveBeenCalledWith("thread-1", null, null, null);
     await waitFor(() => {
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       });
     });
@@ -2902,6 +3115,7 @@ describe("ThreadPage", () => {
       cursor: null,
       reachedBeginning: false,
       permissionProfileId: ":workspace",
+      approvalPolicy: "on-request",
       approvalsReviewer: "auto_review"
     });
 
@@ -2918,6 +3132,7 @@ describe("ThreadPage", () => {
       expect.objectContaining({
         text: "use current permissions",
         permissions: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review"
       })
     );
@@ -2935,6 +3150,7 @@ describe("ThreadPage", () => {
       cursor: null,
       reachedBeginning: false,
       permissionProfileId: null,
+      approvalPolicy: null,
       approvalsReviewer: null
     });
 
@@ -2951,9 +3167,92 @@ describe("ThreadPage", () => {
       expect.objectContaining({
         text: "use config",
         permissions: null,
+        approvalPolicy: null,
         approvalsReviewer: null
       })
     );
+  });
+
+  it("should not present danger sandbox with on-request approval as full access", async () => {
+    mockReadThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Permission mismatch",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      activePermissionProfile: { id: ":danger-full-access", extends: null },
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user"
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: "权限 完全访问权限" })).not.toBeInTheDocument();
+    expect(screen.getByText(/权限状态待确认/)).toBeInTheDocument();
+  });
+
+  it("should omit unknown permission overrides instead of clearing config defaults", async () => {
+    const user = userEvent.setup();
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "keep unknown permissions");
+    expect(screen.getByLabelText("发送")).toBeEnabled();
+    await user.click(screen.getByLabelText("发送"));
+
+    const input = mockStartTurn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(input).not.toHaveProperty("permissions");
+    expect(input).not.toHaveProperty("approvalPolicy");
+    expect(input).not.toHaveProperty("approvalsReviewer");
+  });
+
+  it("should use the complete permission selection returned by resume before sending", async () => {
+    const user = userEvent.setup();
+    mockReadThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Resume permissions",
+      modelProvider: "custom",
+      status: "notLoaded",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+    mockResumeThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Resume permissions",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      activePermissionProfile: { id: ":danger-full-access", extends: null },
+      approvalPolicy: "never",
+      approvalsReviewer: "user"
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "resume with full access");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockStartTurn).toHaveBeenCalledWith(expect.objectContaining({
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user"
+    }));
   });
 
   it("should keep Codex App permission modes available when settings aggregation fails", async () => {
@@ -2966,7 +3265,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "权限 自定义 config.toml" }));
+    await user.click(screen.getByRole("button", { name: "权限 权限状态待确认" }));
     const picker = screen.getByRole("dialog", { name: "权限模式" });
 
     expect(within(picker).getByRole("button", { name: /请求批准/ })).toBeInTheDocument();
@@ -3006,17 +3305,47 @@ describe("ThreadPage", () => {
     expect(mockListTurnsBefore).toHaveBeenCalledWith("thread-1", null);
   });
 
-  it("should load models when picker opens and persist selected model", async () => {
+  it("模型选择只走来源敏感 switch，并在 switched 后提交 UI", async () => {
     const user = userEvent.setup();
-    mockListModels.mockResolvedValue([
-      {
-        id: "openai/gpt-5",
-        label: "GPT-5",
-        isDefault: false,
+    const targetState = {
+      ...officialModelState,
+      selection: { source: "custom" as const, customModelId: "custom-1" },
+      model: "mimo-v2.5-pro",
+      label: "MIMO",
+      contextWindow: 200_000,
+      inputModalities: ["text"] as Array<"text" | "image">,
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: null,
+      reasoningEffort: null,
+      bindingVersion: "binding-1",
+      sourceUpdatedAt: "2026-07-18T00:00:00.000Z"
+    };
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false, model: officialModelState.model, modelEffort: "medium",
+      modelSelection: officialModelState.selection, modelBindingVersion: null,
+      modelInputModalities: officialModelState.inputModalities, modelContextWindow: 272_000,
+      modelSwitchStatus: "idle"
+    });
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 7,
+      appServerModelNames: ["gpt-5-codex"],
+      models: [{
+        source: "custom",
+        customModelId: "custom-1",
+        model: "mimo-v2.5-pro",
+        label: "MIMO",
+        contextWindow: 200_000,
+        inputModalities: ["text"],
         supportedReasoningEfforts: [],
-        inputModalities: ["text"]
-      }
-    ]);
+        defaultReasoningEffort: null,
+        isDefault: false,
+        updatedAt: "2026-07-18T00:00:00.000Z"
+      }]
+    });
+    mockSwitchThreadModel.mockResolvedValue({
+      ok: true, outcome: "switched", operationId: "operation-1", latestState: targetState
+    });
 
     render(<ThreadPage />);
 
@@ -3026,14 +3355,160 @@ describe("ThreadPage", () => {
 
     const header = document.querySelector("header") as HTMLElement;
     expect(within(header).queryByRole("button", { name: "gpt-5-codex" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex" }));
+    await user.click(screen.getByRole("button", { name: /模型 gpt-5-codex/ }));
 
-    await waitFor(() => expect(mockListModels).toHaveBeenCalled());
-    await user.click(screen.getByRole("button", { name: "GPT-5" }));
+    await waitFor(() => expect(mockModelCatalog).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "MIMO mimo-v2.5-pro" }));
 
-    expect(mockSetModel).toHaveBeenCalledWith("thread-1", "openai/gpt-5", null);
+    expect(mockBeginModelSwitch).toHaveBeenCalledWith("thread-1", {
+      source: "custom", customModelId: "custom-1"
+    });
     await waitFor(() => {
-      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", { model: "openai/gpt-5" });
+      expect(mockSwitchThreadModel).toHaveBeenCalledWith("thread-1", {
+        target: { source: "custom", customModelId: "custom-1" },
+        expectedCatalogRevision: 7,
+        expectedCurrent: {
+          selection: officialModelState.selection,
+          reasoningEffort: "medium",
+          bindingVersion: null
+        },
+        kind: "switch"
+      });
+    });
+    expect(mockApplyModelSwitchResult).toHaveBeenCalledWith("thread-1", {
+      outcome: "switched", operationId: "operation-1", latestState: targetState
+    });
+    expect(mockUpdateThreadSettings).not.toHaveBeenCalledWith(
+      "thread-1", expect.objectContaining({ model: expect.anything() })
+    );
+  });
+
+  it("模型切换 409 刷新当前状态并保留 composer 草稿", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false, model: officialModelState.model, modelEffort: "medium",
+      modelSelection: officialModelState.selection, modelBindingVersion: null,
+      modelInputModalities: officialModelState.inputModalities, modelSwitchStatus: "idle"
+    });
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 7,
+      appServerModelNames: ["gpt-5-codex", "gpt-5.6-sol"],
+      models: [{ ...officialModelState, source: "app-server", model: "gpt-5.6-sol", label: "GPT-5.6", isDefault: false }]
+    });
+    mockSwitchThreadModel.mockResolvedValue({
+      ok: false,
+      code: "CATALOG_REVISION_CONFLICT",
+      operationId: null,
+      latestState: officialModelState
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText("输入消息"), "不要丢失这段草稿");
+    await user.click(screen.getByRole("button", { name: /模型 gpt-5-codex/ }));
+    await user.click(await screen.findByRole("button", { name: "GPT-5.6 gpt-5.6-sol" }));
+
+    await waitFor(() => expect(mockClearModelSwitchPending).toHaveBeenCalledWith("thread-1"));
+    expect(mockSetModelState).toHaveBeenCalledWith("thread-1", officialModelState);
+    expect(mockUpsertThreadNotice).toHaveBeenCalledWith("thread-1", expect.objectContaining({
+      id: expect.stringContaining("model-operation-warning:"),
+      kind: "warning",
+      source: "model-operation"
+    }));
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("不要丢失这段草稿");
+  });
+
+  it("在 timeline 外展示并关闭会话 warning notice", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false,
+      notices: [{
+        id: "app-server-warning:model-metadata",
+        kind: "warning",
+        source: "app-server",
+        text: "Model metadata not found",
+        createdAt: 1
+      }]
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+
+    const notice = screen.getByRole("status");
+    expect(notice).toHaveAttribute("data-thread-notice", "warning");
+    expect(notice).toHaveTextContent("Model metadata not found");
+    expect(notice).not.toHaveTextContent("操作失败");
+
+    await user.click(within(notice).getByRole("button", { name: "关闭提示" }));
+    expect(mockDismissThreadNotice).toHaveBeenCalledWith("thread-1", "app-server-warning:model-metadata");
+  });
+
+  it("recovery_failed 保留草稿、禁用发送且只提供两个恢复命令", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false, model: officialModelState.model, modelEffort: "medium",
+      modelSelection: officialModelState.selection, modelBindingVersion: null,
+      modelInputModalities: officialModelState.inputModalities,
+      modelSwitchStatus: "recovery_failed", modelSwitchOperationId: "operation-1"
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText("输入消息"), "恢复后继续发送");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("会话模型恢复失败");
+    expect(screen.getByLabelText("发送")).toBeDisabled();
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("恢复后继续发送");
+    expect(screen.queryByRole("button", { name: /忽略|继续发送/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "恢复原模型" }));
+    await waitFor(() => expect(mockRecoverThreadModel).toHaveBeenCalledWith("thread-1", "restore-old"));
+    await user.click(screen.getByRole("button", { name: "重试目标模型" }));
+    await waitFor(() => expect(mockRecoverThreadModel).toHaveBeenCalledWith("thread-1", "retry-target"));
+    expect(mockApplyModelSwitchResult).toHaveBeenCalled();
+  });
+
+  it("首次 thread GET 返回 recovery_failed 时仍渲染会话与恢复界面", async () => {
+    const blockedState = { ...officialModelState, blocked: true, operationId: "operation-1" };
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false, model: officialModelState.model, modelEffort: "medium",
+      modelSelection: officialModelState.selection, modelBindingVersion: null,
+      modelInputModalities: officialModelState.inputModalities,
+      modelSwitchStatus: "recovery_failed", modelSwitchOperationId: "operation-1"
+    });
+    mockReadThread.mockRejectedValue(new ApiError("模型恢复失败", 500, {
+      ok: false,
+      outcome: "recovery_failed",
+      operationId: "operation-1",
+      latestState: blockedState,
+      thread: {
+        id: "thread-1",
+        cwd: "C:/test",
+        title: "需要恢复的会话",
+        modelProvider: "provider-current",
+        model: "gpt-5-codex",
+        reasoningEffort: "medium",
+        status: "idle",
+        timeline: [],
+        lastTurnId: null,
+        nextCursor: null,
+        updatedAt: Date.now(),
+        modelState: blockedState
+      }
+    }));
+
+    render(<ThreadPage />);
+
+    expect(await screen.findByText("需要恢复的会话")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("会话模型恢复失败");
+    expect(mockApplyModelSwitchResult).toHaveBeenCalledWith("thread-1", {
+      outcome: "recovery_failed",
+      operationId: "operation-1",
+      latestState: blockedState
     });
   });
 
@@ -3064,6 +3539,35 @@ describe("ThreadPage", () => {
 
     expect(screen.getByLabelText("上下文窗口 64%")).toBeInTheDocument();
     expect(screen.getByText("64%")).toBeInTheDocument();
+  });
+
+  it("自定义绑定窗口与实际窗口不同时显示偏差，并由实际窗口驱动进度", async () => {
+    mockThreadState.mockReturnValue({
+      entries: [], pendingApprovals: [], mode: "build", running: false, plan: [], cursor: null,
+      reachedBeginning: false,
+      model: "mimo-v2.5-pro",
+      modelEffort: null,
+      modelSelection: { source: "custom", customModelId: "custom-1" },
+      modelBindingVersion: "binding-1",
+      modelContextWindow: 200_000,
+      modelInputModalities: ["text"],
+      modelSourceUpdatedAt: "2026-07-18T00:00:00.000Z",
+      modelSwitchStatus: "idle",
+      contextUsage: {
+        totalTokens: 64_000,
+        inputTokens: 60_000,
+        outputTokens: 4_000,
+        reasoningOutputTokens: 0,
+        modelContextWindow: 128_000,
+        updatedAt: 1
+      }
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+
+    expect(screen.getByLabelText("上下文窗口 50%")).toBeInTheDocument();
+    expect(screen.getByText("实际 128k / 配置 200k")).toBeInTheDocument();
   });
 
   it("should show a visible context placeholder when context usage is unavailable", async () => {
@@ -3341,8 +3845,8 @@ describe("ThreadPage", () => {
   });
 
   it("should not request model list twice while picker load is pending", async () => {
-    let resolveModels: ((value: []) => void) | null = null;
-    mockListModels.mockReturnValue(
+    let resolveModels: ((value: { catalogRevision: number; appServerModelNames: string[]; models: [] }) => void) | null = null;
+    mockModelCatalog.mockReturnValue(
       new Promise((resolve) => {
         resolveModels = resolve;
       })
@@ -3356,12 +3860,12 @@ describe("ThreadPage", () => {
 
     const modelButton = screen.getByRole("button", { name: "模型 gpt-5-codex" });
     fireEvent.click(modelButton);
+    await waitFor(() => expect(mockModelCatalog).toHaveBeenCalledTimes(1));
     fireEvent.click(modelButton);
-
-    expect(mockListModels).toHaveBeenCalledTimes(1);
+    expect(mockModelCatalog).toHaveBeenCalledTimes(1);
 
     act(() => {
-      resolveModels?.([]);
+      resolveModels?.({ catalogRevision: 1, appServerModelNames: [], models: [] });
     });
   });
 
@@ -3898,10 +4402,9 @@ describe("ThreadPage", () => {
         })
       })
     );
-    expect(mockStartTurn.mock.calls[0][0]).toMatchObject({
-      permissions: null,
-      approvalsReviewer: null
-    });
+    expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("permissions");
+    expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("approvalPolicy");
+    expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("approvalsReviewer");
     expect(mockForkThread).not.toHaveBeenCalled();
   });
 
@@ -4024,9 +4527,9 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "模型 gpt-5.5 Medium" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "模型 gpt-5.5" })).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "模型 gpt-5.5 Medium" })).not.toHaveTextContent("，");
+    expect(screen.getByRole("button", { name: "推理强度 Medium" })).toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText("输入消息"), "follow cli config");
     await user.click(screen.getByLabelText("发送"));
@@ -4047,7 +4550,7 @@ describe("ThreadPage", () => {
     expect(mockStartTurn.mock.calls[0][0]).not.toHaveProperty("model");
   });
 
-  it("should allow changing the reasoning effort for the current model", async () => {
+  it("should expose separate model and reasoning effort controls", async () => {
     const user = userEvent.setup();
     mockThreadState.mockReturnValue({
       entries: [],
@@ -4058,17 +4561,39 @@ describe("ThreadPage", () => {
       cursor: null,
       reachedBeginning: false,
       model: "gpt-5-codex",
-      modelEffort: "medium"
+      modelEffort: "medium",
+      modelSelection: officialModelState.selection,
+      modelBindingVersion: null,
+      modelInputModalities: officialModelState.inputModalities,
+      modelSwitchStatus: "idle"
     });
-    mockListModels.mockResolvedValue([
-      {
-        id: "gpt-5-codex",
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 1,
+      appServerModelNames: ["gpt-5-codex"],
+      models: [{
+        source: "app-server",
+        model: "gpt-5-codex",
         label: "GPT-5 Codex",
         isDefault: true,
         supportedReasoningEfforts: ["low", "medium", "high"],
-        inputModalities: ["text"]
-      }
-    ]);
+        defaultReasoningEffort: "medium",
+        contextWindow: 272_000,
+        inputModalities: ["text", "image"]
+      }]
+    });
+    mockReadThread.mockResolvedValue({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Test Thread",
+      modelProvider: "provider-current",
+      model: "gpt-5-codex",
+      reasoningEffort: "medium",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      modelState: officialModelState
+    });
 
     render(<ThreadPage />);
 
@@ -4076,10 +4601,19 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex Medium" }));
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "推理强度 Medium" })).toBeInTheDocument();
 
-    await waitFor(() => expect(mockListModels).toHaveBeenCalled());
-    expect(screen.getByText("推理强度")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex" }));
+
+    await waitFor(() => expect(mockModelCatalog).toHaveBeenCalled());
+    expect(screen.getByRole("dialog", { name: "选择模型" })).toBeInTheDocument();
+    expect(screen.queryByText("推理强度")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "关闭模型选择器" }));
+
+    await user.click(screen.getByRole("button", { name: "推理强度 Medium" }));
+
+    expect(screen.getByRole("dialog", { name: "选择推理强度" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Medium" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
@@ -4088,13 +4622,14 @@ describe("ThreadPage", () => {
 
     await user.click(screen.getByRole("button", { name: "High" }));
 
-    expect(mockSetModel).toHaveBeenCalledWith("thread-1", "gpt-5-codex", "high");
     await waitFor(() => {
       expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
-        model: "gpt-5-codex",
         reasoningEffort: "high"
       });
     });
+    expect(mockUpdateThreadSettings).not.toHaveBeenCalledWith(
+      "thread-1", expect.objectContaining({ model: expect.anything() })
+    );
   });
 
   it("should include selected reasoning effort when sending a Plan turn", async () => {
@@ -4637,7 +5172,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2", "turn-3"]
+      }
     });
 
     render(<ThreadPage />);
@@ -4654,9 +5193,10 @@ describe("ThreadPage", () => {
     vi.useRealTimers();
     fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
 
-    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", 2, {
-      expectedDeletedTurnIds: ["turn-2", "turn-3"]
-    });
+    expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", expect.objectContaining({
+      targetTurnId: "turn-2",
+      expectedTailTurnIds: ["turn-2", "turn-3"]
+    }));
     await waitFor(() => {
       const lastCall = mockSetThreadEntries.mock.calls.at(-1);
       expect(lastCall?.[0]).toBe("thread-1");
@@ -4665,6 +5205,64 @@ describe("ThreadPage", () => {
     expect(JSON.parse(localStorage.getItem("codex-web:drafts") ?? "{}")).toMatchObject({
       "thread-1": "previous prompt"
     });
+  });
+
+  it("should refresh the bounded baseline and explain a rollback conflict", async () => {
+    mockRollbackThread.mockRejectedValue(new ApiError(
+      "会话尾部已变化，请刷新后重试",
+      409,
+      { ok: false, code: "ROLLBACK_CONFLICT", actualTailTurnIds: ["turn-new"] }
+    ));
+    mockThreadState.mockReturnValue({
+      entries: [
+        {
+          id: "target-user",
+          turnId: "turn-2",
+          turnIndex: 1,
+          createdAt: Date.now(),
+          body: { kind: "user-message", text: "conflicted prompt", status: "sent" }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 4 },
+        turnIds: ["turn-2"]
+      }
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByText("conflicted prompt"));
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    vi.useRealTimers();
+    fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
+
+    await waitFor(() => {
+      expect(mockRequestSnapshotRepair).toHaveBeenCalledWith("thread-1", {
+        reason: "mutation-retry",
+        generation: 4
+      });
+    });
+    expect(mockAppendEntries).toHaveBeenCalledWith("thread-1", expect.arrayContaining([
+      expect.objectContaining({
+        body: expect.objectContaining({
+          kind: "error",
+          text: expect.stringContaining("会话记录已在其他设备更新")
+        })
+      })
+    ]));
+    expect(mockMarkTurnDeleted).not.toHaveBeenCalled();
   });
 
   it("should not rewind when the visible message is no longer present in current normalized entries", async () => {
@@ -4741,7 +5339,11 @@ describe("ThreadPage", () => {
       status: "idle",
       timeline: [],
       lastTurnId: null,
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1"]
+      }
     });
 
     render(<ThreadPage />);
@@ -4971,7 +5573,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1"]
+      }
     });
 
     render(<ThreadPage />);
@@ -5008,7 +5614,11 @@ describe("ThreadPage", () => {
         { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" },
         { id: "target-user-fork", turnId: "fork-turn-2", turnIndex: 1, role: "user", text: "previous prompt" },
         { id: "latest-user-fork", turnId: "fork-turn-3", turnIndex: 2, role: "user", text: "latest prompt" }
-      ]
+      ],
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["fork-turn-1", "fork-turn-2", "fork-turn-3"]
+      }
     });
     mockRollbackThread.mockResolvedValue({
       id: "forked-thread",
@@ -5051,7 +5661,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2", "turn-3"]
+      }
     });
 
     render(<ThreadPage />);
@@ -5069,9 +5683,10 @@ describe("ThreadPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith("thread-1"));
-    expect(mockRollbackThread).toHaveBeenCalledWith("forked-thread", 2, {
-      expectedDeletedTurnIds: ["fork-turn-2", "fork-turn-3"]
-    });
+    expect(mockRollbackThread).toHaveBeenCalledWith("forked-thread", expect.objectContaining({
+      targetTurnId: "fork-turn-2",
+      expectedTailTurnIds: ["fork-turn-2", "fork-turn-3"]
+    }));
     await waitFor(() => expect(mockSetThreadEntries).toHaveBeenCalledWith(
       "forked-thread",
       [expect.objectContaining({ id: "older-user" })],
@@ -5100,7 +5715,11 @@ describe("ThreadPage", () => {
       timeline: [
         { id: "older-user", turnId: "fork-turn-1", turnIndex: 0, role: "user", text: "older prompt" },
         { id: "target-user-fork", turnId: "fork-turn-2", turnIndex: 1, role: "user", text: "previous prompt" }
-      ]
+      ],
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["fork-turn-1", "fork-turn-2"]
+      }
     });
     mockRollbackThread
       .mockRejectedValueOnce(new ApiError("thread not found: forked-thread", 502))
@@ -5138,7 +5757,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
     });
 
     render(<ThreadPage />);
@@ -5156,13 +5779,15 @@ describe("ThreadPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockRollbackThread).toHaveBeenCalledTimes(2));
-    expect(mockRollbackThread).toHaveBeenNthCalledWith(1, "forked-thread", 1, {
-      expectedDeletedTurnIds: ["fork-turn-2"]
-    });
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(1, "forked-thread", expect.objectContaining({
+      targetTurnId: "fork-turn-2",
+      expectedTailTurnIds: ["fork-turn-2"]
+    }));
     expect(mockResumeThread).toHaveBeenCalledWith("forked-thread");
-    expect(mockRollbackThread).toHaveBeenNthCalledWith(2, "forked-thread", 1, {
-      expectedDeletedTurnIds: ["fork-turn-2"]
-    });
+    expect(mockRollbackThread).toHaveBeenNthCalledWith(2, "forked-thread", expect.objectContaining({
+      targetTurnId: "fork-turn-2",
+      expectedTailTurnIds: ["fork-turn-2"]
+    }));
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/threads/forked-thread"));
   });
 
@@ -5201,7 +5826,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
     });
 
     render(<ThreadPage />);
@@ -5265,7 +5894,11 @@ describe("ThreadPage", () => {
       running: false,
       plan: [],
       cursor: null,
-      reachedBeginning: false
+      reachedBeginning: false,
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
     });
 
     render(<ThreadPage />);

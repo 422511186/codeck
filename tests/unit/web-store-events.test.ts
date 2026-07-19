@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getContextUsage } from "../../src/web/storage/contextUsage";
 import { useStore } from "../../src/web/state/store";
 import { timelineEventLedgerKey } from "../../src/web/state/timeline-engine";
+import { timelineEmptyWindowAnchor } from "../../src/shared/timeline-protocol";
 
 describe("web store codex events", () => {
   beforeEach(() => {
@@ -1733,6 +1734,55 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-b"]?.repairRequestedAt).toEqual(expect.any(Number));
   });
 
+  it("consumes a no-cursor stream baseline once for every tracked thread", () => {
+    useStore.getState().ensureThread("thread-a");
+    useStore.getState().ensureThread("thread-b");
+    const baseline = {
+      type: "timeline-baseline-required" as const,
+      scope: "all-tracked" as const,
+      bootId: "boot-new",
+      streamCursor: 14
+    };
+
+    useStore.getState().dispatchEvent(baseline);
+    const firstA = useStore.getState().threads["thread-a"]?.repairRequest;
+    const firstB = useStore.getState().threads["thread-b"]?.repairRequest;
+    useStore.getState().dispatchEvent(baseline);
+
+    expect(firstA).toEqual(expect.objectContaining({
+      reason: "baseline-required",
+      eventId: "boot-new:14"
+    }));
+    expect(firstB).toEqual(expect.objectContaining({
+      reason: "baseline-required",
+      eventId: "boot-new:14"
+    }));
+    expect(useStore.getState().threads["thread-a"]?.repairRequest).toEqual(firstA);
+    expect(useStore.getState().threads["thread-b"]?.repairRequest).toEqual(firstB);
+  });
+
+  it("requests a bounded repair when another client advances the timeline generation", () => {
+    useStore.getState().ensureThread("thread-1");
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "timeline_generation_changed",
+        threadId: "thread-1",
+        eventId: "generation-2",
+        bootId: "boot-a",
+        generation: 2
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.timelineGeneration).toBe(2);
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(expect.objectContaining({
+      reason: "mutation-retry",
+      eventId: "generation-2",
+      generation: 2
+    }));
+  });
+
   it("does not repair the active thread when a timeline gap has no reliable owner", () => {
     useStore.getState().setActiveThread("thread-1");
 
@@ -3244,6 +3294,7 @@ describe("web store codex events", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
+        approvalPolicy: "on-request",
         activePermissionProfile: { id: ":workspace", extends: null },
         approvalsReviewer: "auto_review",
         collaborationMode: "plan"
@@ -3256,13 +3307,14 @@ describe("web store codex events", () => {
         model: "gpt-5-codex",
         modelEffort: "high",
         permissionProfileId: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review"
       })
     );
   });
 
   it("does not overwrite a complete local permission mode with an incomplete settings event", () => {
-    useStore.getState().setPermissionProfile("thread-1", ":workspace", "auto_review");
+    useStore.getState().setPermissionProfile("thread-1", ":workspace", "on-request", "auto_review");
 
     useStore.getState().dispatchEvent({
       type: "codex-event",
@@ -3279,12 +3331,17 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]).toEqual(
       expect.objectContaining({
         permissionProfileId: ":workspace",
+        approvalPolicy: "on-request",
         approvalsReviewer: "auto_review"
       })
     );
   });
 
-  it("renders app-server warnings and turn errors as timeline error cards", () => {
+  it("routes app-server warnings to deduplicated notices while keeping turn errors in the timeline", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: "配置警告" }
+    });
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "warning", threadId: "thread-1", message: "配置警告" }
@@ -3300,15 +3357,85 @@ describe("web store codex events", () => {
       }
     });
 
-    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
       expect.objectContaining({
-        id: expect.stringMatching(/warning/),
-        body: { kind: "error", text: "配置警告" }
-      }),
+        id: expect.stringMatching(/app-server-warning/),
+        kind: "warning",
+        source: "app-server",
+        text: "配置警告"
+      })
+    ]);
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "turn-1-error",
         body: { kind: "error", text: "API 调用失败：502 Bad Gateway" }
       })
+    ]);
+  });
+
+  it("keeps refreshed timeline ordering unchanged when a warning arrives and is dismissed", () => {
+    useStore.getState().setThreadEntries("thread-1", [
+      { id: "user-1", createdAt: 1, body: { kind: "user-message", text: "旧消息", status: "sent" } },
+      { id: "agent-1", createdAt: 2, body: { kind: "agent-message", text: "旧回复" } }
+    ], null);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: "刷新后的提示" }
+    });
+    useStore.getState().appendEntries("thread-1", [
+      { id: "user-2", createdAt: 3, body: { kind: "user-message", text: "新消息", status: "sending" } }
+    ]);
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.entries.map((entry) => entry.id)).toEqual(["user-1", "agent-1", "user-2"]);
+    expect(thread?.notices).toHaveLength(1);
+
+    useStore.getState().dismissThreadNotice("thread-1", thread?.notices[0]?.id ?? "missing");
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([]);
+    expect(useStore.getState().threads["thread-1"]?.entries.map((entry) => entry.id)).toEqual([
+      "user-1",
+      "agent-1",
+      "user-2"
+    ]);
+  });
+
+  it("does not render replayed legacy warning text as a turn error", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-1",
+        turnId: "turn-warning",
+        message: "Model metadata for `mimo-v2.5-pro` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+        willRetry: false
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
+      expect.objectContaining({ kind: "warning", source: "app-server" })
+    ]);
+  });
+
+  it("keeps a dismissed warning hidden after the thread store is recreated", () => {
+    const warning = { kind: "warning" as const, threadId: "thread-1", message: "关闭后不要再显示" };
+    useStore.getState().dispatchEvent({ type: "codex-event", event: warning });
+    const noticeId = useStore.getState().threads["thread-1"]?.notices[0]?.id;
+    expect(noticeId).toBeTruthy();
+
+    useStore.getState().dismissThreadNotice("thread-1", noticeId ?? "missing");
+    useStore.getState().reset("thread-1");
+    useStore.getState().dispatchEvent({ type: "codex-event", event: warning });
+
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: "新的提示仍需显示" }
+    });
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
+      expect.objectContaining({ text: "新的提示仍需显示" })
     ]);
   });
 
@@ -3759,6 +3886,32 @@ describe("web store codex events", () => {
     const entries = useStore.getState().threads["thread-generation-rebase"]!.entries;
     expect(entries.map((entry) => entry.id)).toEqual(["older-page", "preserved", "new-window"]);
     expect(entries.every((entry) => entry.historyStamp?.generation === 2)).toBe(true);
+  });
+
+  it("用可验证空窗口清除上一 generation 的整条时间线", () => {
+    const oldStamp = { bootId: "boot-a", generation: 1 };
+    const nextStamp = { bootId: "boot-a", generation: 2 };
+    useStore.getState().setThreadEntries("thread-empty-window", [{
+      id: "old-user",
+      turnId: "turn-1",
+      historyStamp: oldStamp,
+      bootId: oldStamp.bootId,
+      generation: oldStamp.generation,
+      createdAt: Date.now(),
+      body: { kind: "user-message", text: "must disappear", status: "sent" }
+    }], null);
+    const emptyAnchor = timelineEmptyWindowAnchor(nextStamp);
+
+    const applied = useStore.getState().replaceLatestWindow("thread-empty-window", [], null, {
+      historyStamp: nextStamp,
+      pageWatermark: 10,
+      windowStartAnchor: emptyAnchor,
+      windowEndAnchor: emptyAnchor
+    });
+
+    expect(applied).toBe(true);
+    expect(useStore.getState().threads["thread-empty-window"]?.entries).toEqual([]);
+    expect(useStore.getState().threads["thread-empty-window"]?.timelineGeneration).toBe(2);
   });
 
   it("routes thread entry actions through timeline engine inputs", () => {

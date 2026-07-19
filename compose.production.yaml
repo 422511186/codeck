@@ -22,6 +22,7 @@ services:
       CODEX_WEB_APP_SERVER_URL: ws://127.0.0.1:31317
       CODEX_WEB_UPLOAD_DIR: /home/hzy/workspace/codex-web-phone/uploads
       CODEX_WEB_AUDIT_LOG_PATH: /home/hzy/workspace/codex-web-phone/logs/audit.jsonl
+      CODEX_WEB_DATA_DIR: /home/hzy/workspace/codex-web-phone/data
     volumes:
       - type: bind
         source: /home/hzy/workspace
@@ -32,3 +33,6 @@ services:
       - type: bind
         source: /home/hzy/workspace/codex-web-phone/logs
         target: /home/hzy/workspace/codex-web-phone/logs
+      - type: bind
+        source: /home/hzy/workspace/codex-web-phone/data
+        target: /home/hzy/workspace/codex-web-phone/data

@@ -60,6 +60,8 @@ describe("Docker deployment files", () => {
     expect(compose).toContain("host.docker.internal:host-gateway");
     expect(compose).toContain("codex-web-uploads");
     expect(compose).toContain("codex-web-logs");
+    expect(compose).toContain("codex-web-data");
+    expect(compose).toContain("CODEX_WEB_DATA_DIR: /var/lib/codex-web/data");
     expect(compose).toContain("${CODEX_WEB_WORKSPACE_ROOTS");
   });
 
@@ -96,6 +98,7 @@ describe("Docker deployment files", () => {
       "CODEX_WEB_WORKSPACE_ROOTS",
       "CODEX_WEB_UPLOAD_DIR",
       "CODEX_WEB_AUDIT_LOG_PATH",
+      "CODEX_WEB_DATA_DIR",
       "CODEX_WEB_BIND_HOST",
       "CODEX_WEB_BIND_PORT",
       "CODEX_WEB_APP_SERVER_MODE",

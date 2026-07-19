@@ -170,8 +170,14 @@ describe("timeline conversion", () => {
       { id: "u3", turnId: "turn-3", turnIndex: 2, createdAt: 5, body: { kind: "user-message", text: "three" } }
     ] as const;
 
-    expect(rollbackTurnsForEntry([...entries], entries[2])).toBe(2);
-    expect(rollbackTurnsForEntry([...entries], entries[4])).toBe(1);
+    const options = {
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2", "turn-3"]
+      }
+    };
+    expect(rollbackTurnsForEntry([...entries], entries[2], options)).toBe(2);
+    expect(rollbackTurnsForEntry([...entries], entries[4], options)).toBe(1);
   });
 
   it("should compute rollback turn count from ordered distinct normalized turns", () => {
@@ -183,8 +189,14 @@ describe("timeline conversion", () => {
       { id: "a2", turnId: "turn-2", createdAt: 5, body: { kind: "agent-message", text: "two reply" } }
     ] as const;
 
-    expect(rollbackTurnsForEntry([...entries], entries[0])).toBe(2);
-    expect(rollbackTurnsForEntry([...entries], entries[3])).toBe(1);
+    const options = {
+      turnManifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
+    };
+    expect(rollbackTurnsForEntry([...entries], entries[0], options)).toBe(2);
+    expect(rollbackTurnsForEntry([...entries], entries[3], options)).toBe(1);
   });
 
   it("should keep only entries before the target turn for rewind draft semantics", () => {

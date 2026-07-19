@@ -65,6 +65,7 @@ CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=/home/你的用户名/workspace
 CODEX_WEB_UPLOAD_DIR=/var/lib/codex-web/uploads
 CODEX_WEB_AUDIT_LOG_PATH=/var/log/codex-web/audit.jsonl
+CODEX_WEB_DATA_DIR=/var/lib/codex-web/data
 CODEX_WEB_BIND_HOST=0.0.0.0
 CODEX_WEB_BIND_PORT=3000
 CODEX_WEB_APP_SERVER_MODE=external
@@ -102,6 +103,8 @@ services:
       - .env.docker
     ports:
       - "3000:3000"
+    volumes:
+      - codex-web-data:/var/lib/codex-web/data
 ```
 
 启动：
@@ -167,6 +170,7 @@ docker run -d \
   --add-host host.docker.internal:host-gateway \
   -v codex-web-uploads:/var/lib/codex-web/uploads \
   -v codex-web-logs:/var/log/codex-web \
+  -v codex-web-data:/var/lib/codex-web/data \
   -v "$CODEX_WEB_WORKSPACE_ROOTS:$CODEX_WEB_WORKSPACE_ROOTS" \
   registry.cn-shanghai.aliyuncs.com/huangzhenyu_2532/codex-web:0.1.0
 ```
@@ -198,17 +202,36 @@ Compose 使用 Docker volume 持久化：
 
 - `codex-web-uploads` -> `/var/lib/codex-web/uploads`
 - `codex-web-logs` -> `/var/log/codex-web`
+- `codex-web-data` -> `/var/lib/codex-web/data`
 
 对应环境变量：
 
 ```env
 CODEX_WEB_UPLOAD_DIR=/var/lib/codex-web/uploads
 CODEX_WEB_AUDIT_LOG_PATH=/var/log/codex-web/audit.jsonl
+CODEX_WEB_DATA_DIR=/var/lib/codex-web/data
 ```
 
-重建容器不会删除这些 volume。需要备份时使用 Docker volume 的标准备份流程。
+`codex-web-data` 中包含自定义模型目录 `custom-models.json` 和已有会话模型绑定 `thread-model-bindings.json`。重建容器不会删除这些 volume；多个 Web 实例共享同一目录时，底层存储必须支持可靠的独占创建、原子 rename 和 fsync 语义，不能使用破坏这些语义的对象存储挂载。
+
+备份前停止目录 mutation 和模型切换，再执行：
+
+```bash
+docker run --rm \
+  -v codex-web-data:/data:ro \
+  -v "$PWD:/backup" \
+  alpine tar -czf /backup/codex-web-data.tgz -C /data .
+```
+
+恢复时先停止 Web 容器，使用同一 schema 兼容版本将备份解压回 volume，然后再启动服务。不要只恢复 `custom-models.json` 而遗漏绑定文件，否则已有自定义会话会按 Codex 目录模型解释。
+
+## 大窗口模型前置条件
+
+自定义模型窗口默认 `200000`，可配置到 `1000000`。当窗口大于 `272000` 时，保存目录仍然允许，但新建会话、已有会话切换和重新应用配置前，模型标识必须精确存在于 app-server `model/list` 权威目录。部署侧需要在 Codex 配置中维护该目录；Codex Web 不会写入或热重载 `model_catalog_json`。
 
 ## 升级
+
+升级前先备份 `codex-web-data`。如果新版本引入了绑定 schema 变化，必须先确认回滚版本仍能读取当前 schema。
 
 拉取新版本镜像后重新创建容器：
 
@@ -239,6 +262,8 @@ docker compose --env-file .env.docker up -d
 ```
 
 named volume 中的上传和日志数据不受镜像回滚影响。
+
+`codex-web-data` 同样不会随镜像回滚自动删除。回滚前应停止自定义目录 mutation 和模型切换；如果旧后端不认识当前 binding schema，先在新版本中把活跃自定义会话显式切回 Codex 目录模型，或保留能够读取当前 schema 的兼容后端。不要通过删除绑定文件强行回滚，这会让已有会话失去来源身份和恢复快照。
 
 ## 停止
 

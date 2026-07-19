@@ -46,7 +46,29 @@ describe("web/api/client", () => {
       vi.fn().mockResolvedValue(makeResponse({ ok: false, error: "bad" }, { status: 502 }))
     );
     await expect(api("/api/sample")).rejects.toMatchObject({
-      message: "bad"
+      message: "bad",
+      status: 502,
+      body: { ok: false, error: "bad" }
+    });
+  });
+
+  it("保留 switch 409/502/500 的结构化业务终态", async () => {
+    const terminal = {
+      ok: false,
+      outcome: "recovery_failed",
+      code: "SWITCH_RECOVERY_FAILED",
+      operationId: "operation-1",
+      latestState: { blocked: true }
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeResponse(terminal, { status: 500 }))
+    );
+
+    await expect(api("/api/switch")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 500,
+      body: terminal
     });
   });
 

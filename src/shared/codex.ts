@@ -1,4 +1,5 @@
-import type { CanonicalSourceLocator, HistoryStamp } from "./timeline-protocol";
+import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "./timeline-protocol";
+import type { ThreadModelStateView } from "./custom-models";
 
 export type AppServerStatusView = {
   state: "disabled" | "idle" | "starting" | "connecting" | "ready" | "error";
@@ -17,14 +18,19 @@ export type MobileThreadSummary = {
   preview: string;
   cwd: string;
   modelProvider: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
   status: string;
   updatedAt: number;
   generation?: number;
   bootId?: string;
   historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  activeTurnId?: string | null;
   activePermissionProfile?: MobileActivePermissionProfile | null;
+  approvalPolicy?: MobileApprovalPolicy | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
+  modelState?: ThreadModelStateView;
 };
 
 export type MobileThreadPage = {
@@ -34,9 +40,11 @@ export type MobileThreadPage = {
 
 export type MobileModelOption = {
   id: string;
+  model: string;
   label: string;
   isDefault: boolean;
   supportedReasoningEfforts: string[];
+  defaultReasoningEffort: string | null;
   inputModalities: string[];
 };
 
@@ -52,10 +60,12 @@ export type MobileActivePermissionProfile = {
 };
 
 export type MobileApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type MobileApprovalPolicy = "untrusted" | "on-request" | "never";
 
-export type MobilePermissionPayload = {
-  activePermissionProfile?: MobileActivePermissionProfile | null;
-  approvalsReviewer?: MobileApprovalsReviewer | null;
+export type MobilePermissionSelection = {
+  permissions: string | null;
+  approvalPolicy: MobileApprovalPolicy | null;
+  approvalsReviewer: MobileApprovalsReviewer | null;
 };
 
 export type MobileAccountView = {
@@ -641,7 +651,7 @@ export type MobileTimelineItem = {
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
-  systemKind?: "context-compaction";
+  systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
@@ -680,10 +690,13 @@ export type MobileThreadDetail = MobileThreadSummary & {
   bootId?: string;
   historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  activeTurnId?: string | null;
+  turnManifest?: AuthoritativeTurnManifest;
   timeline: MobileTimelineItem[];
   model?: string | null;
   reasoningEffort?: string | null;
   activePermissionProfile?: MobileActivePermissionProfile | null;
+  approvalPolicy?: MobileApprovalPolicy | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
   tokenUsageTotal?: number;
   contextUsage?: MobileThreadContextUsage | null;
@@ -702,6 +715,7 @@ export type MobileTimelinePage = {
   windowStartAnchor?: string;
   windowEndAnchor?: string;
   preservedThrough?: string;
+  turnManifest?: AuthoritativeTurnManifest;
   completeness?: TimelineCompleteness;
   includedBytes?: number;
 };

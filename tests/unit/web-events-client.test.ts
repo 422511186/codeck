@@ -117,6 +117,45 @@ describe("TimelineEventStreamClient", () => {
     expect(received).toEqual([{ type: "timeline-gap", lastEventId: "old-event" }]);
   });
 
+  it("dispatches baseline-required messages and drops pending deltas", () => {
+    vi.useFakeTimers();
+    const client = new TimelineEventStreamClient({
+      url: "/events",
+      autoConnect: false,
+      batchWindowMs: 10,
+      createSource: (url) => new FakeEventSource(url) as unknown as EventSource
+    });
+    const received: WsEvent[] = [];
+    client.onEvent((event) => received.push(event));
+    client.connect();
+
+    const source = FakeEventSource.instances[0]!;
+    source.emit("message", {
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "agent-1",
+        delta: "stale"
+      }
+    });
+    source.emit("message", {
+      type: "timeline-baseline-required",
+      bootId: "boot-a",
+      streamCursor: 9,
+      scope: "all-tracked"
+    });
+
+    vi.advanceTimersByTime(10);
+    expect(received).toEqual([{
+      type: "timeline-baseline-required",
+      bootId: "boot-a",
+      streamCursor: 9,
+      scope: "all-tracked"
+    }]);
+  });
+
   it("buffers events received while no listener is registered and flushes them to the next listener", () => {
     const client = new TimelineEventStreamClient({
       url: "/events",

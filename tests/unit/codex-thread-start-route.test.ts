@@ -19,6 +19,12 @@ vi.mock("../../src/server/app-server/runtime", () => ({
   })
 }));
 
+vi.mock("../../src/server/custom-models/runtime", () => ({
+  getThreadModelLifecycleService: () => ({
+    startThread: (...args: unknown[]) => mockStartThread(...args)
+  })
+}));
+
 describe("codex thread start route", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -50,10 +56,10 @@ describe("codex thread start route", () => {
     expect(mockStartThread).toHaveBeenCalledWith({
       cwd: "C:\\repo",
       workspaceRoots: undefined,
-      model: undefined,
       permissions: undefined,
+      approvalPolicy: undefined,
       approvalsReviewer: undefined
-    });
+    }, undefined, undefined);
   });
 
   it("把权限 payload 从 HTTP body 转发给 app-server", async () => {
@@ -66,6 +72,7 @@ describe("codex thread start route", () => {
         body: JSON.stringify({
           cwd: "C:\\repo",
           permissions: ":workspace",
+          approvalPolicy: "on-request",
           approvalsReviewer: "auto_review"
         })
       })
@@ -75,10 +82,10 @@ describe("codex thread start route", () => {
     expect(mockStartThread).toHaveBeenCalledWith({
       cwd: "C:\\repo",
       workspaceRoots: undefined,
-      model: undefined,
       permissions: ":workspace",
+      approvalPolicy: "on-request",
       approvalsReviewer: "auto_review"
-    });
+    }, undefined, undefined);
   });
 
   it("把 permissions null 和 approvalsReviewer null 从 HTTP body 转发给 app-server", async () => {
@@ -88,7 +95,12 @@ describe("codex thread start route", () => {
       new Request("http://localhost/api/codex/threads/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd: "C:\\repo", permissions: null, approvalsReviewer: null })
+        body: JSON.stringify({
+          cwd: "C:\\repo",
+          permissions: null,
+          approvalPolicy: null,
+          approvalsReviewer: null
+        })
       })
     );
 
@@ -96,10 +108,46 @@ describe("codex thread start route", () => {
     expect(mockStartThread).toHaveBeenCalledWith({
       cwd: "C:\\repo",
       workspaceRoots: undefined,
-      model: undefined,
       permissions: null,
+      approvalPolicy: null,
       approvalsReviewer: null
-    });
+    }, undefined, undefined);
+  });
+
+  it("结构化自定义选择和 catalogRevision 一次传给生命周期服务", async () => {
+    const { POST } = await import("../../src/app/api/codex/threads/start/route");
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd: "C:\\repo",
+          modelSelection: { source: "custom", customModelId: "custom-1" },
+          catalogRevision: 3
+        })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "C:\\repo" }),
+      { source: "custom", customModelId: "custom-1" },
+      3
+    );
+  });
+
+  it("拒绝旧 model 字符串，禁止通用字符串推断来源", async () => {
+    const { POST } = await import("../../src/app/api/codex/threads/start/route");
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "C:\\repo", model: "mimo-v2.5-pro" })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(mockStartThread).not.toHaveBeenCalled();
   });
 
   it("同一个 clientOperationId 的并发重复请求只创建一个会话", async () => {

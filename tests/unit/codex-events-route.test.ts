@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockListBrowserEventBacklog = vi.fn();
 const mockOnBrowserEvent = vi.fn();
+const mockAudit = vi.fn();
 
 vi.mock("../../src/server/auth", () => ({
   isRequestAuthenticated: () => true
+}));
+
+vi.mock("../../src/server/security", () => ({
+  audit: (...args: unknown[]) => mockAudit(...args)
 }));
 
 vi.mock("../../src/server/app-server/runtime", async (importOriginal) => {
@@ -23,6 +28,8 @@ describe("codex events route", () => {
     vi.resetModules();
     mockListBrowserEventBacklog.mockReset();
     mockOnBrowserEvent.mockReset();
+    mockAudit.mockReset();
+    mockAudit.mockResolvedValue(undefined);
     mockOnBrowserEvent.mockReturnValue(() => undefined);
     mockListBrowserEventBacklog.mockReturnValue({ events: [], gap: false });
   });
@@ -85,6 +92,42 @@ describe("codex events route", () => {
     expect(body).toContain('"type":"timeline-gap"');
     expect(body).toContain('"lastEventId":"thread-1:9:9:agent_message_delta"');
     expect(body).toContain('"threadId":"thread-1"');
+  });
+
+  it("无 cursor 时即使 backlog 有记录也发送 baseline-required 控制事件", async () => {
+    mockListBrowserEventBacklog.mockReturnValue({
+      events: [
+        {
+          type: "codex-event",
+          event: {
+            kind: "turn_started",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            eventId: "event-1"
+          }
+        }
+      ],
+      gap: false,
+      bootId: "boot-a",
+      streamCursor: 4,
+      baselineRequired: true
+    });
+
+    const { GET } = await import("../../src/app/api/codex/events/route");
+    const abort = new AbortController();
+    const response = await GET(new Request("http://localhost/api/codex/events", { signal: abort.signal }));
+    abort.abort();
+    const body = await response.text();
+
+    expect(body).toContain('"type":"timeline-baseline-required"');
+    expect(body).toContain('"bootId":"boot-a"');
+    expect(body).toContain('"streamCursor":4');
+    expect(body).toContain('"kind":"turn_started"');
+    expect(mockAudit).toHaveBeenCalledWith("timeline.stream.baseline_required", {
+      bootId: "boot-a",
+      streamCursor: 4,
+      scope: "all-tracked"
+    });
   });
 
   it("timeline gap 保留完整 affectedThreadIds", async () => {

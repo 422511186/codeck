@@ -1,4 +1,5 @@
-import type { CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
+import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
+import type { ThreadModelStateView } from "../../shared/custom-models";
 
 export type ApiOk<T> = { ok: true } & T;
 export type ApiErr = { ok: false; error?: string };
@@ -10,13 +11,18 @@ export type ThreadSummary = {
   preview: string;
   cwd: string;
   modelProvider: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  modelState?: ThreadModelStateView;
   status: string;
   updatedAt: number;
   generation?: number;
   bootId?: string;
   historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  activeTurnId?: string | null;
   activePermissionProfile?: ActivePermissionProfile | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
 };
 
@@ -37,6 +43,7 @@ export type TimelineItem = {
   bootId?: string;
   historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  activeTurnId?: string | null;
   streamSequence?: number;
   fragmentSequence?: number;
   baselineWatermark?: number;
@@ -47,7 +54,7 @@ export type TimelineItem = {
   imagePaths?: string[];
   skillReferences?: SkillReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
-  systemKind?: "context-compaction";
+  systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";
   server?: string;
   tool?: string;
@@ -66,10 +73,10 @@ export type ThreadDetail = ThreadSummary & {
   bootId?: string;
   historyStamp?: HistoryStamp;
   snapshotSequence?: number;
+  turnManifest?: AuthoritativeTurnManifest;
   timeline: TimelineItem[];
-  model?: string | null;
-  reasoningEffort?: string | null;
   activePermissionProfile?: ActivePermissionProfile | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   contextUsage?: ThreadContextUsage | null;
   goal?: ThreadGoal | null;
@@ -107,6 +114,7 @@ export type TimelinePage = {
   windowStartAnchor?: string;
   windowEndAnchor?: string;
   preservedThrough?: string;
+  turnManifest?: AuthoritativeTurnManifest;
   completeness?: TimelineCompleteness;
   includedBytes?: number;
 };
@@ -148,6 +156,13 @@ export type ActivePermissionProfile = {
 };
 
 export type ApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type ApprovalPolicy = "untrusted" | "on-request" | "never";
+
+export type PermissionSelection = {
+  permissions: string | null;
+  approvalPolicy: ApprovalPolicy | null;
+  approvalsReviewer: ApprovalsReviewer | null;
+};
 
 export type UploadedImage = {
   path: string;

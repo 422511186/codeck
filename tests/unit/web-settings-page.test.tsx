@@ -8,14 +8,14 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace })
 }));
 
-const mockModels = vi.fn();
+const mockModelCatalog = vi.fn();
 const mockAuthStatus = vi.fn();
 const mockTokenUsage = vi.fn();
 const mockLogout = vi.fn();
 
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
-    models: () => mockModels(),
+    modelCatalog: () => mockModelCatalog(),
     authStatus: () => mockAuthStatus(),
     tokenUsage: () => mockTokenUsage()
   },
@@ -28,12 +28,14 @@ const mockLoadSettings = vi.fn();
 const mockUpdateSettings = vi.fn();
 const mockApplyTheme = vi.fn();
 const mockResetTimelineEventStreamClient = vi.fn();
+const mockMigrateLegacyDefaultModel = vi.fn();
 
 vi.mock("../../src/web/storage/settings", () => ({
   settingsStore: {
     load: () => mockLoadSettings(),
     update: (...args: unknown[]) => mockUpdateSettings(...args)
   },
+  migrateLegacyDefaultModel: (...args: unknown[]) => mockMigrateLegacyDefaultModel(...args),
   applyTheme: (...args: unknown[]) => mockApplyTheme(...args),
   themeLabel: (theme: string) => ({ system: "自适应", light: "明亮", dark: "暗黑" })[theme] ?? theme
 }));
@@ -55,21 +57,27 @@ vi.mock("../../src/web/events/client", () => ({
 describe("SettingsPage", () => {
   beforeEach(() => {
     mockReplace.mockClear();
-    mockModels.mockResolvedValue([
-      {
-        id: "openai/gpt-5",
+    mockModelCatalog.mockResolvedValue({
+      catalogRevision: 1,
+      appServerModelNames: ["openai/gpt-5"],
+      models: [{
+        source: "app-server",
+        model: "openai/gpt-5",
         label: "GPT-5",
+        contextWindow: null,
         isDefault: false,
         supportedReasoningEfforts: [],
+        defaultReasoningEffort: null,
         inputModalities: ["text"]
-      }
-    ]);
+      }]
+    });
     mockAuthStatus.mockResolvedValue({ authMethod: "chatgpt", hasAuthToken: true, requiresOpenaiAuth: false });
     mockTokenUsage.mockResolvedValue({
       summary: { lifetimeTokens: 2_000_000, peakDailyTokens: 500_000 }
     });
     mockLogout.mockResolvedValue(undefined);
     mockLoadSettings.mockReturnValue({ defaultMode: "build", defaultModel: null, theme: "system" });
+    mockMigrateLegacyDefaultModel.mockImplementation(() => mockLoadSettings());
     mockUpdateSettings.mockClear();
     mockApplyTheme.mockClear();
     mockResetTimelineEventStreamClient.mockClear();
@@ -82,11 +90,13 @@ describe("SettingsPage", () => {
 
     fireEvent.change(screen.getByDisplayValue("Build"), { target: { value: "plan" } });
     fireEvent.change(screen.getByDisplayValue("（跟随后端默认）"), {
-      target: { value: "openai/gpt-5" }
+      target: { value: "app-server:openai/gpt-5" }
     });
 
     expect(mockUpdateSettings).toHaveBeenCalledWith({ defaultMode: "plan" });
-    expect(mockUpdateSettings).toHaveBeenCalledWith({ defaultModel: "openai/gpt-5" });
+    expect(mockUpdateSettings).toHaveBeenCalledWith({
+      defaultModel: { source: "app-server", model: "openai/gpt-5" }
+    });
   });
 
   it("persists and applies theme selection", async () => {
@@ -109,6 +119,15 @@ describe("SettingsPage", () => {
     expect(screen.getByText("2.00M tokens")).toBeInTheDocument();
     expect(screen.queryByText("ChatGPT 登录")).not.toBeInTheDocument();
     expect(screen.queryByText("Codex 账号登出")).not.toBeInTheDocument();
+  });
+
+  it("提供独立自定义模型入口且不暴露 provider、URL 或凭据管理", async () => {
+    render(<SettingsPage />);
+
+    const link = await screen.findByRole("link", { name: "自定义模型" });
+    expect(link).toHaveAttribute("href", "/settings/custom-models");
+    expect(screen.queryByText(/provider/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/base url|api key|凭据/i)).not.toBeInTheDocument();
   });
 
   it("keeps account status visible when token usage is unavailable", async () => {

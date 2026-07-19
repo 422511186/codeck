@@ -23,6 +23,12 @@ vi.mock("../../src/server/app-server/runtime", () => ({
   })
 }));
 
+vi.mock("../../src/server/custom-models/runtime", () => ({
+  getThreadModelLifecycleService: () => ({
+    resumeThread: (...args: unknown[]) => mockResumeThread(...args)
+  })
+}));
+
 function unexpectedTimeline(): Array<{ id: string; role: "user"; text: string }> {
   return Array.from({ length: 80 }, (_, index) => ({
     id: `unexpected-${index}`,

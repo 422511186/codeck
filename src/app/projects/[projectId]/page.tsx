@@ -7,13 +7,14 @@ import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { dedupeRequest, runLockedAction } from "../../../web/api/requestCoordinator";
 import { getProject, touchProjectLastUsed, type Project } from "../../../web/storage/projects";
-import { settingsStore } from "../../../web/storage/settings";
+import { migrateLegacyDefaultModel, settingsStore } from "../../../web/storage/settings";
 import { saveJson, threadModeKey } from "../../../web/storage/localStore";
 import {
   DEFAULT_COLLABORATION_MODEL,
   collaborationModeForChatMode,
   type ThreadSummary
 } from "../../../web/api/types";
+import { modelSelectionsEqual, type ModelSelection, type SelectableModel } from "../../../shared/custom-models";
 
 type Tab = "active" | "archived";
 
@@ -77,15 +78,29 @@ export default function ProjectThreadsPage(): JSX.Element {
       const result = await runLockedAction(`startThread:${project.id}`, async () => {
         setStartPending(true);
         try {
-          const settings = settingsStore.load();
+          const catalog = await codex.modelCatalog();
+          const settings = migrateLegacyDefaultModel(catalog.models, catalog.appServerModelNames);
           const serverDefaults = settings.defaultMode === "plan" ? await readServerDefaults() : null;
-          const planModel = settings.defaultModel ?? serverDefaults?.model ?? DEFAULT_COLLABORATION_MODEL;
+          const selectedModel = findSelectedModel(catalog.models, settings.defaultModel);
+          const planModel = selectedModel?.model ?? serverDefaults?.model ?? DEFAULT_COLLABORATION_MODEL;
           const planEffort = serverDefaults?.reasoningEffort ?? null;
-          const thread = await codex.startThread({
+          const startInput = {
             cwd: project.path,
             clientOperationId,
-            ...(settings.defaultModel ? { model: settings.defaultModel } : {})
-          });
+            ...(settings.defaultModel
+              ? { modelSelection: settings.defaultModel, catalogRevision: catalog.catalogRevision }
+              : {})
+          };
+          let thread;
+          try {
+            thread = await codex.startThread(startInput);
+          } catch (startError) {
+            if (!settings.defaultModel || !isInvalidDefaultModelError(startError)) {
+              throw startError;
+            }
+            settingsStore.update({ defaultModel: null });
+            thread = await codex.startThread({ cwd: project.path, clientOperationId });
+          }
           saveJson(threadModeKey(thread.id), settings.defaultMode);
           if (settings.defaultMode === "plan") {
             try {
@@ -268,6 +283,31 @@ async function readServerDefaults(): Promise<{ model: string | null; reasoningEf
   } catch {
     return null;
   }
+}
+
+function findSelectedModel(
+  models: SelectableModel[],
+  selection: ModelSelection | null
+): SelectableModel | null {
+  if (!selection) {
+    return null;
+  }
+  return models.find((model) =>
+    modelSelectionsEqual(
+      model.source === "custom"
+        ? { source: "custom", customModelId: model.customModelId }
+        : { source: "app-server", model: model.model },
+      selection
+    )
+  ) ?? null;
+}
+
+function isInvalidDefaultModelError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || typeof error.body !== "object" || error.body === null) {
+    return false;
+  }
+  const code = (error.body as { code?: unknown }).code;
+  return code === "CUSTOM_MODEL_NOT_FOUND" || code === "MODEL_SELECTION_INVALID";
 }
 
 function TabButton({

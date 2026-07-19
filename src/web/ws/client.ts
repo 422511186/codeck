@@ -52,6 +52,13 @@ export type WsTimelineGapEvent = {
   bootId?: string;
   lastEventId?: string;
 };
+export type WsTimelineBaselineRequiredEvent = {
+  type: "timeline-baseline-required";
+  bootId: string;
+  streamCursor: number;
+  scope?: "threads" | "all-tracked";
+  affectedThreadIds?: string[];
+};
 
 export type WsEvent =
   | WsHelloEvent
@@ -60,7 +67,8 @@ export type WsEvent =
   | WsCodexEventBatch
   | WsServerRequestEvent
   | WsServerRequestResolvedEvent
-  | WsTimelineGapEvent;
+  | WsTimelineGapEvent
+  | WsTimelineBaselineRequiredEvent;
 
 export type WsConnectionState = "connecting" | "open" | "closed" | "reconnecting";
 

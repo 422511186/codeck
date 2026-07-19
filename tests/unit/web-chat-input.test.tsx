@@ -37,6 +37,7 @@ function renderInput(overrides: Partial<React.ComponentProps<typeof ChatInput>> 
     reasoningEffortLabel: "Medium",
     onOpenPermissionPicker: vi.fn(),
     onOpenModelPicker: vi.fn(),
+    onOpenReasoningPicker: vi.fn(),
     onSend: vi.fn().mockResolvedValue(undefined),
     onInterrupt: vi.fn().mockResolvedValue(undefined),
     ...overrides
@@ -145,6 +146,37 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
+  it("保留 text-only 模型不兼容的草稿图片，并在移除图片或切回 image 后恢复发送", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { container, rerender, props } = renderInput({ onSend });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "保留这份草稿");
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["image"], "image.png", { type: "image/png" })] }
+    });
+    await waitFor(() => expect(screen.getByLabelText("发送")).toBeEnabled());
+
+    rerender(<ChatInput {...props} onSend={onSend} imageInputSupported={false} />);
+    expect(screen.getByText("当前模型不支持图片，请移除草稿图片或切换模型")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("保留这份草稿");
+    expect(container.querySelector("img")).toBeInTheDocument();
+    expect(screen.getByLabelText("发送")).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "移除图片" }));
+    expect(screen.queryByText("当前模型不支持图片，请移除草稿图片或切换模型")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("发送")).toBeEnabled();
+
+    fireEvent.change(input, {
+      target: { files: [new File(["image"], "image.png", { type: "image/png" })] }
+    });
+    await waitFor(() => expect(screen.getByText("当前模型不支持图片，请移除草稿图片或切换模型")).toBeInTheDocument());
+    rerender(<ChatInput {...props} onSend={onSend} imageInputSupported />);
+    expect(screen.queryByText("当前模型不支持图片，请移除草稿图片或切换模型")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("发送")).toBeEnabled();
+  });
+
   it("appends multiple selected images and sends all uploaded paths", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn().mockResolvedValue(undefined);
@@ -210,7 +242,8 @@ describe("ChatInput", () => {
     expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
     expect(screen.getByLabelText("添加内容")).toBeEnabled();
     expect(screen.getByRole("button", { name: "权限 完全访问" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "模型 gpt-5-codex Medium" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "模型 gpt-5-codex" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "推理强度 Medium" })).toBeEnabled();
     expect(screen.getByLabelText("中断")).toBeInTheDocument();
     expect(screen.queryByLabelText("发送")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("添加图片")).not.toBeInTheDocument();
@@ -521,19 +554,23 @@ describe("ChatInput", () => {
     const user = userEvent.setup();
     const onOpenPermissionPicker = vi.fn();
     const onOpenModelPicker = vi.fn();
-    renderInput({ onOpenPermissionPicker, onOpenModelPicker });
+    const onOpenReasoningPicker = vi.fn();
+    renderInput({ onOpenPermissionPicker, onOpenModelPicker, onOpenReasoningPicker });
 
     await user.click(screen.getByRole("button", { name: "权限 完全访问" }));
-    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex Medium" }));
+    await user.click(screen.getByRole("button", { name: "模型 gpt-5-codex" }));
+    await user.click(screen.getByRole("button", { name: "推理强度 Medium" }));
 
     expect(onOpenPermissionPicker).toHaveBeenCalledTimes(1);
     expect(onOpenModelPicker).toHaveBeenCalledTimes(1);
+    expect(onOpenReasoningPicker).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "权限 完全访问" })).toHaveTextContent("完全访问");
     expect(screen.getByRole("button", { name: "权限 完全访问" })).not.toHaveTextContent("⌄");
-    const modelButton = screen.getByRole("button", { name: "模型 gpt-5-codex Medium" });
-    expect(modelButton).toHaveTextContent("gpt-5-codex Medium");
+    const modelButton = screen.getByRole("button", { name: "模型 gpt-5-codex" });
+    expect(modelButton).toHaveTextContent("gpt-5-codex");
     expect(modelButton).not.toHaveTextContent("，");
     expect(modelButton).not.toHaveTextContent(",");
     expect(modelButton).not.toHaveTextContent("⌄");
+    expect(screen.getByRole("button", { name: "推理强度 Medium" })).toHaveTextContent("Medium");
   });
 });

@@ -59,6 +59,7 @@ import type {
   MobileThreadElicitationResult,
   MobileThreadGoalView,
   MobileThreadMetadataUpdateInput,
+  MobilePermissionSelection,
   MobileThreadRealtimeStatusResult,
   MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
@@ -83,13 +84,17 @@ import {
 } from "../../shared/timeline-content";
 import {
   resolveAgentMessageAlias,
+  timelineEmptyWindowAnchor,
   type AgentMessageAliasCandidate,
   type AgentMessageAliasResolution,
+  type AuthoritativeTurnManifest,
+  type HistoryStamp,
   type TimelineGapScope
 } from "../../shared/timeline-protocol";
 import { getRuntimeConfig } from "../runtime";
 import {
   CodexAppServerClient,
+  TimelineRepairRequiredError,
   type AddEnvironmentInput,
   type AddMarketplaceInput,
   type AppendThreadRealtimeAudioInput,
@@ -117,6 +122,7 @@ import {
   type StartCommandExecInput,
   type StartProcessInput,
   type StartThreadInput,
+  type ThreadRuntimeOverrides,
   type StartThreadRealtimeInput,
   type StartTurnInput,
   type UpdatePluginShareTargetsInput,
@@ -185,6 +191,7 @@ import type { ThreadListParams } from "../../../docs/generated/app-server-ts/v2/
 import type { ThreadSearchParams } from "../../../docs/generated/app-server-ts/v2/ThreadSearchParams";
 import type { ThreadMemoryModeSetParams } from "../../../docs/generated/app-server-ts/v2/ThreadMemoryModeSetParams";
 import type { ApprovalsReviewer } from "../../../docs/generated/app-server-ts/v2/ApprovalsReviewer";
+import type { AskForApproval } from "../../../docs/generated/app-server-ts/v2/AskForApproval";
 
 type TextUserInput = { type: "text"; text: string };
 type TimelineOverlayEntry = {
@@ -707,6 +714,10 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter((value) => value.length > 0)));
 }
 
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function diffStats(diff: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
@@ -847,6 +858,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private threads: Thread[] = [this.thread];
   private readonly archivedThreads = new Map<string, Thread>();
   private readonly permissionProfilesByThread = new Map<string, string | null>();
+  private readonly approvalPoliciesByThread = new Map<string, AskForApproval | null>();
   private readonly approvalsReviewersByThread = new Map<string, ApprovalsReviewer | null>();
   private turnCounter = 1;
   private itemCounter = 2;
@@ -1108,22 +1120,25 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     if (method === "thread/resume") {
       const resumeParams = params as ThreadResumeParams;
       const thread = this.selectThread(resumeParams.threadId);
+      const runtimeConfig = resumeParams.config as Record<string, unknown> | null | undefined;
       return {
         thread: resumeParams.excludeTurns ? { ...thread, turns: [] } : thread,
-        model: "gpt-5-codex",
-        modelProvider: "openai",
+        model: resumeParams.model || "gpt-5-codex",
+        modelProvider: resumeParams.modelProvider || "openai",
         serviceTier: null,
         cwd: thread.cwd,
         runtimeWorkspaceRoots: ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
-        approvalPolicy: "untrusted",
+        approvalPolicy: this.approvalPolicyForThread(thread.id),
         approvalsReviewer: this.approvalsReviewerForThread(thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(thread.id),
-        reasoningEffort: "medium",
+        reasoningEffort: typeof runtimeConfig?.model_reasoning_effort === "string"
+          ? runtimeConfig.model_reasoning_effort
+          : "medium",
         initialTurnsPage: resumeParams.initialTurnsPage
           ? {
-              data: thread.turns.slice(0, resumeParams.initialTurnsPage.limit || undefined),
+              data: [...thread.turns].reverse().slice(0, resumeParams.initialTurnsPage.limit || undefined),
               nextCursor: null,
               backwardsCursor: null
             }
@@ -1133,8 +1148,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/turns/list") {
       const listParams = params as ThreadTurnsListParams;
+      const turns = listParams.sortDirection === "desc" ? [...this.thread.turns].reverse() : this.thread.turns;
       return {
-        data: this.thread.turns.slice(0, listParams.limit || undefined),
+        data: turns.slice(0, listParams.limit || undefined),
         nextCursor: null,
         backwardsCursor: null
       };
@@ -1154,6 +1170,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
     if (method === "thread/start") {
       const startParams = params as ThreadStartParams;
+      const runtimeConfig = startParams.config as Record<string, unknown> | null | undefined;
       this.thread = {
         ...this.createThread(),
         id: `mock-thread-${Date.now()}`,
@@ -1164,6 +1181,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         turns: []
       };
       this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
+      if ("approvalPolicy" in startParams) {
+        this.approvalPoliciesByThread.set(this.thread.id, startParams.approvalPolicy ?? null);
+      }
       if ("approvalsReviewer" in startParams) {
         this.approvalsReviewersByThread.set(this.thread.id, startParams.approvalsReviewer ?? null);
       }
@@ -1172,16 +1192,18 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       return {
         thread: this.thread,
         model: startParams.model || "gpt-5-codex",
-        modelProvider: "openai",
+        modelProvider: startParams.modelProvider || "openai",
         serviceTier: null,
         cwd: this.thread.cwd,
         runtimeWorkspaceRoots: startParams.runtimeWorkspaceRoots || ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
-        approvalPolicy: "untrusted",
+        approvalPolicy: this.approvalPolicyForThread(this.thread.id),
         approvalsReviewer: this.approvalsReviewerForThread(this.thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
-        reasoningEffort: null
+        reasoningEffort: typeof runtimeConfig?.model_reasoning_effort === "string"
+          ? runtimeConfig.model_reasoning_effort
+          : null
       };
     }
 
@@ -1201,6 +1223,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         this.thread.id,
         this.permissionProfilesByThread.get(forkParams.threadId) ?? null
       );
+      this.approvalPoliciesByThread.set(
+        this.thread.id,
+        this.approvalPoliciesByThread.get(forkParams.threadId) ?? null
+      );
       this.approvalsReviewersByThread.set(
         this.thread.id,
         this.approvalsReviewersByThread.get(forkParams.threadId) ?? null
@@ -1215,7 +1241,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         cwd: this.thread.cwd,
         runtimeWorkspaceRoots: forkParams.runtimeWorkspaceRoots || ["C:\\Users\\huang\\workspace"],
         instructionSources: [],
-        approvalPolicy: "untrusted",
+        approvalPolicy: this.approvalPolicyForThread(this.thread.id),
         approvalsReviewer: this.approvalsReviewerForThread(this.thread.id),
         sandbox: { mode: "workspace-write" },
         activePermissionProfile: this.activePermissionProfileForThread(this.thread.id),
@@ -1253,6 +1279,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       const thread = this.selectThread(settingsParams.threadId);
       if ("permissions" in settingsParams) {
         this.permissionProfilesByThread.set(thread.id, settingsParams.permissions ?? null);
+      }
+      if ("approvalPolicy" in settingsParams) {
+        this.approvalPoliciesByThread.set(thread.id, settingsParams.approvalPolicy ?? null);
       }
       if ("approvalsReviewer" in settingsParams) {
         this.approvalsReviewersByThread.set(thread.id, settingsParams.approvalsReviewer ?? null);
@@ -1554,6 +1583,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
       if ("permissions" in startParams) {
         this.permissionProfilesByThread.set(this.thread.id, startParams.permissions ?? null);
       }
+      if ("approvalPolicy" in startParams) {
+        this.approvalPoliciesByThread.set(this.thread.id, startParams.approvalPolicy ?? null);
+      }
       if ("approvalsReviewer" in startParams) {
         this.approvalsReviewersByThread.set(this.thread.id, startParams.approvalsReviewer ?? null);
       }
@@ -1602,7 +1634,9 @@ class MockAppServerPeer implements ManagedAppServerPeer {
           threadId: startParams.threadId,
           turnId
         };
-        this.emitServerRequest(this.createMockServerRequest(text, baseParams, `mock-approval-${this.itemCounter}`));
+        if (this.approvalPolicyForThread(startParams.threadId) !== "never") {
+          this.emitServerRequest(this.createMockServerRequest(text, baseParams, `mock-approval-${this.itemCounter}`));
+        }
         this.emitNotification({
           method: "item/reasoning/textDelta",
           params: { ...baseParams, itemId: `mock-reasoning-${this.itemCounter}`, delta: `思考：${text}` }
@@ -2704,10 +2738,18 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   }
 
   private selectThread(threadId: string | undefined): Thread {
-    const thread =
+    let thread =
       this.threads.find((item) => item.id === threadId) ||
-      (threadId ? this.archivedThreads.get(threadId) : null) ||
-      this.thread;
+      (threadId ? this.archivedThreads.get(threadId) : null);
+    if (!thread && threadId) {
+      thread = {
+        ...this.createThread(),
+        id: threadId,
+        sessionId: `mock-session-${threadId}`
+      };
+      this.upsertThread(thread);
+    }
+    thread ??= this.thread;
     this.thread = thread;
     return thread;
   }
@@ -2719,6 +2761,10 @@ class MockAppServerPeer implements ManagedAppServerPeer {
 
   private approvalsReviewerForThread(threadId: string): ApprovalsReviewer {
     return this.approvalsReviewersByThread.get(threadId) ?? "user";
+  }
+
+  private approvalPolicyForThread(threadId: string): AskForApproval {
+    return this.approvalPoliciesByThread.get(threadId) ?? "untrusted";
   }
 
   private upsertThread(thread: Thread): void {
@@ -3089,6 +3135,105 @@ class DisabledAppServerPeer implements ManagedAppServerPeer {
 
 const MAX_TERMINAL_TURN_IDS_PER_THREAD = 32;
 
+export type ThreadRuntimeReloadInput = ThreadRuntimeOverrides & {
+  threadId: string;
+  model: string;
+  modelProvider: string;
+};
+
+export type RollbackThreadInput = {
+  operationId: string;
+  targetTurnId: string;
+  historyStamp: HistoryStamp;
+  expectedTailTurnIds: string[];
+};
+
+export class RollbackConflictError extends Error {
+  readonly code = "ROLLBACK_CONFLICT" as const;
+  readonly httpStatus = 409;
+
+  constructor(readonly actualTailTurnIds: string[], message = "会话尾部已变化，请刷新后重试") {
+    super(message);
+    this.name = "RollbackConflictError";
+  }
+}
+
+export class RollbackUnresolvedError extends Error {
+  readonly code = "ROLLBACK_UNRESOLVED" as const;
+  readonly httpStatus = 409;
+
+  constructor() {
+    super("rollback 操作属于旧的服务进程，结果无法安全确认");
+    this.name = "RollbackUnresolvedError";
+  }
+}
+
+type RollbackOperationEntry = {
+  fingerprint: string;
+  promise: Promise<MobileThreadDetail>;
+};
+
+export class CurrentModelProviderError extends Error {
+  readonly code = "CURRENT_PROVIDER_UNAVAILABLE" as const;
+
+  constructor() {
+    super("Codex 当前配置没有可用的 modelProvider");
+    this.name = "CurrentModelProviderError";
+  }
+}
+
+export class ThreadRuntimeBusyError extends Error {
+  readonly code = "THREAD_BUSY" as const;
+
+  constructor(readonly threadId: string) {
+    super("会话存在运行中的 turn，无法切换模型");
+    this.name = "ThreadRuntimeBusyError";
+  }
+}
+
+export type ThreadRuntimeIdentity = {
+  model: string | null;
+  modelProvider: string;
+  reasoningEffort: string | null;
+};
+
+export class ThreadRuntimeVerificationError extends Error {
+  readonly code = "RUNTIME_VERIFICATION_FAILED" as const;
+
+  constructor(
+    readonly expected: ThreadRuntimeIdentity,
+    readonly actual: ThreadRuntimeIdentity
+  ) {
+    super("app-server 冷恢复后的模型运行时身份与目标不一致");
+    this.name = "ThreadRuntimeVerificationError";
+  }
+}
+
+export function verifyThreadRuntime(
+  detail: MobileThreadDetail,
+  expected: { model: string; modelProvider: string; reasoningEffort?: string | null }
+): void {
+  const actual: ThreadRuntimeIdentity = {
+    model: detail.model ?? null,
+    modelProvider: detail.modelProvider,
+    reasoningEffort: detail.reasoningEffort ?? null
+  };
+  const expectedIdentity: ThreadRuntimeIdentity = {
+    model: expected.model,
+    modelProvider: expected.modelProvider,
+    reasoningEffort: expected.reasoningEffort ?? null
+  };
+  const reasoningMatches = expected.reasoningEffort === undefined ||
+    actual.reasoningEffort === expected.reasoningEffort;
+  if (
+    actual.model !== expected.model ||
+    actual.modelProvider !== expected.modelProvider ||
+    !reasoningMatches
+  ) {
+    throw new ThreadRuntimeVerificationError(expectedIdentity, actual);
+  }
+}
+
 export class AppServerGateway {
   private initialized: Promise<void> | null = null;
   private readonly client: CodexAppServerClient;
@@ -3108,7 +3253,10 @@ export class AppServerGateway {
   private readonly timelineContentCursors = new Map<string, TimelineContentCursorState>();
   private readonly timelineContentCursorByPosition = new Map<string, string>();
   private readonly activeTurnIds = new Map<string, string>();
+  private readonly permissionSelectionsByThread = new Map<string, MobilePermissionSelection>();
   private readonly terminalTurnIdsByThread = new Map<string, Set<string>>();
+  private readonly threadMutationLocks = new Map<string, Promise<void>>();
+  private readonly rollbackOperations = new Map<string, RollbackOperationEntry>();
   private readonly outputDecoders = new Map<string, TextDecoder>();
   private processCounter = 0;
   private commandExecCounter = 0;
@@ -3139,6 +3287,7 @@ export class AppServerGateway {
         return;
       }
       this.recordActiveTurnIdentity(event);
+      this.recordPermissionSelectionEvent(event);
       if (this.isDeletedTurnEvent(event)) {
         return;
       }
@@ -3178,9 +3327,17 @@ export class AppServerGateway {
     gap: boolean;
     gapScope?: TimelineGapScope;
     bootId: string;
+    streamCursor: number;
+    baselineRequired: boolean;
   } {
     if (!afterEventId) {
-      return { events: [], gap: false, bootId: this.browserBootId };
+      return {
+        events: [],
+        gap: false,
+        bootId: this.browserBootId,
+        streamCursor: this.browserEventSequence,
+        baselineRequired: true
+      };
     }
 
     const index = this.browserEventBacklog.findIndex((event) => browserEventId(event) === afterEventId);
@@ -3191,7 +3348,9 @@ export class AppServerGateway {
           events: [],
           gap: true,
           gapScope: { scope: "all-tracked" },
-          bootId: this.browserBootId
+          bootId: this.browserBootId,
+          streamCursor: this.browserEventSequence,
+          baselineRequired: false
         };
       }
       const oldestOwnerSequence = this.browserEventOwnerLedger[0]?.streamSequence;
@@ -3200,7 +3359,9 @@ export class AppServerGateway {
           events: [],
           gap: true,
           gapScope: { scope: "all-tracked" },
-          bootId: this.browserBootId
+          bootId: this.browserBootId,
+          streamCursor: this.browserEventSequence,
+          baselineRequired: false
         };
       }
       const owners = new Set<string>();
@@ -3222,14 +3383,18 @@ export class AppServerGateway {
         events: this.browserEventBacklog.filter((event) => browserEventStreamSequence(event) > cursor.streamSequence),
         gap: true,
         gapScope,
-        bootId: this.browserBootId
+        bootId: this.browserBootId,
+        streamCursor: this.browserEventSequence,
+        baselineRequired: false
       };
     }
 
     return {
       events: this.browserEventBacklog.slice(index + 1).filter((event) => !this.isBlockedBacklogEvent(event)),
       gap: false,
-      bootId: this.browserBootId
+      bootId: this.browserBootId,
+      streamCursor: this.browserEventSequence,
+      baselineRequired: false
     };
   }
 
@@ -3367,7 +3532,7 @@ export class AppServerGateway {
     const stablePrefix = normalizedTransition
       ? stableTimelinePrefix(normalizedTransition.previous, normalizedTransition.next)
       : [];
-    if (normalizedTransition && stablePrefix.length) {
+    if (normalizedTransition) {
       this.timelineGenerationTransitions.set(threadId, {
         generation: next,
         previousStamp,
@@ -3484,6 +3649,52 @@ export class AppServerGateway {
         this.activeTurnIds.delete(event.threadId);
       }
     }
+  }
+
+  private recordPermissionSelectionEvent(envelope: BrowserCodexEventEnvelope): void {
+    const event = envelope.event as BrowserCodexEventEnvelope["event"] & Record<string, unknown>;
+    if (event.kind !== "thread_settings_updated" || typeof event.threadId !== "string") {
+      return;
+    }
+    this.recordPermissionSelection(event.threadId, {
+      activePermissionProfile: event.activePermissionProfile as MobileThreadSummary["activePermissionProfile"],
+      approvalPolicy: event.approvalPolicy as MobileThreadSummary["approvalPolicy"],
+      approvalsReviewer: event.approvalsReviewer as MobileThreadSummary["approvalsReviewer"]
+    });
+  }
+
+  private recordPermissionSelection(
+    threadId: string,
+    source: Pick<MobileThreadSummary, "activePermissionProfile" | "approvalPolicy" | "approvalsReviewer">
+  ): void {
+    if (
+      source.activePermissionProfile === undefined ||
+      source.approvalPolicy === undefined ||
+      source.approvalsReviewer === undefined
+    ) {
+      return;
+    }
+    this.permissionSelectionsByThread.set(threadId, {
+      permissions: source.activePermissionProfile?.id ?? null,
+      approvalPolicy: source.approvalPolicy,
+      approvalsReviewer: source.approvalsReviewer
+    });
+  }
+
+  private withPermissionSelection<T extends MobileThreadSummary>(thread: T): T {
+    this.recordPermissionSelection(thread.id, thread);
+    const selection = this.permissionSelectionsByThread.get(thread.id);
+    if (!selection) {
+      return thread;
+    }
+    return {
+      ...thread,
+      activePermissionProfile: selection.permissions
+        ? { id: selection.permissions, extends: null }
+        : null,
+      approvalPolicy: selection.approvalPolicy,
+      approvalsReviewer: selection.approvalsReviewer
+    };
   }
 
   private isTerminalTurn(threadId: string, turnId: string): boolean {
@@ -3973,7 +4184,7 @@ export class AppServerGateway {
     await this.ensureReady();
     const detail = await this.applySessionTimelineSupplement(await this.client.readThread(threadId));
     return this.timelineThreadWithinBudget(
-      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+      this.withTimelineGeneration(this.applyTimelineOverlay(this.withPermissionSelection(detail)))
     );
   }
 
@@ -3982,7 +4193,7 @@ export class AppServerGateway {
     const detail = await this.applySessionTimelineSupplement(
       await this.reconcileThreadExecutionStatus(await this.client.readThreadMetadata(threadId))
     );
-    return this.withTimelineGeneration(detail);
+    return this.withTimelineGeneration(this.withPermissionSelection(detail));
   }
 
   private timelineThreadWithinBudget(detail: MobileThreadDetail): MobileThreadDetail {
@@ -4051,7 +4262,7 @@ export class AppServerGateway {
   async readThreadSummary(threadId: string): Promise<MobileThreadSummary> {
     await this.ensureReady();
     const summary = await this.reconcileThreadExecutionStatus(await this.client.readThreadSummary(threadId));
-    return this.withTimelineSummaryVersion(threadId, summary);
+    return this.withTimelineSummaryVersion(threadId, this.withPermissionSelection(summary));
   }
 
   private async reconcileThreadExecutionStatus<T extends MobileThreadSummary>(thread: T): Promise<T> {
@@ -4169,6 +4380,7 @@ export class AppServerGateway {
   }
 
   private applyTimelineOverlay(detail: MobileThreadDetail): MobileThreadDetail {
+    this.pruneTimelineOverlayWindow(detail.id, detail.timeline, detail.turnManifest);
     return {
       ...detail,
       timeline: this.applyTimelineOverlayItems(
@@ -4177,6 +4389,45 @@ export class AppServerGateway {
         this.currentTimelineGeneration(detail.id)
       )
     };
+  }
+
+  private pruneTimelineOverlayWindow(
+    threadId: string,
+    timeline: MobileTimelineItem[],
+    turnManifest: AuthoritativeTurnManifest | undefined
+  ): void {
+    const overlay = this.timelineOverlays.get(threadId);
+    if (!overlay?.size) {
+      return;
+    }
+    const generation = this.currentTimelineGeneration(threadId);
+    const materializedIds = materializedTimelineOverlayIds(timeline, overlay, generation);
+    const historyById = new Map(timeline.map((item) => [item.id, item]));
+    const authoritativeTurnIds = turnManifest
+      ? new Set(turnManifest.turnIds)
+      : null;
+
+    for (const [id, entry] of overlay) {
+      const historyItem = historyById.get(id);
+      const materializedDirectly = historyItem && !shouldUseOverlayTimelineItem(historyItem, entry.item);
+      const leftAuthoritativeWindow = Boolean(
+        entry.turnId &&
+        authoritativeTurnIds &&
+        this.isTerminalTurn(threadId, entry.turnId) &&
+        !authoritativeTurnIds.has(entry.turnId)
+      );
+      if (
+        entry.generation !== generation ||
+        materializedIds.has(id) ||
+        materializedDirectly ||
+        leftAuthoritativeWindow
+      ) {
+        overlay.delete(id);
+      }
+    }
+    if (!overlay.size) {
+      this.timelineOverlays.delete(threadId);
+    }
   }
 
   private applyTimelineOverlayItems(
@@ -4230,12 +4481,27 @@ export class AppServerGateway {
     const generation = this.currentTimelineGeneration(detail.id);
     const snapshotSequence = this.browserEventSequence;
     const historyStamp = { bootId: this.browserBootId, generation };
+    const activeTurnId = this.activeTurnIds.get(detail.id);
+    const manifestTurnIds = detail.turnManifest?.turnIds ?? [];
+    const turnManifest = detail.turnManifest
+      ? {
+          ...detail.turnManifest,
+          turnIds:
+            activeTurnId && !manifestTurnIds.includes(activeTurnId)
+              ? [...manifestTurnIds, activeTurnId]
+              : manifestTurnIds,
+          historyStamp,
+          pageWatermark: snapshotSequence
+        }
+      : undefined;
     return {
       ...detail,
       bootId: this.browserBootId,
       generation,
       historyStamp,
       snapshotSequence,
+      activeTurnId: activeTurnId ?? null,
+      ...(turnManifest ? { turnManifest } : {}),
       timeline: detail.timeline.map((item) => ({
         ...item,
         bootId: this.browserBootId,
@@ -4253,21 +4519,69 @@ export class AppServerGateway {
       bootId: this.browserBootId,
       generation: this.currentTimelineGeneration(threadId),
       historyStamp: { bootId: this.browserBootId, generation: this.currentTimelineGeneration(threadId) },
-      snapshotSequence: this.browserEventSequence
+      snapshotSequence: this.browserEventSequence,
+      activeTurnId: this.activeTurnIds.get(threadId) ?? null
     };
   }
 
-  async resumeThread(threadId: string): Promise<MobileThreadDetail> {
+  async resumeThread(
+    threadId: string,
+    overrides: ThreadRuntimeOverrides = {}
+  ): Promise<MobileThreadDetail> {
     await this.ensureReady();
-    const detail = await this.applySessionTimelineSupplement(await this.client.resumeThread(threadId));
+    const detail = await this.applySessionTimelineSupplement(
+      await this.client.resumeThread(threadId, overrides)
+    );
+    this.recordPermissionSelection(threadId, detail);
     return this.timelineThreadWithinBudget(
-      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+      this.withTimelineGeneration(this.applyTimelineOverlay(this.withPermissionSelection(detail)))
     );
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
     await this.ensureReady();
-    return this.client.startThread(input);
+    const thread = await this.client.startThread(input);
+    this.recordPermissionSelection(thread.id, thread);
+    return thread;
+  }
+
+  async readCurrentModelProvider(): Promise<string> {
+    const provider = (await this.readModelDefaults()).modelProvider?.trim();
+    if (!provider) {
+      throw new CurrentModelProviderError();
+    }
+    return provider;
+  }
+
+  async assertThreadIdle(threadId: string): Promise<MobileThreadSummary> {
+    const summary = await this.readThreadSummary(threadId);
+    if (summary.status !== "idle") {
+      throw new ThreadRuntimeBusyError(threadId);
+    }
+    return summary;
+  }
+
+  async reloadThreadRuntime(input: ThreadRuntimeReloadInput): Promise<MobileThreadDetail> {
+    await this.assertThreadIdle(input.threadId);
+    await this.unsubscribeThread(input.threadId);
+    const overrides: ThreadRuntimeOverrides = {
+      model: input.model,
+      modelProvider: input.modelProvider,
+      ...(input.modelContextWindow !== undefined
+        ? { modelContextWindow: input.modelContextWindow }
+        : {}),
+      ...(input.reasoningEffort !== undefined
+        ? { reasoningEffort: input.reasoningEffort }
+        : {}),
+      ...(input.permissions !== undefined ? { permissions: input.permissions } : {}),
+      ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+      ...(input.approvalsReviewer !== undefined
+        ? { approvalsReviewer: input.approvalsReviewer }
+        : {})
+    };
+    const detail = await this.resumeThread(input.threadId, overrides);
+    verifyThreadRuntime(detail, input);
+    return detail;
   }
 
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
@@ -4290,35 +4604,134 @@ export class AppServerGateway {
 
   async rollbackThread(
     threadId: string,
-    numTurns: number,
-    options: { expectedDeletedTurnIds?: string[] } = {}
+    inputOrNumTurns: RollbackThreadInput | number,
+    legacyOptions: { expectedDeletedTurnIds?: string[] } = {}
   ): Promise<MobileThreadDetail> {
-    await this.ensureReady();
-    const before = await this.client.readThread(threadId).catch(() => null);
-    const detail = await this.client.rollbackThread(threadId, numTurns);
-    const beforeTurnIds = before ? timelineTurnIds(before.timeline) : [];
-    const afterTurnIds = new Set(timelineTurnIds(detail.timeline));
-    const expectedDeletedTurnIds = uniqueStrings(options.expectedDeletedTurnIds ?? []);
-    const snapshotDeletedTurnIds = beforeTurnIds.filter((turnId) => !afterTurnIds.has(turnId));
-    const overlay = this.timelineOverlays.get(threadId);
-    const overlayTurnIds = new Set(
-      overlay ? [...overlay.values()].map((entry) => entry.turnId).filter((turnId): turnId is string => Boolean(turnId)) : []
-    );
-    const validExpectedDeletedTurnIds = expectedDeletedTurnIds.filter((turnId) => {
-      return !afterTurnIds.has(turnId) && (snapshotDeletedTurnIds.includes(turnId) || overlayTurnIds.has(turnId));
+    const input = typeof inputOrNumTurns === "number"
+      ? await this.legacyRollbackInput(threadId, inputOrNumTurns, legacyOptions)
+      : inputOrNumTurns;
+    const operationKey = `${this.browserBootId}\u0000${threadId}\u0000${input.operationId}`;
+    const fingerprint = JSON.stringify({
+      targetTurnId: input.targetTurnId,
+      historyStamp: input.historyStamp,
+      expectedTailTurnIds: input.expectedTailTurnIds
     });
-    const deletedTurnIds = expectedDeletedTurnIds.length
-      ? uniqueStrings([...snapshotDeletedTurnIds, ...validExpectedDeletedTurnIds])
-      : snapshotDeletedTurnIds.slice(-numTurns);
-    const transition = before ? { previous: before.timeline, next: detail.timeline } : undefined;
-    this.markDeletedTurns(threadId, deletedTurnIds, transition);
-    this.clearTimelineOverlayTurns(threadId, deletedTurnIds);
-    if (!deletedTurnIds.length && numTurns > 0) {
-      this.bumpTimelineGeneration(threadId, transition);
+    const existing = this.rollbackOperations.get(operationKey);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        throw new RollbackConflictError([], "同一 rollback operationId 的前置条件不一致");
+      }
+      return existing.promise;
     }
-    return this.timelineThreadWithinBudget(
-      this.withTimelineGeneration(this.applyTimelineOverlay(detail))
-    );
+
+    const promise = this.withThreadMutationLock(threadId, async () => {
+      await this.ensureReady();
+      if (input.historyStamp.bootId !== this.browserBootId) {
+        throw new RollbackUnresolvedError();
+      }
+      const currentGeneration = this.currentTimelineGeneration(threadId);
+      if (input.historyStamp.generation !== currentGeneration) {
+        throw new RollbackConflictError([]);
+      }
+
+      const before = await this.readThread(threadId);
+      const authoritativeTurnIds = before.turnManifest?.turnIds ?? [];
+      const targetIndex = authoritativeTurnIds.indexOf(input.targetTurnId);
+      const actualTailTurnIds = targetIndex >= 0 ? authoritativeTurnIds.slice(targetIndex) : [];
+      if (
+        targetIndex < 0 ||
+        !sameStringArray(actualTailTurnIds, input.expectedTailTurnIds) ||
+        input.expectedTailTurnIds[0] !== input.targetTurnId
+      ) {
+        throw new RollbackConflictError(actualTailTurnIds);
+      }
+
+      let detail: MobileThreadDetail;
+      try {
+        detail = await this.client.rollbackThread(threadId, actualTailTurnIds.length);
+      } catch (error) {
+        if (error instanceof TimelineRepairRequiredError && error.authoritativeThread) {
+          const transition = { previous: before.timeline, next: error.authoritativeThread.timeline };
+          this.markDeletedTurns(threadId, actualTailTurnIds, transition);
+          this.clearTimelineOverlayTurns(threadId, actualTailTurnIds);
+          if (actualTailTurnIds.includes(this.activeTurnIds.get(threadId) ?? "")) {
+            this.activeTurnIds.delete(threadId);
+          }
+        }
+        throw error;
+      }
+      const remainingTurnIds = new Set(detail.turnManifest?.turnIds ?? []);
+      if (actualTailTurnIds.some((turnId) => remainingTurnIds.has(turnId))) {
+        throw new RollbackConflictError(
+          [...remainingTurnIds],
+          `rollback response 与请求删除边界不一致：expected=${actualTailTurnIds.join(",")} actual=${[...remainingTurnIds].join(",")}`
+        );
+      }
+
+      const transition = { previous: before.timeline, next: detail.timeline };
+      this.markDeletedTurns(threadId, actualTailTurnIds, transition);
+      this.clearTimelineOverlayTurns(threadId, actualTailTurnIds);
+      if (actualTailTurnIds.includes(this.activeTurnIds.get(threadId) ?? "")) {
+        this.activeTurnIds.delete(threadId);
+      }
+      return this.timelineThreadWithinBudget(
+        this.withTimelineGeneration(this.applyTimelineOverlay(detail))
+      );
+    });
+    this.rollbackOperations.set(operationKey, { fingerprint, promise });
+    this.trimRollbackOperations();
+    return promise;
+  }
+
+  private async legacyRollbackInput(
+    threadId: string,
+    numTurns: number,
+    options: { expectedDeletedTurnIds?: string[] }
+  ): Promise<RollbackThreadInput> {
+    const current = await this.readThread(threadId);
+    const turnIds = current.turnManifest?.turnIds ?? [];
+    const expectedTailTurnIds = options.expectedDeletedTurnIds?.length
+      ? options.expectedDeletedTurnIds
+      : turnIds.slice(Math.max(0, turnIds.length - numTurns));
+    const targetTurnId = expectedTailTurnIds[0] ?? turnIds.at(-1);
+    if (!targetTurnId) {
+      throw new RollbackConflictError([]);
+    }
+    return {
+      operationId: `legacy-${targetTurnId}-${this.currentTimelineGeneration(threadId)}-${Date.now()}`,
+      targetTurnId,
+      historyStamp: current.historyStamp ?? {
+        bootId: this.browserBootId,
+        generation: this.currentTimelineGeneration(threadId)
+      },
+      expectedTailTurnIds
+    };
+  }
+
+  private async withThreadMutationLock<T>(threadId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.threadMutationLocks.get(threadId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.threadMutationLocks.set(threadId, current);
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (this.threadMutationLocks.get(threadId) === current) {
+        this.threadMutationLocks.delete(threadId);
+      }
+    }
+  }
+
+  private trimRollbackOperations(): void {
+    while (this.rollbackOperations.size > 200) {
+      const oldest = this.rollbackOperations.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.rollbackOperations.delete(oldest);
+    }
   }
 
   async setThreadName(threadId: string, name: string): Promise<MobileThreadDetail> {
@@ -4360,11 +4773,34 @@ export class AppServerGateway {
   async deleteThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.client.deleteThread(threadId);
+    this.permissionSelectionsByThread.delete(threadId);
   }
 
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
     await this.ensureReady();
     await this.client.updateThreadSettings(input);
+    const previous = this.permissionSelectionsByThread.get(input.threadId);
+    const permissions = input.permissions !== undefined ? input.permissions : previous?.permissions;
+    const inputApprovalPolicy =
+      input.approvalPolicy === null ||
+      input.approvalPolicy === "untrusted" ||
+      input.approvalPolicy === "on-request" ||
+      input.approvalPolicy === "never"
+        ? input.approvalPolicy
+        : undefined;
+    const approvalPolicy = inputApprovalPolicy !== undefined
+      ? inputApprovalPolicy
+      : previous?.approvalPolicy;
+    const approvalsReviewer = input.approvalsReviewer !== undefined
+      ? input.approvalsReviewer
+      : previous?.approvalsReviewer;
+    if (permissions !== undefined && approvalPolicy !== undefined && approvalsReviewer !== undefined) {
+      this.permissionSelectionsByThread.set(input.threadId, {
+        permissions,
+        approvalPolicy,
+        approvalsReviewer
+      });
+    }
   }
 
   async listCollaborationModes(): Promise<MobileCollaborationModeView[]> {
@@ -4812,6 +5248,11 @@ export class AppServerGateway {
     );
     const generation = this.currentTimelineGeneration(input.threadId);
     const pageWatermark = this.browserEventSequence;
+    this.pruneTimelineOverlayWindow(
+      input.threadId,
+      upstreamPage.items,
+      upstreamPage.turnManifest
+    );
     const overlaySnapshot = cloneTimelineOverlay(this.timelineOverlays.get(input.threadId));
     const page = {
       ...upstreamPage,
@@ -4843,12 +5284,16 @@ export class AppServerGateway {
     const generation = version?.generation ?? this.currentTimelineGeneration(threadId);
     const pageWatermark = version?.pageWatermark ?? this.browserEventSequence;
     const historyStamp = { bootId: this.browserBootId, generation };
+    const emptyWindowAnchor = this.emptyTimelineWindowAnchor(threadId, generation, page);
+    const turnManifest = page.turnManifest
+      ? { ...page.turnManifest, historyStamp, pageWatermark }
+      : undefined;
     const windowStartAnchor = page.items[0]
       ? timelineWindowAnchor(historyStamp, page.items[0])
-      : undefined;
+      : emptyWindowAnchor;
     const windowEndAnchor = page.items.at(-1)
       ? timelineWindowAnchor(historyStamp, page.items.at(-1)!)
-      : undefined;
+      : emptyWindowAnchor;
     const preservedThrough = this.preservedTimelineAnchor(threadId, generation, page.items[0]);
     return {
       ...page,
@@ -4856,6 +5301,7 @@ export class AppServerGateway {
       generation,
       historyStamp,
       pageWatermark,
+      ...(turnManifest ? { turnManifest } : {}),
       ...(windowStartAnchor ? { windowStartAnchor } : {}),
       ...(windowEndAnchor ? { windowEndAnchor } : {}),
       ...(preservedThrough ? { preservedThrough } : {}),
@@ -4868,6 +5314,24 @@ export class AppServerGateway {
         baselineWatermark: pageWatermark
       }))
     };
+  }
+
+  private emptyTimelineWindowAnchor(
+    threadId: string,
+    generation: number,
+    page: MobileTimelinePage
+  ): string | undefined {
+    const transition = this.timelineGenerationTransitions.get(threadId);
+    if (
+      page.items.length ||
+      page.nextCursor !== null ||
+      !transition ||
+      transition.generation !== generation ||
+      transition.nextTimeline.length
+    ) {
+      return undefined;
+    }
+    return timelineEmptyWindowAnchor({ bootId: this.browserBootId, generation });
   }
 
   private preservedTimelineAnchor(

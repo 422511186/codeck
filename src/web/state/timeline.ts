@@ -1,6 +1,6 @@
 import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
-import type { CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
+import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
 import {
   createTimelineEngineState,
   selectRollbackMetadataForEntry,
@@ -60,7 +60,7 @@ export type ToolEntry = {
 export type SystemEntry = {
   kind: "system";
   text: string;
-  systemKind?: "context-compaction";
+  systemKind?: "context-compaction" | "warning";
   status?: CommandEntryStatus;
 };
 
@@ -455,16 +455,31 @@ function timelineEntryMeta(
   };
 }
 
-export function rollbackTurnsForEntry(entries: TimelineEntry[], target: TimelineEntry): number | null {
-  return rollbackMetadataForEntry(entries, target)?.numTurns ?? null;
+export function rollbackTurnsForEntry(
+  entries: TimelineEntry[],
+  target: TimelineEntry,
+  options: { cursor?: string | null; turnManifest?: AuthoritativeTurnManifest | null } = {}
+): number | null {
+  return rollbackMetadataForEntry(entries, target, options)?.expectedTailTurnIds.length ?? null;
 }
 
 export function rollbackMetadataForEntry(
   entries: TimelineEntry[],
   target: TimelineEntry,
-  options: { cursor?: string | null } = {}
-): { numTurns: number; expectedDeletedTurnIds: string[] } | null {
-  return selectRollbackMetadataForEntry(createTimelineEngineState({ entries, cursor: options.cursor ?? null }), target);
+  options: { cursor?: string | null; turnManifest?: AuthoritativeTurnManifest | null } = {}
+): {
+  targetTurnId: string;
+  historyStamp: HistoryStamp;
+  expectedTailTurnIds: string[];
+} | null {
+  return selectRollbackMetadataForEntry(
+    createTimelineEngineState({
+      entries,
+      cursor: options.cursor ?? null,
+      turnManifest: options.turnManifest ?? null
+    }),
+    target
+  );
 }
 
 export function entriesBeforeEntry(entries: TimelineEntry[], target: TimelineEntry): TimelineEntry[] | null {

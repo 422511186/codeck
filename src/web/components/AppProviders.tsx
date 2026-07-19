@@ -59,6 +59,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           case "timeline-gap":
             dispatchEvent(event);
             break;
+          case "timeline-baseline-required":
+            dispatchEvent(event);
+            break;
         }
       }
     });

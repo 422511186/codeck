@@ -6,6 +6,7 @@ import { AppServerGateway, createAppServerGateway } from "../../src/server/app-s
 import type { AppServerNotificationMessage } from "../../src/server/app-server/events";
 import type { AppServerServerRequestMessage } from "../../src/server/app-server/pending-requests";
 import type { AppServerStatus, ManagedAppServerPeer } from "../../src/server/app-server/transport";
+import { repairWindowFrom } from "../../src/shared/timeline-protocol";
 
 class ReconnectablePeer implements ManagedAppServerPeer {
   status: AppServerStatus = { state: "idle" };
@@ -184,8 +185,12 @@ class DelayedActiveTurnPeer extends ActiveTurnPeer {
 }
 
 class StaleActiveThreadPeer extends ActiveTurnPeer {
-  constructor(private readonly latestTurnStatus: "completed" | "interrupted" | "failed" | "inProgress") {
+  constructor(private latestTurnStatus: "completed" | "interrupted" | "failed" | "inProgress") {
     super();
+  }
+
+  setLatestTurnStatus(status: "completed" | "interrupted" | "failed" | "inProgress"): void {
+    this.latestTurnStatus = status;
   }
 
   override async request(method: string): Promise<unknown> {
@@ -1592,7 +1597,127 @@ async function withSessionRolloutPath<T>(run: (rolloutPath: string) => Promise<T
   return withRolloutText(sessionJsonl(), run);
 }
 
+class RollbackPeer implements ManagedAppServerPeer {
+  status: AppServerStatus = { state: "idle" };
+  rollbackCalls = 0;
+  private turns = [this.turn("turn-1"), this.turn("turn-2")];
+
+  async connect(): Promise<void> {
+    this.status = { state: "ready" };
+  }
+
+  close(): void {
+    this.status = { state: "idle" };
+  }
+
+  getStatus(): AppServerStatus {
+    return this.status;
+  }
+
+  onNotification(): () => void {
+    return () => undefined;
+  }
+
+  onServerRequest(): () => void {
+    return () => undefined;
+  }
+
+  async respondToServerRequest(): Promise<void> {
+    return undefined;
+  }
+
+  async notify(): Promise<void> {
+    return undefined;
+  }
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "initialize") {
+      return {
+        userAgent: "rollback-test",
+        codexHome: "C:/codex",
+        platformFamily: "windows",
+        platformOs: "windows"
+      };
+    }
+    if (method === "thread/goal/get") return { goal: null };
+    if (method === "thread/read") return { thread: this.thread([]) };
+    if (method === "thread/turns/list") {
+      return { data: [...this.turns].reverse(), nextCursor: null, backwardsCursor: null };
+    }
+    if (method === "thread/rollback") {
+      this.rollbackCalls += 1;
+      const numTurns = (params as { numTurns: number }).numTurns;
+      this.turns = this.turns.slice(0, Math.max(0, this.turns.length - numTurns));
+      return { thread: this.thread(this.turns) };
+    }
+    throw new Error(`unexpected method ${method}`);
+  }
+
+  private turn(id: string): Record<string, unknown> {
+    return {
+      id,
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1,
+      items: [{ type: "userMessage", id: `${id}-user`, content: [{ type: "text", text: id, text_elements: [] }] }]
+    };
+  }
+
+  private thread(turns: Array<Record<string, unknown>>): Record<string, unknown> {
+    return {
+      id: "thread-1",
+      sessionId: "session-1",
+      forkedFromId: null,
+      parentThreadId: null,
+      preview: "rollback",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 2,
+      status: { type: "idle" },
+      path: null,
+      cwd: "C:/repo",
+      cliVersion: "test",
+      source: "appServer",
+      threadSource: null,
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: "rollback",
+      turns
+    };
+  }
+}
+
 describe("createAppServerGateway", () => {
+  it("serializes duplicate rollback operations and rejects stale tails before mutation", async () => {
+    const peer = new RollbackPeer();
+    const gateway = new AppServerGateway(peer);
+    const rollbackRequest = {
+      operationId: "rollback-op-1",
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: gateway.getTimelineBootId(), generation: 0 },
+      expectedTailTurnIds: ["turn-2"]
+    };
+
+    const [first, duplicate] = await Promise.all([
+      gateway.rollbackThread("thread-1", rollbackRequest),
+      gateway.rollbackThread("thread-1", rollbackRequest)
+    ]);
+
+    expect(peer.rollbackCalls).toBe(1);
+    expect(duplicate).toEqual(first);
+    await expect(gateway.rollbackThread("thread-1", {
+      operationId: "rollback-op-2",
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: gateway.getTimelineBootId(), generation: 0 },
+      expectedTailTurnIds: ["turn-2"]
+    })).rejects.toMatchObject({ code: "ROLLBACK_CONFLICT" });
+    expect(peer.rollbackCalls).toBe(1);
+  });
   it("mock 模式可以初始化并返回移动端基础数据", async () => {
     const gateway = createAppServerGateway({ mode: "mock" });
 
@@ -1720,8 +1845,52 @@ describe("createAppServerGateway", () => {
   it("从有界最新 inProgress turn 恢复 active identity", async () => {
     const gateway = new AppServerGateway(new StaleActiveThreadPeer("inProgress"));
 
-    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({ status: "active" });
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({
+      status: "active",
+      activeTurnId: "turn-latest"
+    });
+    await expect(gateway.readThreadMetadata("thread-1")).resolves.toMatchObject({
+      status: "active",
+      activeTurnId: "turn-latest"
+    });
     expect(gateway.getActiveTurnId("thread-1")).toBe("turn-latest");
+  });
+
+  it("两个客户端共享 gateway 时，漏失 completion 的客户端可由 bounded metadata 收敛", async () => {
+    const peer = new StaleActiveThreadPeer("inProgress");
+    const gateway = new AppServerGateway(peer);
+    const clientAEvents: Array<{ event?: { kind?: string } }> = [];
+    const clientBEvents: Array<{ event?: { kind?: string } }> = [];
+    gateway.onBrowserEvent((event) => clientAEvents.push(event as { event?: { kind?: string } }));
+    const disconnectClientB = gateway.onBrowserEvent((event) => {
+      clientBEvents.push(event as { event?: { kind?: string } });
+    });
+    await gateway.ensureReady();
+
+    peer.emitNotification({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "turn-latest" } }
+    });
+    expect(clientAEvents.at(-1)?.event?.kind).toBe("turn_started");
+    expect(clientBEvents.at(-1)?.event?.kind).toBe("turn_started");
+
+    disconnectClientB();
+    peer.setLatestTurnStatus("completed");
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-latest", status: "completed" } }
+    });
+
+    expect(clientAEvents.some((event) => event.event?.kind === "turn_completed")).toBe(true);
+    expect(clientBEvents.some((event) => event.event?.kind === "turn_completed")).toBe(false);
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({
+      status: "idle",
+      activeTurnId: null
+    });
+    await expect(gateway.readThreadMetadata("thread-1")).resolves.toMatchObject({
+      status: "idle",
+      activeTurnId: null
+    });
   });
 
   it("刷新读取会合并尚未 materialized 的实时工具输出", async () => {
@@ -2504,6 +2673,39 @@ describe("createAppServerGateway", () => {
     );
   });
 
+  it("completed overlay 物化后离开 bounded window 不会再次复活", async () => {
+    const historyItems = [{
+      type: "agentMessage",
+      id: "item-materialized",
+      text: "已经物化的最终答复",
+      phase: "final_answer",
+      memoryCitation: null
+    }];
+    const peer = new MaterializedHistoryOverlayPeer(historyItems);
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-e3",
+        item: {
+          type: "agentMessage",
+          id: "overlay-materialized",
+          text: "已经物化的最终答复",
+          phase: "final_answer",
+          memoryCitation: null
+        }
+      }
+    });
+
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items.map((item) => item.id))
+      .toEqual(["item-materialized"]);
+    historyItems.splice(0, historyItems.length);
+    expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items).toEqual([]);
+  });
+
   it("同一 turn 的两条 canonical agent item 即使正文相同也保持独立", async () => {
     const peer = new NotificationOverlayPeer();
     const gateway = new AppServerGateway(peer);
@@ -2592,29 +2794,11 @@ describe("createAppServerGateway", () => {
     );
     const oldEventId = oldEvent?.type === "codex-event" ? oldEvent.event.eventId : null;
 
-    const rolledBack = await gateway.rollbackThread("thread-1", 1, { expectedDeletedTurnIds: ["turn-live"] });
-
-    expect(rolledBack.timeline.some((item) => item.turnId === "turn-live")).toBe(false);
-    if (oldEventId) {
-      expect(gateway.listBrowserEventBacklog(oldEventId).events).toEqual([
-        expect.objectContaining({
-          type: "codex-event",
-          event: expect.objectContaining({ kind: "timeline_generation_changed", generation: 1 })
-        })
-      ]);
-    }
-
-    peer.emitNotification({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-live",
-        itemId: "agent-live-late",
-        delta: "不应回流"
-      }
-    });
-
-    expect((await gateway.readThread("thread-1")).timeline.some((item) => item.turnId === "turn-live")).toBe(false);
+    await expect(
+      gateway.rollbackThread("thread-1", 1, { expectedDeletedTurnIds: ["turn-live"] })
+    ).rejects.toMatchObject({ code: "ROLLBACK_CONFLICT" });
+    expect((await gateway.readThread("thread-1")).timeline.some((item) => item.turnId === "turn-live")).toBe(true);
+    expect(oldEventId).toEqual(expect.any(String));
   });
 
   it("rollback generation barrier 会在新历史事件前广播", async () => {
@@ -2640,17 +2824,31 @@ describe("createAppServerGateway", () => {
     const peer = new PartialRollbackPeer(["turn-1", "turn-2", "turn-3"]);
     const gateway = new AppServerGateway(peer);
     await gateway.ensureReady();
-    const bootId = gateway.getTimelineBootId();
-
-    await gateway.rollbackThread("thread-1", 1);
+    await expect(gateway.rollbackThread("thread-1", 1)).rejects.toMatchObject({
+      code: "REPAIR_EXHAUSTED"
+    });
     peer.setPageStartIndex(1);
     const page = await gateway.listThreadTurns({ threadId: "thread-1" });
 
     expect(page.items.map((item) => item.id)).toEqual(["user-turn-2"]);
     expect(page).toMatchObject({
-      generation: 1,
-      preservedThrough: JSON.stringify([bootId, 0, "turn-1", "user-turn-1"])
+      generation: 1
     });
+  });
+
+  it("rollback 清空整条时间线后 latest page 仍返回可验证的空窗口", async () => {
+    const peer = new PartialRollbackPeer(["turn-1"]);
+    const gateway = new AppServerGateway(peer);
+    await gateway.ensureReady();
+
+    await gateway.rollbackThread("thread-1", 1, { expectedDeletedTurnIds: ["turn-1"] });
+    const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+
+    expect(page.items).toEqual([]);
+    const window = repairWindowFrom(page);
+    expect(window).not.toBeNull();
+    expect(window?.historyStamp.generation).toBe(1);
+    expect(window?.windowStartAnchor).toBe(window?.windowEndAnchor);
   });
 
   it("rollback 不会信任 expectedDeletedTurnIds 屏蔽仍存在的 turn", async () => {
@@ -2658,11 +2856,13 @@ describe("createAppServerGateway", () => {
     const gateway = new AppServerGateway(peer);
 
     await gateway.ensureReady();
-    const rolledBack = await gateway.rollbackThread("thread-1", 1, {
+    await expect(gateway.rollbackThread("thread-1", 1, {
       expectedDeletedTurnIds: ["turn-1", "turn-2"]
-    });
+    })).rejects.toMatchObject({ code: "ROLLBACK_CONFLICT" });
 
-    expect(rolledBack.timeline).toEqual(expect.arrayContaining([expect.objectContaining({ turnId: "turn-1" })]));
+    expect((await gateway.readThread("thread-1")).timeline).toEqual(
+      expect.arrayContaining([expect.objectContaining({ turnId: "turn-1" })])
+    );
     peer.emitNotification({
       method: "item/commandExecution/outputDelta",
       params: {
@@ -4251,6 +4451,32 @@ describe("createAppServerGateway", () => {
       approvalPolicy: "on-request",
       sandboxMode: "read-only"
     });
+  });
+
+  it("另一客户端读取 metadata 时继承 gateway 已确认的权限三元组", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+    const started = await gateway.startThread({
+      cwd: "C:\\Users\\huang\\workspace",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    await expect(gateway.readThreadMetadata(started.id)).resolves.toMatchObject({
+      activePermissionProfile: { id: ":danger-full-access" },
+      approvalPolicy: "never",
+      approvalsReviewer: started.approvalsReviewer
+    });
+    await expect(gateway.readThreadSummary(started.id)).resolves.toMatchObject({
+      activePermissionProfile: { id: ":danger-full-access" },
+      approvalPolicy: "never",
+      approvalsReviewer: started.approvalsReviewer
+    });
+
+    await gateway.startTurn({ threadId: started.id, text: "完全访问无需审批" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(gateway.listPendingServerRequests()).toEqual([]);
   });
 
   it("mock 模式支持读取插件 Skill、设置额外根目录和写入 Skill 配置", async () => {

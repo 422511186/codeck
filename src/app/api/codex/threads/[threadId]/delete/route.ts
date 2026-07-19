@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAppServerGateway } from "../../../../../../server/app-server/runtime";
+import { getThreadModelLifecycleService } from "../../../../../../server/custom-models/runtime";
 import { isRequestAuthenticated } from "../../../../../../server/auth";
 import { audit } from "../../../../../../server/security";
 
@@ -14,7 +14,7 @@ export async function POST(
   try {
     const { threadId } = await context.params;
     await audit("thread.delete", { threadId });
-    await getAppServerGateway().deleteThread(threadId);
+    await getThreadModelLifecycleService().deleteThread(threadId);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

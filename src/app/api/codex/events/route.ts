@@ -1,4 +1,4 @@
-import { getAppServerGateway, unauthorized } from "../_route-helpers";
+import { audit, getAppServerGateway, unauthorized } from "../_route-helpers";
 import { browserEventId, type BrowserTimelineEvent } from "../../../../server/app-server/runtime";
 import { browserTimelineEventForBudget } from "../../../../server/timeline-event-payload";
 
@@ -13,6 +13,13 @@ type TimelineGapEvent = {
   affectedThreadIds?: string[];
   scope?: "threads" | "all-tracked";
   bootId?: string;
+};
+
+type TimelineBaselineRequiredEvent = {
+  type: "timeline-baseline-required";
+  bootId: string;
+  streamCursor: number;
+  scope: "all-tracked";
 };
 
 export async function GET(request: Request): Promise<Response> {
@@ -66,6 +73,25 @@ export async function GET(request: Request): Promise<Response> {
           ...(affectedThreadIds.length ? { affectedThreadIds } : {}),
           ...(affectedThreadIds.length === 1 ? { threadId: affectedThreadIds[0] } : {})
         }));
+        void audit("timeline.stream.gap", {
+          bootId: backlog.bootId,
+          lastEventId,
+          scope: gapScope?.scope ?? "unknown",
+          affectedThreadIds
+        }).catch(() => undefined);
+      }
+      if (!lastEventId && backlog.baselineRequired) {
+        write(encodeSseData({
+          type: "timeline-baseline-required",
+          bootId: backlog.bootId,
+          streamCursor: backlog.streamCursor,
+          scope: "all-tracked"
+        }));
+        void audit("timeline.stream.baseline_required", {
+          bootId: backlog.bootId,
+          streamCursor: backlog.streamCursor,
+          scope: "all-tracked"
+        }).catch(() => undefined);
       }
       for (const event of backlog.events) {
         sendOnce(event);
@@ -102,6 +128,6 @@ function encodeSseEvent(id: string, event: BrowserTimelineEvent): string {
   return `id: ${id}\n${encodeSseData(browserTimelineEventForBudget(event))}`;
 }
 
-function encodeSseData(event: BrowserTimelineEvent | TimelineGapEvent): string {
+function encodeSseData(event: BrowserTimelineEvent | TimelineGapEvent | TimelineBaselineRequiredEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }

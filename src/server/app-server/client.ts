@@ -247,6 +247,7 @@ import type {
   MobileModelDefaultsView,
   MobileModelOption,
   MobileModelProviderCapabilitiesView,
+  MobileApprovalPolicy,
   MobileMarketplaceAddInput,
   MobileMarketplaceAddResult,
   MobileMarketplaceRemoveResult,
@@ -351,9 +352,36 @@ export type StartThreadInput = {
   cwd?: string;
   workspaceRoots?: string[];
   model?: string;
+  modelProvider?: string;
+  modelContextWindow?: number;
+  reasoningEffort?: string | null;
   permissions?: string | null;
+  approvalPolicy?: ThreadStartParams["approvalPolicy"];
   approvalsReviewer?: ThreadStartParams["approvalsReviewer"];
 };
+
+export type ThreadRuntimeOverrides = {
+  model?: string;
+  modelProvider?: string;
+  modelContextWindow?: number;
+  reasoningEffort?: string | null;
+  permissions?: string | null;
+  approvalPolicy?: ThreadResumeParams["approvalPolicy"];
+  approvalsReviewer?: ThreadResumeParams["approvalsReviewer"];
+};
+
+function threadRuntimeConfig(
+  input: Pick<ThreadRuntimeOverrides, "modelContextWindow" | "reasoningEffort">
+): ThreadStartParams["config"] | undefined {
+  const config: NonNullable<ThreadStartParams["config"]> = {};
+  if (input.modelContextWindow !== undefined) {
+    config.model_context_window = input.modelContextWindow;
+  }
+  if (typeof input.reasoningEffort === "string") {
+    config.model_reasoning_effort = input.reasoningEffort;
+  }
+  return Object.keys(config).length > 0 ? config : undefined;
+}
 
 export type StartTurnInput = {
   threadId: string;
@@ -365,6 +393,7 @@ export type StartTurnInput = {
   reasoningEffort?: string;
   reasoningSummary?: ReasoningSummary;
   permissions?: string | null;
+  approvalPolicy?: TurnStartParams["approvalPolicy"];
   approvalsReviewer?: TurnStartParams["approvalsReviewer"];
   additionalContext?: TurnStartParams["additionalContext"];
   collaborationMode?: TurnStartParams["collaborationMode"];
@@ -433,6 +462,7 @@ export type UpdateThreadSettingsInput = {
   model?: string;
   reasoningEffort?: string;
   permissions?: string | null;
+  approvalPolicy?: ThreadSettingsUpdateParams["approvalPolicy"];
   approvalsReviewer?: ThreadSettingsUpdateParams["approvalsReviewer"];
   collaborationMode?: ThreadSettingsUpdateParams["collaborationMode"];
 };
@@ -984,7 +1014,7 @@ function timelineItemsForTurn(turn: Thread["turns"][number], turnIndex?: number)
 
 function threadDetail(
   thread: Thread,
-  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor" | "activePermissionProfile" | "approvalsReviewer">> = {}
+  extras: Partial<Pick<MobileThreadDetail, "model" | "reasoningEffort" | "nextCursor" | "activePermissionProfile" | "approvalPolicy" | "approvalsReviewer">> = {}
 ): MobileThreadDetail {
   const timeline = thread.turns.flatMap((turn, turnIndex) => timelineItemsForTurn(turn, turnIndex));
 
@@ -992,9 +1022,26 @@ function threadDetail(
     ...threadSummary(thread),
     lastTurnId: thread.turns.at(-1)?.id || null,
     nextCursor: extras.nextCursor ?? null,
+    turnManifest: { turnIds: thread.turns.map((turn) => turn.id) },
     timeline,
     ...extras
   };
+}
+
+function approvalPolicyView(value: unknown): MobileApprovalPolicy | null {
+  return value === "untrusted" || value === "on-request" || value === "never" ? value : null;
+}
+
+export class TimelineRepairRequiredError extends Error {
+  readonly code = "REPAIR_EXHAUSTED";
+
+  constructor(
+    message = "rollback 后的会话分页仍未收敛",
+    readonly authoritativeThread?: MobileThreadDetail
+  ) {
+    super(message);
+    this.name = "TimelineRepairRequiredError";
+  }
 }
 
 function isUnmaterializedThreadTimelinePageError(error: unknown): boolean {
@@ -1016,6 +1063,21 @@ function threadWithRecentTurns(thread: Thread, turns: Thread["turns"]): Thread {
 
 function chronologicalTurnsFromDescPage(turns: Thread["turns"]): Thread["turns"] {
   return [...turns].reverse();
+}
+
+function orderedTimelineTurnIds(items: MobileTimelineItem[]): string[] {
+  return [...new Set(items.flatMap((item) => item.turnId ? [item.turnId] : []))];
+}
+
+function turnPageMatchesAuthoritativeSuffix(authoritativeTurnIds: string[], pageTurnIds: string[]): boolean {
+  if (!pageTurnIds.length) {
+    return true;
+  }
+  if (pageTurnIds.length > authoritativeTurnIds.length) {
+    return false;
+  }
+  const suffix = authoritativeTurnIds.slice(authoritativeTurnIds.length - pageTurnIds.length);
+  return suffix.every((turnId, index) => turnId === pageTurnIds[index]);
 }
 
 function conversationSummaryView(response: GetConversationSummaryResponse): MobileThreadSummary {
@@ -1559,9 +1621,23 @@ export class CodexAppServerClient {
     }
   }
 
-  async resumeThread(threadId: string): Promise<MobileThreadDetail> {
+  async resumeThread(
+    threadId: string,
+    overrides: ThreadRuntimeOverrides = {}
+  ): Promise<MobileThreadDetail> {
+    const config = threadRuntimeConfig(overrides);
     const params: ThreadResumeParams = {
       threadId,
+      ...(overrides.model !== undefined ? { model: overrides.model } : {}),
+      ...(overrides.modelProvider !== undefined ? { modelProvider: overrides.modelProvider } : {}),
+      ...(config ? { config } : {}),
+      ...(overrides.permissions !== undefined ? { permissions: overrides.permissions } : {}),
+      ...(overrides.approvalPolicy !== undefined
+        ? { approvalPolicy: overrides.approvalPolicy }
+        : {}),
+      ...(overrides.approvalsReviewer !== undefined
+        ? { approvalsReviewer: overrides.approvalsReviewer }
+        : {}),
       excludeTurns: true,
       initialTurnsPage: {
         limit: 30,
@@ -1582,26 +1658,36 @@ export class CodexAppServerClient {
         model: response.model,
         reasoningEffort: response.reasoningEffort,
         activePermissionProfile: response.activePermissionProfile,
+        approvalPolicy: approvalPolicyView(response.approvalPolicy),
         approvalsReviewer: response.approvalsReviewer,
         nextCursor: response.initialTurnsPage?.nextCursor ?? null
       }),
+      modelProvider: response.modelProvider,
       goal
     };
   }
 
   async startThread(input: StartThreadInput): Promise<MobileThreadSummary> {
+    const config = threadRuntimeConfig(input);
     const params: ThreadStartParams = {
       cwd: input.cwd,
       runtimeWorkspaceRoots: input.workspaceRoots,
       model: input.model,
-      permissions: input.permissions,
-      approvalsReviewer: input.approvalsReviewer
+      ...(input.modelProvider !== undefined ? { modelProvider: input.modelProvider } : {}),
+      ...(config ? { config } : {}),
+      ...(input.permissions !== undefined ? { permissions: input.permissions } : {}),
+      ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+      ...(input.approvalsReviewer !== undefined ? { approvalsReviewer: input.approvalsReviewer } : {})
     };
 
     const response = (await this.peer.request("thread/start", params)) as ThreadStartResponse;
     return {
       ...threadSummary(response.thread),
+      model: response.model,
+      modelProvider: response.modelProvider,
+      reasoningEffort: response.reasoningEffort,
       activePermissionProfile: response.activePermissionProfile,
+      approvalPolicy: approvalPolicyView(response.approvalPolicy),
       approvalsReviewer: response.approvalsReviewer
     };
   }
@@ -1614,8 +1700,9 @@ export class CodexAppServerClient {
       model: input.model,
       effort: input.reasoningEffort,
       summary: input.reasoningSummary,
-      permissions: input.permissions,
-      approvalsReviewer: input.approvalsReviewer,
+      ...(input.permissions !== undefined ? { permissions: input.permissions } : {}),
+      ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+      ...(input.approvalsReviewer !== undefined ? { approvalsReviewer: input.approvalsReviewer } : {}),
       additionalContext: input.additionalContext,
       collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
@@ -1634,6 +1721,7 @@ export class CodexAppServerClient {
       model: response.model,
       reasoningEffort: response.reasoningEffort,
       activePermissionProfile: response.activePermissionProfile,
+      approvalPolicy: approvalPolicyView(response.approvalPolicy),
       approvalsReviewer: response.approvalsReviewer
     });
   }
@@ -1644,8 +1732,20 @@ export class CodexAppServerClient {
       numTurns
     };
     const response = (await this.peer.request("thread/rollback", params)) as ThreadRollbackResponse;
-    const page = await this.readInitialThreadTurns(threadId);
-    return threadDetail(threadWithRecentTurns(response.thread, page.turns), { nextCursor: page.nextCursor });
+    const authoritativeTurnIds = response.thread.turns.map((turn) => turn.id);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const page = await this.readInitialThreadTurns(threadId);
+      const pageTurnIds = page.turns.map((turn) => turn.id);
+      if (!turnPageMatchesAuthoritativeSuffix(authoritativeTurnIds, pageTurnIds)) {
+        continue;
+      }
+      const pageTurnsById = new Map(page.turns.map((turn) => [turn.id, turn]));
+      const enrichedTurns = response.thread.turns.map((turn) => pageTurnsById.get(turn.id) ?? turn);
+      return threadDetail(threadWithRecentTurns(response.thread, enrichedTurns), {
+        nextCursor: page.nextCursor
+      });
+    }
+    throw new TimelineRepairRequiredError(undefined, threadDetail(response.thread));
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {
@@ -1703,8 +1803,9 @@ export class CodexAppServerClient {
       threadId: input.threadId,
       model: input.model,
       effort: input.reasoningEffort,
-      permissions: input.permissions,
-      approvalsReviewer: input.approvalsReviewer,
+      ...(input.permissions !== undefined ? { permissions: input.permissions } : {}),
+      ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+      ...(input.approvalsReviewer !== undefined ? { approvalsReviewer: input.approvalsReviewer } : {}),
       collaborationMode: normalizeCollaborationMode(input.collaborationMode)
     };
     await this.peer.request("thread/settings/update", params);
@@ -2270,12 +2371,14 @@ export class CodexAppServerClient {
       .filter((model) => !model.hidden)
       .map((model) => ({
         id: model.id,
+        model: model.model,
         label: model.displayName || model.model,
         isDefault: model.isDefault,
         supportedReasoningEfforts: model.supportedReasoningEfforts.flatMap((effort) => {
           const normalized = normalizeReasoningEffort(effort);
           return normalized ? [normalized] : [];
         }),
+        defaultReasoningEffort: normalizeReasoningEffort(model.defaultReasoningEffort),
         inputModalities: model.inputModalities.map(String)
       }));
   }
@@ -2611,7 +2714,7 @@ export class CodexAppServerClient {
       response = (await this.peer.request("thread/items/list", params)) as ThreadItemsListResponse;
     } catch (error) {
       if (isUnmaterializedThreadTimelinePageError(error)) {
-        return { items: [], nextCursor: null };
+        return { items: [], nextCursor: null, turnManifest: { turnIds: [] } };
       }
       if (!isUnsupportedThreadItemsListError(error)) {
         throw error;
@@ -2641,7 +2744,7 @@ export class CodexAppServerClient {
           } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
         } catch (error) {
           if (isUnmaterializedThreadTimelinePageError(error)) {
-            return { items: [], nextCursor: null };
+            return { items: [], nextCursor: null, turnManifest: { turnIds: [] } };
           }
           throw error;
         }
@@ -2667,18 +2770,50 @@ export class CodexAppServerClient {
         itemOffset = 0;
       }
 
+      const items = chunks.flat();
       return {
-        items: chunks.flat(),
-        nextCursor
+        items,
+        nextCursor,
+        turnManifest: { turnIds: orderedTimelineTurnIds(items) }
       };
     }
 
+    let authoritativeTurns: Thread["turns"] = [];
+    if (!input.cursor) {
+      try {
+        const turnPage = (await this.peer.request("thread/turns/list", {
+          threadId: input.threadId,
+          limit: timelinePageLimit(input.limit),
+          sortDirection: "desc",
+          itemsView: "full"
+        } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+        authoritativeTurns = chronologicalTurnsFromDescPage(turnPage.data);
+      } catch {
+        // The item page remains readable, but destructive actions fail closed without this manifest.
+      }
+    }
+    const turnIdByItemId = new Map(
+      authoritativeTurns.flatMap((turn) => turn.items.map((item) => [item.id, turn.id] as const))
+    );
+    const items = response.data.flatMap((item) => {
+      const mapped = timelineItem(item);
+      if (!mapped) return [];
+      const timelineMeta = threadItemTimelineMeta(item);
+      const turnId = timelineMeta.turnId ?? turnIdByItemId.get(item.id);
+      return [{
+        ...mapped,
+        ...timelineMeta,
+        ...(turnId ? { turnId } : {})
+      }];
+    }).reverse();
     return {
-      items: response.data.flatMap((item) => {
-        const mapped = timelineItem(item);
-        return mapped ? [{ ...mapped, ...threadItemTimelineMeta(item) }] : [];
-      }).reverse(),
-      nextCursor: response.nextCursor ?? null
+      items,
+      nextCursor: response.nextCursor ?? null,
+      turnManifest: {
+        turnIds: authoritativeTurns.length
+          ? authoritativeTurns.map((turn) => turn.id)
+          : orderedTimelineTurnIds(items)
+      }
     };
   }
 

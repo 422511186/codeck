@@ -267,13 +267,16 @@ export class TimelineEventStreamClient {
     this.invalidateThread(threadId);
   }
 
-  private applyRepairBarrier(event: Extract<WsEvent, { type: "timeline-gap" }>): void {
+  private applyRepairBarrier(
+    event: Extract<WsEvent, { type: "timeline-gap" | "timeline-baseline-required" }>
+  ): void {
+    const directThreadId = event.type === "timeline-gap" ? event.threadId : null;
     const affectedThreadIds = event.scope === "all-tracked"
       ? [...new Set([...this.deliveryEpochs.keys(), ...pendingDeliveryThreadIds(this.pendingDeliveries)])]
       : event.affectedThreadIds?.length
         ? event.affectedThreadIds
-        : event.threadId
-          ? [event.threadId]
+        : directThreadId
+          ? [directThreadId]
           : [];
     for (const threadId of affectedThreadIds) {
       this.dropPendingDeltaBatchesForThread(threadId);
@@ -383,8 +386,10 @@ function isBatchableTextDelta(event: WsCodexEvent["event"]): boolean {
   return typeof event.delta === "string" && event.delta.length > 0;
 }
 
-function isRepairBarrierEvent(event: WsEvent): event is Extract<WsEvent, { type: "timeline-gap" }> {
-  return event.type === "timeline-gap";
+function isRepairBarrierEvent(
+  event: WsEvent
+): event is Extract<WsEvent, { type: "timeline-gap" | "timeline-baseline-required" }> {
+  return event.type === "timeline-gap" || event.type === "timeline-baseline-required";
 }
 
 function isTimelineGenerationBarrier(
@@ -404,6 +409,9 @@ function timelineEventBootId(event: WsEvent): string | null {
   }
   if (event.type === "timeline-gap") {
     return typeof event.bootId === "string" && event.bootId ? event.bootId : null;
+  }
+  if (event.type === "timeline-baseline-required") {
+    return event.bootId;
   }
   return null;
 }

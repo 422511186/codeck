@@ -1,30 +1,38 @@
 "use client";
 
-import { BaseCard } from "./BaseCard";
+import { CircleAlert } from "lucide-react";
 
 export function ErrorCard({ text }: { text: string }): JSX.Element {
   return (
-    <BaseCard
-      title="出错了"
-      summary={text.slice(0, 80)}
-      icon="⚠️"
-      tone="danger"
+    <div
+      role="alert"
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+        minWidth: 0,
+        margin: "4px 0",
+        padding: "9px 10px",
+        borderLeft: "3px solid var(--cw-danger)",
+        borderRadius: 6,
+        background: "var(--cw-danger-bg)",
+        color: "var(--cw-fg)",
+        fontSize: 13,
+        lineHeight: 1.45
+      }}
     >
-      <pre
-        style={{
-          margin: 0,
-          padding: 10,
-          background: "var(--cw-danger-bg)",
-          color: "var(--cw-danger)",
-          borderRadius: 8,
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word"
-        }}
-      >
-        {text}
-      </pre>
-    </BaseCard>
+      <CircleAlert
+        aria-hidden="true"
+        size={16}
+        strokeWidth={1.8}
+        style={{ flex: "0 0 auto", marginTop: 1, color: "var(--cw-danger)" }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ marginBottom: 2, color: "var(--cw-danger)", fontWeight: 600 }}>
+          操作失败
+        </div>
+        <div style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{text}</div>
+      </div>
+    </div>
   );
 }

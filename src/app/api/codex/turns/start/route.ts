@@ -1,4 +1,6 @@
 import type { StartTurnInput } from "../../../../../server/app-server/client";
+import { NextResponse } from "next/server";
+import { getThreadModelLifecycleService } from "../../../../../server/custom-models/runtime";
 import type { MobileSkillReference } from "../../../../../shared/codex";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import {
@@ -7,6 +9,7 @@ import {
   getAppServerGateway,
   isRecord,
   ok,
+  optionalApprovalPolicy,
   optionalStrictNonEmptyString,
   optionalStrictNullableString,
   optionalStrictString,
@@ -44,6 +47,7 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonRecord(request);
     const threadId = requireNonEmptyString(body.threadId, "threadId");
     const text = requireNonEmptyString(body.text, "消息");
+    await getThreadModelLifecycleService().ensureThreadReady(threadId);
 
     const config = getRuntimeConfig();
     const imagePaths = optionalStrictStringArray(body.imagePaths, "imagePaths")?.map((imagePath) =>
@@ -58,6 +62,7 @@ export async function POST(request: Request): Promise<Response> {
     const reasoningEffort = optionalStrictNonEmptyString(body.reasoningEffort, "reasoningEffort");
     const reasoningSummary = normalizeReasoningSummary(body.reasoningSummary);
     const permissions = optionalStrictNullableString(body.permissions, "permissions");
+    const approvalPolicy = optionalApprovalPolicy(body.approvalPolicy);
     const approvalsReviewer = readApprovalsReviewer(body.approvalsReviewer);
     const additionalContext = readAdditionalContext(body.additionalContext);
     const collaborationMode = readCollaborationMode(body.collaborationMode);
@@ -71,6 +76,7 @@ export async function POST(request: Request): Promise<Response> {
       reasoningEffort,
       reasoningSummary,
       permissions,
+      approvalPolicy,
       approvalsReviewer,
       additionalContext,
       collaborationMode
@@ -85,6 +91,7 @@ export async function POST(request: Request): Promise<Response> {
       reasoningEffort,
       reasoningSummary,
       permissions,
+      approvalPolicy,
       approvalsReviewer,
       additionalContext,
       collaborationMode
@@ -106,6 +113,15 @@ export async function POST(request: Request): Promise<Response> {
 
     return ok({ turnId });
   } catch (error) {
+    const structured = typeof error === "object" && error !== null
+      ? error as { code?: unknown; httpStatus?: unknown; result?: Record<string, unknown> }
+      : null;
+    if (structured?.code === "SWITCH_RECOVERY_FAILED" && structured.httpStatus === 500) {
+      return NextResponse.json(
+        { ok: false, code: structured.code, ...(structured.result ?? {}) },
+        { status: 500 }
+      );
+    }
     return serverError(error, "无法发送消息");
   }
 }
@@ -230,6 +246,7 @@ function startTurnPayloadFingerprint(input: StartTurnInput): string {
     reasoningEffort: input.reasoningEffort ?? null,
     reasoningSummary: input.reasoningSummary ?? null,
     permissions: input.permissions ?? null,
+    approvalPolicy: input.approvalPolicy ?? null,
     approvalsReviewer: input.approvalsReviewer ?? null,
     additionalContext: input.additionalContext ?? null,
     collaborationMode: input.collaborationMode ?? null

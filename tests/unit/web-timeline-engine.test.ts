@@ -286,7 +286,7 @@ describe("timeline engine", () => {
   });
 
   it("derives visible output compact completion and rollback metadata from indexes", () => {
-    const state = applyTimelineInput(createTimelineEngineState(), {
+    let state = applyTimelineInput(createTimelineEngineState(), {
       kind: "snapshot-window",
       entries: [
         userEntry("user-1", "turn-1", "first", 1),
@@ -300,14 +300,19 @@ describe("timeline engine", () => {
     expect(selectTurnHasVisibleOutput(state, "turn-1")).toBe(true);
     expect(selectTurnHasVisibleOutput(state, "turn-3")).toBe(false);
     expect(selectHasContextCompactionCompletion(state)).toBe(true);
+    state = applyTimelineInput(state, {
+      kind: "authoritative-turn-manifest",
+      manifest: { historyStamp: { bootId: "boot-1", generation: 0 }, turnIds: ["turn-1", "turn-2", "turn-3"] }
+    });
     expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "compact", 3))).toEqual({
-      numTurns: 2,
-      expectedDeletedTurnIds: ["turn-2", "turn-3"]
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: "boot-1", generation: 0 },
+      expectedTailTurnIds: ["turn-2", "turn-3"]
     });
   });
 
-  it("does not derive rollback metadata when target is the first known turn of an incomplete window", () => {
-    const state = applyTimelineInput(createTimelineEngineState(), {
+  it("uses a bounded authoritative manifest instead of a rendered page cursor", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
       kind: "snapshot-window",
       entries: [
         userEntry("user-2", "turn-2", "window head", 2),
@@ -316,11 +321,62 @@ describe("timeline engine", () => {
       cursor: "older-turns"
     });
 
-    expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "window head", 2))).toBeNull();
-    expect(selectRollbackMetadataForEntry(state, userEntry("user-3", "turn-3", "tail", 3))).toEqual({
-      numTurns: 1,
-      expectedDeletedTurnIds: ["turn-3"]
+    state = applyTimelineInput(state, {
+      kind: "authoritative-turn-manifest",
+      manifest: { historyStamp: { bootId: "boot-1", generation: 0 }, turnIds: ["turn-2", "turn-3"] }
     });
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "window head", 2))).toEqual({
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: "boot-1", generation: 0 },
+      expectedTailTurnIds: ["turn-2", "turn-3"]
+    });
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-3", "turn-3", "tail", 3))).toEqual({
+      targetTurnId: "turn-3",
+      historyStamp: { bootId: "boot-1", generation: 0 },
+      expectedTailTurnIds: ["turn-3"]
+    });
+  });
+
+  it("uses the authoritative manifest and excludes synthetic rollout turn identities", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [
+        userEntry("user-1", "turn-1", "first", 1),
+        systemEntry("rollout-only", "rollout-100", "补充内容", 2),
+        userEntry("user-2", "turn-2", "tail", 3)
+      ]
+    });
+    state = applyTimelineInput(state, {
+      kind: "authoritative-turn-manifest",
+      manifest: {
+        historyStamp: { bootId: "boot-1", generation: 0 },
+        turnIds: ["turn-1", "turn-2"]
+      }
+    });
+
+    expect(selectOrderedDistinctTurns(state).map((turn) => turn.turnId)).toEqual(["turn-1", "turn-2"]);
+    expect(selectRollbackMetadataForEntry(state, userEntry("user-2", "turn-2", "tail", 3))).toEqual({
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: "boot-1", generation: 0 },
+      expectedTailTurnIds: ["turn-2"]
+    });
+  });
+
+  it("does not resurrect a deleted turn from a later snapshot replace", () => {
+    let state = applyTimelineInput(createTimelineEngineState(), {
+      kind: "snapshot-window",
+      entries: [userEntry("user-old", "turn-old", "old", 1)]
+    });
+    state = applyTimelineInput(state, { kind: "mark-turn-deleted", turnId: "turn-old" });
+    state = applyTimelineInput(state, {
+      kind: "snapshot-window",
+      entries: [
+        userEntry("user-old", "turn-old", "stale", 2),
+        userEntry("user-new", "turn-new", "new", 3)
+      ]
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.turnId)).toEqual(["turn-new"]);
   });
 
   it("confirms optimistic user messages in place and keeps repeated prompts distinct", () => {

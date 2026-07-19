@@ -829,6 +829,7 @@ describe("normalizeAppServerNotification", () => {
         threadId: "thread-1",
         model: "gpt-5-codex",
         reasoningEffort: "high",
+        approvalPolicy: "on-request",
         approvalsReviewer: "user",
         activePermissionProfile: { id: "read-only", extends: null },
         collaborationMode: "plan"

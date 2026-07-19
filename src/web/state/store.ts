@@ -1,12 +1,15 @@
 "use client";
 
 import { create } from "zustand";
-import type { AppServerStatus, ApprovalsReviewer, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
+import type { ApprovalPolicy, AppServerStatus, ApprovalsReviewer, ChatMode, PendingServerRequest, TimelineItem } from "../api/types";
 import {
+  clearContextUsage as clearContextUsageSnapshot,
   setContextUsage as saveContextUsageSnapshot,
   type ContextUsageSnapshot
 } from "../storage/contextUsage";
+import { loadJson, saveJson, threadNoticeDismissalsKey } from "../storage/localStore";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
+import { extractLegacyWarningNotices, isLegacyAppServerWarningText } from "./timeline-adapter";
 import {
   applyTimelineInput,
   createTimelineEngineState,
@@ -22,11 +25,18 @@ import {
 import type { TimelineCompleteness } from "../../shared/timeline-content";
 import {
   historyStampFrom,
+  timelineEmptyWindowAnchor,
   timelineGapScopeFrom,
+  type AuthoritativeTurnManifest,
   type HistoryStamp,
   type TimelineRepairWindow
 } from "../../shared/timeline-protocol";
 import type { WsCodexEvent, WsEvent, WsConnectionState } from "../ws/client";
+import type {
+  ModelInputModality,
+  ModelSelection,
+  ThreadModelStateView
+} from "../../shared/custom-models";
 
 export type { WsConnectionState };
 
@@ -38,7 +48,8 @@ export type SnapshotRepairReason =
   | "timeline-gap"
   | "turn-completed"
   | "summary-idle"
-  | "stream-disconnected";
+  | "stream-disconnected"
+  | "baseline-required";
 
 export type SnapshotRepairRequest = {
   key: string;
@@ -62,6 +73,18 @@ type TimelineEntryIndexes = {
   visibleOutputTurnIds: Set<string>;
   compactCompletionSeen: boolean;
   orderedDistinctTurns: OrderedDistinctTurn[];
+};
+
+export type ThreadNotice = {
+  id: string;
+  kind: "warning";
+  source: string;
+  text: string;
+  createdAt: number;
+};
+
+export type ThreadNoticeInput = Omit<ThreadNotice, "createdAt"> & {
+  createdAt?: number;
 };
 
 type TimelineDiagnostics = {
@@ -100,6 +123,7 @@ export type ThreadState = {
   timelineEngine: TimelineEngineState;
   entries: TimelineEntry[];
   entryIndexes: TimelineEntryIndexes;
+  notices: ThreadNotice[];
   pendingApprovals: PendingServerRequest[];
   resolvedApprovals: Set<string>;
   interruptedTurnIds: Set<string>;
@@ -109,6 +133,7 @@ export type ThreadState = {
   snapshotDeltaSuppressions: Map<string, SnapshotDeltaSuppression>;
   deliveryEpoch: number;
   timelineGeneration: number;
+  turnManifest: AuthoritativeTurnManifest | null;
   localUserMessageIdsByTurn: Map<string, string>;
   repairRequest: SnapshotRepairRequest | null;
   repairRequestedAt: number | null;
@@ -120,7 +145,16 @@ export type ThreadState = {
   mode: ChatMode;
   model: string | null;
   modelEffort: string | null;
+  modelSelection: ModelSelection | null;
+  modelBindingVersion: string | null;
+  modelSourceUpdatedAt: string | null;
+  modelContextWindow: number | null;
+  modelInputModalities: ModelInputModality[];
+  modelSwitchStatus: "idle" | "pending" | "recovery_failed";
+  modelSwitchOperationId: string | null;
+  modelSwitchTarget: ModelSelection | null;
   permissionProfileId?: string | null;
+  approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
@@ -162,6 +196,8 @@ type Actions = {
     reachedBeginning: boolean
   ) => void;
   appendEntries: (threadId: string, entries: TimelineEntry[]) => void;
+  upsertThreadNotice: (threadId: string, notice: ThreadNoticeInput) => void;
+  dismissThreadNotice: (threadId: string, noticeId: string) => void;
   replaceOrAddEntry: (threadId: string, entry: TimelineEntry, revision?: number, eventId?: string) => void;
   appendTextToEntry: (threadId: string, entry: TimelineEntry) => void;
   startReasoningEntry: (
@@ -179,6 +215,8 @@ type Actions = {
   setActiveTurnId: (threadId: string, turnId: string | null) => void;
   bindLocalUserMessageTurn: (threadId: string, clientUserMessageId: string, turnId: string) => void;
   setTimelineGeneration: (threadId: string, generation: number) => void;
+  setAuthoritativeTurnManifest: (threadId: string, manifest: AuthoritativeTurnManifest) => void;
+  registerAuthoritativeTurn: (threadId: string, turnId: string) => void;
   invalidateTimelineDelivery: (threadId: string, deliveryEpoch?: number) => void;
   markTurnInterrupted: (threadId: string, turnId: string) => void;
   markTurnDeleted: (threadId: string, turnId: string) => void;
@@ -186,7 +224,23 @@ type Actions = {
   clearSnapshotRepair: (threadId: string) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
-  setPermissionProfile: (threadId: string, profileId: string | null, approvalsReviewer?: ApprovalsReviewer | null) => void;
+  setModelState: (threadId: string, modelState: ThreadModelStateView) => void;
+  beginModelSwitch: (threadId: string, target: ModelSelection) => void;
+  applyModelSwitchResult: (
+    threadId: string,
+    result: {
+      outcome: "switched" | "recovered" | "recovery_failed";
+      operationId: string;
+      latestState: ThreadModelStateView;
+    }
+  ) => void;
+  clearModelSwitchPending: (threadId: string) => void;
+  setPermissionProfile: (
+    threadId: string,
+    profileId: string | null | undefined,
+    approvalPolicy?: ApprovalPolicy | null,
+    approvalsReviewer?: ApprovalsReviewer | null
+  ) => void;
   setContextUsage: (threadId: string, usage: ContextUsageSnapshot) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
   addApproval: (threadId: string, req: PendingServerRequest) => void;
@@ -204,6 +258,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     createTimelineEngineState({
       entries: init?.entries ?? [],
       generation: init?.timelineGeneration ?? 0,
+      turnManifest: init?.turnManifest,
       deletedTurnIds: init?.deletedTurnIds,
       interruptedTurnIds: init?.interruptedTurnIds,
       processedEventIds: init?.processedEventIds,
@@ -214,6 +269,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
   const entries = timelineEngine.entries;
   const entryIndexes = init?.entryIndexes ?? buildTimelineEntryIndexes(entries);
   return {
+    notices: [],
     pendingApprovals: [],
     resolvedApprovals: new Set<string>(),
     localUserMessageIdsByTurn: new Map<string, string>(),
@@ -227,7 +283,16 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     mode: "build",
     model: null,
     modelEffort: null,
+    modelSelection: null,
+    modelBindingVersion: null,
+    modelSourceUpdatedAt: null,
+    modelContextWindow: null,
+    modelInputModalities: ["text"],
+    modelSwitchStatus: "idle",
+    modelSwitchOperationId: null,
+    modelSwitchTarget: null,
     permissionProfileId: undefined,
+    approvalPolicy: undefined,
     approvalsReviewer: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
@@ -241,6 +306,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     processedEventIds: timelineEngine.processedEventIds,
     itemRevisions: timelineEngine.itemRevisions,
     timelineGeneration: timelineEngine.generation,
+    turnManifest: timelineEngine.turnManifest,
     snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions,
     deliveryEpoch: timelineEngine.deliveryEpoch
   };
@@ -266,6 +332,25 @@ function snapshotRepairRequest(
   };
 }
 
+function threadWithModelState(
+  thread: ThreadState,
+  modelState: ThreadModelStateView
+): ThreadState {
+  return {
+    ...thread,
+    model: modelState.model,
+    modelEffort: modelState.reasoningEffort,
+    modelSelection: structuredClone(modelState.selection),
+    modelBindingVersion: modelState.bindingVersion,
+    modelSourceUpdatedAt: modelState.sourceUpdatedAt,
+    modelContextWindow: modelState.contextWindow,
+    modelInputModalities: [...modelState.inputModalities],
+    modelSwitchStatus: modelState.blocked ? "recovery_failed" : "idle",
+    modelSwitchOperationId: modelState.operationId,
+    modelSwitchTarget: null
+  };
+}
+
 function snapshotRepairKey(input: {
   reason: SnapshotRepairReason;
   turnId?: string;
@@ -282,6 +367,9 @@ function snapshotRepairKey(input: {
   }
   if (input.reason === "timeline-gap") {
     return `timeline-gap:${input.eventId ?? input.turnId ?? "unknown"}:${generation}`;
+  }
+  if (input.reason === "baseline-required") {
+    return `baseline-required:${input.eventId ?? "stream"}:${generation}`;
   }
   return `${input.reason}:${input.turnId ?? "thread"}:${generation}:${input.requestedAt}`;
 }
@@ -374,20 +462,32 @@ export const useStore = create<State & Actions>((set, get) => ({
         cursor,
         generation: window.historyStamp.generation
       });
+      const extracted = extractLegacyWarningNotices(timelineEngine.entries);
+      const migratedTimelineEngine = extracted.notices.length
+        ? applyTimelineInput(timelineEngine, {
+            kind: "rollback-fork-replace",
+            entries: extracted.entries,
+            generation: timelineEngine.generation
+          })
+        : timelineEngine;
       applied = true;
       return {
         threads: {
           ...state.threads,
           [threadId]: indexedThreadState({
             ...prev,
-            timelineEngine,
+            timelineEngine: migratedTimelineEngine,
+            notices: mergeThreadNotices(
+              prev.notices,
+              extracted.notices.filter((notice) => !loadDismissedThreadNoticeIds(threadId).has(notice.id))
+            ),
             cursor,
             reachedBeginning: cursor === null,
             timelineGeneration: window.historyStamp.generation,
-            processedEventIds: timelineEngine.processedEventIds,
-            itemRevisions: timelineEngine.itemRevisions,
-            snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions
-          }, timelineEngine.entries)
+            processedEventIds: migratedTimelineEngine.processedEventIds,
+            itemRevisions: migratedTimelineEngine.itemRevisions,
+            snapshotDeltaSuppressions: migratedTimelineEngine.snapshotDeltaSuppressions
+          }, migratedTimelineEngine.entries)
         }
       };
     });
@@ -431,6 +531,40 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  upsertThreadNotice: (threadId, notice) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      if (loadDismissedThreadNoticeIds(threadId).has(notice.id)) return state;
+      const nextNotice: ThreadNotice = {
+        ...notice,
+        createdAt: notice.createdAt ?? Date.now()
+      };
+      const existingIndex = prev.notices.findIndex((item) => item.id === nextNotice.id);
+      const notices = existingIndex < 0
+        ? [...prev.notices, nextNotice]
+        : prev.notices.map((item, index) => index === existingIndex ? nextNotice : item);
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: { ...prev, notices }
+        }
+      };
+    }),
+  dismissThreadNotice: (threadId, noticeId) => {
+    const dismissed = loadDismissedThreadNoticeIds(threadId);
+    dismissed.add(noticeId);
+    saveJson(threadNoticeDismissalsKey(threadId), [...dismissed].slice(-100));
+    set((state) => {
+      const prev = state.threads[threadId];
+      if (!prev || !prev.notices.some((notice) => notice.id === noticeId)) return state;
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: { ...prev, notices: prev.notices.filter((notice) => notice.id !== noticeId) }
+        }
+      };
+    });
+  },
   replaceOrAddEntry: (threadId, entry, revision, eventId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -645,6 +779,38 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
+  setAuthoritativeTurnManifest: (threadId, manifest) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const timelineEngine = reduceThreadTimelineState(prev, {
+        kind: "authoritative-turn-manifest",
+        manifest
+      });
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
+        }
+      };
+    }),
+  registerAuthoritativeTurn: (threadId, turnId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const current = currentTimelineEngine(prev).turnManifest;
+      if (!current || current.turnIds.includes(turnId)) {
+        return state;
+      }
+      const timelineEngine = reduceThreadTimelineState(prev, {
+        kind: "authoritative-turn-manifest",
+        manifest: { ...current, turnIds: [...current.turnIds, turnId] }
+      });
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
+        }
+      };
+    }),
   invalidateTimelineDelivery: (threadId, deliveryEpoch) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
@@ -724,7 +890,79 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
-  setPermissionProfile: (threadId, profileId, approvalsReviewer) =>
+  setModelState: (threadId, modelState) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: threadWithModelState(prev, modelState)
+        }
+      };
+    }),
+  beginModelSwitch: (threadId, target) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            modelSwitchStatus: "pending",
+            modelSwitchOperationId: null,
+            modelSwitchTarget: structuredClone(target)
+          }
+        }
+      };
+    }),
+  applyModelSwitchResult: (threadId, result) => {
+    clearContextUsageSnapshot(threadId);
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      if (result.outcome === "recovery_failed") {
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: {
+              ...prev,
+              contextUsage: null,
+              modelSwitchStatus: "recovery_failed",
+              modelSwitchOperationId: result.operationId,
+              modelSwitchTarget: null
+            }
+          }
+        };
+      }
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...threadWithModelState(prev, result.latestState),
+            contextUsage: null,
+            modelSwitchStatus: "idle",
+            modelSwitchOperationId: null,
+            modelSwitchTarget: null
+          }
+        }
+      };
+    });
+  },
+  clearModelSwitchPending: (threadId) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            modelSwitchStatus: "idle",
+            modelSwitchOperationId: null,
+            modelSwitchTarget: null
+          }
+        }
+      };
+    }),
+  setPermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
       return {
@@ -733,6 +971,7 @@ export const useStore = create<State & Actions>((set, get) => ({
           [threadId]: {
             ...prev,
             permissionProfileId: profileId,
+            approvalPolicy: approvalPolicy === undefined ? prev.approvalPolicy : approvalPolicy,
             approvalsReviewer: approvalsReviewer === undefined ? prev.approvalsReviewer : approvalsReviewer
           }
         }
@@ -795,6 +1034,20 @@ export const useStore = create<State & Actions>((set, get) => ({
       return { threads: nextThreads };
     }),
   dispatchEvent: (event) => {
+    if (event.type === "timeline-baseline-required") {
+      const threadIds = event.scope === "all-tracked"
+        ? Object.keys(get().threads)
+        : event.affectedThreadIds ?? [];
+      for (const threadId of threadIds) {
+        get().ensureThread(threadId);
+        get().invalidateTimelineDelivery(threadId);
+        get().requestSnapshotRepair(threadId, {
+          reason: "baseline-required",
+          eventId: `${event.bootId}:${event.streamCursor}`
+        });
+      }
+      return;
+    }
     if (event.type === "timeline-gap") {
       const gapScope = timelineGapScopeFrom(event);
       const threadIds = gapScope?.scope === "all-tracked"
@@ -849,8 +1102,19 @@ export const useStore = create<State & Actions>((set, get) => ({
       }
       const eventId = typeof ev.eventId === "string" ? ev.eventId : null;
       switch (ev.kind) {
+        case "timeline_generation_changed":
+          get().invalidateTimelineDelivery(threadId);
+          get().requestSnapshotRepair(threadId, {
+            reason: "mutation-retry",
+            eventId,
+            generation
+          });
+          break;
         case "turn.started":
         case "turn_started":
+          if (typeof ev.turnId === "string") {
+            get().registerAuthoritativeTurn(threadId, ev.turnId);
+          }
           get().setThreadStatus(threadId, "active", typeof ev.turnId === "string" ? ev.turnId : null);
           get().startReasoningEntry(
             threadId,
@@ -963,18 +1227,27 @@ export const useStore = create<State & Actions>((set, get) => ({
           break;
         }
         case "warning": {
-          const message = typeof ev.message === "string" ? ev.message : "发生错误";
-          get().replaceOrAddEntry(threadId, {
-            id: uniqueTimelineId(`${threadId}-warning`),
-            ...(generation !== null ? { generation } : {}),
-            createdAt: Date.now(),
-            body: { kind: "error", text: message }
-          }, undefined, eventId ?? undefined);
+          const message = typeof ev.message === "string" ? ev.message : "收到配置提示";
+          get().upsertThreadNotice(threadId, {
+            id: `app-server-warning:${message}`,
+            kind: "warning",
+            source: "app-server",
+            text: message
+          });
           break;
         }
         case "turn_error": {
           const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
           const message = typeof ev.message === "string" ? ev.message : "运行失败";
+          if (isLegacyAppServerWarningText(message)) {
+            get().upsertThreadNotice(threadId, {
+              id: `app-server-warning:${message}`,
+              kind: "warning",
+              source: "app-server",
+              text: message
+            });
+            break;
+          }
           get().replaceOrAddEntry(threadId, {
             id: `${turnId}-error`,
             ...(typeof ev.turnId === "string" ? { turnId: ev.turnId } : {}),
@@ -1003,13 +1276,17 @@ export const useStore = create<State & Actions>((set, get) => ({
           if ("activePermissionProfile" in ev) {
             const activeProfile = ev.activePermissionProfile as { id?: unknown } | null;
             const profileId = activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null;
-            const reviewer = "approvalsReviewer" in ev ? approvalsReviewerOrNull(ev.approvalsReviewer) : undefined;
+            const approvalPolicy = "approvalPolicy" in ev ? approvalPolicyOrUndefined(ev.approvalPolicy) : undefined;
+            const reviewer = "approvalsReviewer" in ev ? approvalsReviewerOrUndefined(ev.approvalsReviewer) : undefined;
             const current = get().threads[threadId];
-            const preserveReviewer =
-              reviewer === undefined &&
-              current?.permissionProfileId === profileId &&
+            const complete = approvalPolicy !== undefined && reviewer !== undefined;
+            const currentComplete =
+              current?.permissionProfileId !== undefined &&
+              current.approvalPolicy !== undefined &&
               current.approvalsReviewer !== undefined;
-            get().setPermissionProfile(threadId, profileId, preserveReviewer ? undefined : reviewer ?? null);
+            if (complete || !currentComplete) {
+              get().setPermissionProfile(threadId, profileId, approvalPolicy, reviewer);
+            }
           }
           break;
         }
@@ -1146,6 +1423,7 @@ function currentTimelineEngine(prev: ThreadState): TimelineEngineState {
   if (
     prev.timelineEngine.entries === prev.entries &&
     prev.timelineEngine.generation === prev.timelineGeneration &&
+    prev.timelineEngine.turnManifest === prev.turnManifest &&
     prev.timelineEngine.deletedTurnIds === prev.deletedTurnIds &&
     prev.timelineEngine.interruptedTurnIds === prev.interruptedTurnIds &&
     prev.timelineEngine.processedEventIds === prev.processedEventIds &&
@@ -1158,6 +1436,7 @@ function currentTimelineEngine(prev: ThreadState): TimelineEngineState {
   return createTimelineEngineState({
     entries: prev.entries,
     generation: prev.timelineGeneration,
+    turnManifest: prev.turnManifest,
     deletedTurnIds: prev.deletedTurnIds,
     interruptedTurnIds: prev.interruptedTurnIds,
     processedEventIds: prev.processedEventIds,
@@ -1206,6 +1485,7 @@ function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): Thread
       : createTimelineEngineState({
           entries,
           generation: prev.timelineGeneration,
+          turnManifest: prev.turnManifest,
           deletedTurnIds: prev.deletedTurnIds,
           interruptedTurnIds: prev.interruptedTurnIds,
           processedEventIds: prev.processedEventIds,
@@ -1222,6 +1502,7 @@ function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): Thread
     entries: timelineEngine.entries,
     entryIndexes: buildTimelineEntryIndexes(timelineEngine.entries),
     timelineGeneration: timelineEngine.generation,
+    turnManifest: timelineEngine.turnManifest,
     deletedTurnIds: timelineEngine.deletedTurnIds,
     interruptedTurnIds: timelineEngine.interruptedTurnIds,
     processedEventIds: timelineEngine.processedEventIds,
@@ -1229,6 +1510,24 @@ function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): Thread
     snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions,
     deliveryEpoch: timelineEngine.deliveryEpoch
   };
+}
+
+function mergeThreadNotices(existing: ThreadNotice[], incoming: ThreadNoticeInput[]): ThreadNotice[] {
+  if (!incoming.length) return existing;
+  const merged = new Map(existing.map((notice) => [notice.id, notice]));
+  for (const notice of incoming) {
+    merged.set(notice.id, {
+      ...notice,
+      createdAt: notice.createdAt ?? Date.now()
+    });
+  }
+  return [...merged.values()];
+}
+
+function loadDismissedThreadNoticeIds(threadId: string): Set<string> {
+  const stored = loadJson<unknown>(threadNoticeDismissalsKey(threadId), []);
+  if (!Array.isArray(stored)) return new Set();
+  return new Set(stored.filter((value): value is string => typeof value === "string"));
 }
 
 function threadHasVisibleOutput(thread: ThreadState | undefined, turnId: string | null): boolean {
@@ -1284,7 +1583,6 @@ function isVisibleTimelineEvent(kind: string): boolean {
     "tool_output_delta",
     "turn_diff_updated",
     "context_compacted",
-    "warning",
     "turn_error",
     "item.appended",
     "item.updated",
@@ -1439,7 +1737,22 @@ function replaceLatestTimelineWindow(
   authoritative: TimelineEntry[],
   window: TimelineRepairWindow
 ): TimelineEntry[] | null {
-  if (!authoritative.length) return null;
+  if (!authoritative.length) {
+    const emptyAnchor = timelineEmptyWindowAnchor(window.historyStamp);
+    if (
+      window.windowStartAnchor !== emptyAnchor ||
+      window.windowEndAnchor !== emptyAnchor ||
+      window.preservedThrough
+    ) {
+      return null;
+    }
+    return current.filter((entry) =>
+      (entryHasHistoryStamp(entry, window.historyStamp) &&
+        typeof entry.streamSequence === "number" &&
+        entry.streamSequence > window.pageWatermark) ||
+      (entry.body.kind === "user-message" && Boolean(entry.clientUserMessageId) && entry.body.status !== "sent")
+    );
+  }
   const firstAnchor = timelineEntryWindowAnchor(window.historyStamp, authoritative[0]!);
   const lastAnchor = timelineEntryWindowAnchor(window.historyStamp, authoritative.at(-1)!);
   if (firstAnchor !== window.windowStartAnchor || lastAnchor !== window.windowEndAnchor) return null;
@@ -1785,4 +2098,14 @@ function normalizePendingRequest(req: PendingServerRequest): PendingServerReques
 
 function approvalsReviewerOrNull(value: unknown): ApprovalsReviewer | null {
   return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : null;
+}
+
+function approvalsReviewerOrUndefined(value: unknown): ApprovalsReviewer | null | undefined {
+  if (value === null) return null;
+  return value === "user" || value === "auto_review" || value === "guardian_subagent" ? value : undefined;
+}
+
+function approvalPolicyOrUndefined(value: unknown): ApprovalPolicy | null | undefined {
+  if (value === null) return null;
+  return value === "untrusted" || value === "on-request" || value === "never" ? value : undefined;
 }

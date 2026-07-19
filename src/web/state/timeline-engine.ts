@@ -2,6 +2,7 @@ import type { TimelineEntry } from "./timeline";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
 import {
   resolveAgentMessageAlias,
+  type AuthoritativeTurnManifest,
   type AgentMessageAliasCandidate,
   type AgentMessageAliasResolution
 } from "../../shared/timeline-protocol";
@@ -68,6 +69,10 @@ export type TimelineInput =
   | {
       kind: "set-generation";
       generation: number;
+    }
+  | {
+      kind: "authoritative-turn-manifest";
+      manifest: AuthoritativeTurnManifest;
     }
   | {
       kind: "mark-turn-deleted" | "mark-turn-interrupted";
@@ -167,6 +172,7 @@ export type TimelineEngineState = {
   cursor: string | null;
   reachedBeginning: boolean;
   generation: number;
+  turnManifest: AuthoritativeTurnManifest | null;
   deletedTurnIds: Set<string>;
   interruptedTurnIds: Set<string>;
   processedEventIds: Set<string>;
@@ -188,6 +194,9 @@ export function createTimelineEngineState(init?: Partial<TimelineEngineState>): 
     cursor: init?.cursor ?? null,
     reachedBeginning: init?.reachedBeginning ?? false,
     generation,
+    turnManifest: init?.turnManifest
+      ? { ...init.turnManifest, turnIds: [...init.turnManifest.turnIds] }
+      : null,
     deletedTurnIds: new Set(init?.deletedTurnIds ?? []),
     interruptedTurnIds: new Set(init?.interruptedTurnIds ?? []),
     processedEventIds: new Set(init?.processedEventIds ?? []),
@@ -230,13 +239,14 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
     case "snapshot-window": {
       const generation = nextGeneration(state, input.generation, input.entries);
       const generationState = advanceAgentAliasGeneration(state, generation);
-      const entries = mergeSnapshotEntriesWithExistingContent(generationState.entries, input.entries, generation);
+      const incomingEntries = entriesOutsideTurnBarrier(input.entries, generationState.deletedTurnIds);
+      const entries = mergeSnapshotEntriesWithExistingContent(generationState.entries, incomingEntries, generation);
       const diagnostics = input.cursor
         ? incrementDiagnostic(
             recordEntryCompletenessDiagnostics(
               generationState.diagnostics,
               generationState.entries,
-              input.entries,
+              incomingEntries,
               generation
             ),
             "pageContinuations"
@@ -244,7 +254,7 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
         : recordEntryCompletenessDiagnostics(
             generationState.diagnostics,
             generationState.entries,
-            input.entries,
+            incomingEntries,
             generation
           );
       const nextState = withEntries(
@@ -274,6 +284,9 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
           .filter((identity): identity is string => Boolean(identity))
       );
       const prependEntries = input.entries.filter((entry) => {
+        if (entry.turnId && state.deletedTurnIds.has(entry.turnId)) {
+          return false;
+        }
         const identity = identityKey(entry, generation);
         return !identity || !currentIdentities.has(identity);
       });
@@ -319,7 +332,7 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
           processedEventIds: new Set(state.processedEventIds),
           itemRevisions: new Map(state.itemRevisions)
         }, deletedTurnIds),
-        input.entries
+        entriesOutsideTurnBarrier(input.entries, deletedTurnIds)
       );
     }
     case "live-delta":
@@ -339,6 +352,19 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
         ...next,
         processedEventIds: snapshotProcessedEventIds(next.processedEventIds, input.generation),
         snapshotDeltaSuppressions: createSnapshotDeltaSuppressions(next.entries, input.generation)
+      };
+    }
+    case "authoritative-turn-manifest": {
+      const manifestGeneration = input.manifest.historyStamp?.generation;
+      if (typeof manifestGeneration === "number" && manifestGeneration < state.generation) {
+        return state;
+      }
+      return {
+        ...state,
+        turnManifest: {
+          ...input.manifest,
+          turnIds: input.manifest.turnIds.filter((turnId) => !state.deletedTurnIds.has(turnId))
+        }
       };
     }
     case "mark-turn-deleted": {
@@ -956,6 +982,13 @@ export function selectTimelineEntries(state: TimelineEngineState): TimelineEntry
 }
 
 export function selectOrderedDistinctTurns(state: TimelineEngineState): OrderedDistinctTurn[] {
+  if (state.turnManifest?.turnIds.length) {
+    return state.turnManifest.turnIds.map((turnId, order) => ({
+      turnId,
+      firstEntryId: state.entries.find((entry) => entry.turnId === turnId)?.id ?? `turn:${turnId}`,
+      order
+    }));
+  }
   return selectOrderedDistinctTurnsForNormalizedEntries(state.entries);
 }
 
@@ -991,24 +1024,34 @@ export function selectHasContextCompactionCompletion(state: TimelineEngineState)
 export function selectRollbackMetadataForEntry(
   state: TimelineEngineState,
   target: TimelineEntry
-): { numTurns: number; expectedDeletedTurnIds: string[] } | null {
-  if (!target.turnId) {
+): {
+  targetTurnId: string;
+  historyStamp: NonNullable<AuthoritativeTurnManifest["historyStamp"]>;
+  expectedTailTurnIds: string[];
+} | null {
+  const manifest = state.turnManifest;
+  if (!target.turnId || !manifest?.historyStamp) {
     return null;
   }
 
-  const turnIds = selectOrderedDistinctTurns(state).map((turn) => turn.turnId);
+  const turnIds = manifest.turnIds;
   const targetIndex = turnIds.indexOf(target.turnId);
   if (targetIndex < 0) {
     return null;
   }
-  if (targetIndex === 0 && state.cursor) {
-    return null;
-  }
 
-  const expectedDeletedTurnIds = turnIds.slice(targetIndex);
-  return expectedDeletedTurnIds.length
-    ? { numTurns: expectedDeletedTurnIds.length, expectedDeletedTurnIds }
+  const expectedTailTurnIds = turnIds.slice(targetIndex);
+  return expectedTailTurnIds.length
+    ? {
+        targetTurnId: target.turnId,
+        historyStamp: manifest.historyStamp,
+        expectedTailTurnIds
+      }
     : null;
+}
+
+function entriesOutsideTurnBarrier(entries: TimelineEntry[], deletedTurnIds: Set<string>): TimelineEntry[] {
+  return entries.filter((entry) => !entry.turnId || !deletedTurnIds.has(entry.turnId));
 }
 
 export function isVisibleTurnOutputEntry(entry: TimelineEntry): boolean {

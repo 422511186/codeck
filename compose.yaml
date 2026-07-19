@@ -17,11 +17,13 @@ services:
       CODEX_WEB_BIND_PORT: "3000"
       CODEX_WEB_APP_SERVER_MODE: external
       CODEX_WEB_APP_SERVER_URL: ws://host.docker.internal:31317
+      CODEX_WEB_DATA_DIR: /var/lib/codex-web/data
     ports:
       - "3000:3000"
     volumes:
       - codex-web-uploads:/var/lib/codex-web/uploads
       - codex-web-logs:/var/log/codex-web
+      - codex-web-data:/var/lib/codex-web/data
       - type: bind
         source: ${CODEX_WEB_WORKSPACE_ROOTS:?set CODEX_WEB_WORKSPACE_ROOTS in .env.docker and pass --env-file .env.docker}
         target: ${CODEX_WEB_WORKSPACE_ROOTS:?set CODEX_WEB_WORKSPACE_ROOTS in .env.docker and pass --env-file .env.docker}
@@ -31,3 +33,4 @@ services:
 volumes:
   codex-web-uploads:
   codex-web-logs:
+  codex-web-data:

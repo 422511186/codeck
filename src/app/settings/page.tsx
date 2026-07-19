@@ -2,18 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Bot, ChevronRight } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { codex, auth } from "../../web/api/endpoints";
 import { resetTimelineEventStreamClient } from "../../web/events/client";
-import { applyTheme, settingsStore, themeLabel, type ThemeMode } from "../../web/storage/settings";
-import type { ChatMode, ModelOption } from "../../web/api/types";
+import {
+  applyTheme,
+  migrateLegacyDefaultModel,
+  settingsStore,
+  themeLabel,
+  type ThemeMode
+} from "../../web/storage/settings";
+import type { ChatMode } from "../../web/api/types";
+import { modelSelectionKey, type ModelSelection, type SelectableModel } from "../../shared/custom-models";
 
 export default function SettingsPage(): JSX.Element {
   const router = useRouter();
   const [mode, setMode] = useState<ChatMode>("build");
-  const [model, setModel] = useState<string | null>(null);
+  const [model, setModel] = useState<ModelSelection | null>(null);
   const [theme, setTheme] = useState<ThemeMode>("system");
-  const [models, setModels] = useState<ModelOption[]>([]);
+  const [models, setModels] = useState<SelectableModel[]>([]);
   const [authStatus, setAuthStatus] = useState<{ authMethod: string | null; hasAuthToken: boolean } | null>(null);
   const [tokenUsage, setTokenUsage] = useState<{ lifetimeTokens: number | null; peakDailyTokens: number | null } | null>(null);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -30,9 +38,13 @@ export default function SettingsPage(): JSX.Element {
 
     let cancelled = false;
     codex
-      .models()
-      .then((m) => {
-        if (!cancelled) setModels(m);
+      .modelCatalog()
+      .then((catalog) => {
+        if (!cancelled) {
+          const migrated = migrateLegacyDefaultModel(catalog.models, catalog.appServerModelNames);
+          setModels(catalog.models);
+          setModel(migrated.defaultModel);
+        }
       })
       .catch(() => {
         if (!cancelled) setModels([]);
@@ -81,7 +93,11 @@ export default function SettingsPage(): JSX.Element {
     settingsStore.update({ defaultMode: next });
   }
 
-  function updateModel(next: string | null): void {
+  function updateModel(nextKey: string): void {
+    const selected = models.find(
+      (entry) => modelSelectionKey(selectionForModel(entry)) === nextKey
+    );
+    const next = selected ? selectionForModel(selected) : null;
     setModel(next);
     settingsStore.update({ defaultModel: next });
   }
@@ -123,16 +139,42 @@ export default function SettingsPage(): JSX.Element {
           {modelsLoading ? (
             <span style={{ color: "var(--cw-fg-muted)", fontSize: 14 }}>载入中…</span>
           ) : (
-            <select value={model ?? ""} onChange={(e) => updateModel(e.target.value || null)} style={selectStyle}>
+            <select
+              value={model ? modelSelectionKey(model) : ""}
+              onChange={(e) => updateModel(e.target.value)}
+              style={selectStyle}
+            >
               <option value="">（跟随后端默认）</option>
               {models.map((m) => (
-                <option key={m.id} value={m.id}>
+                <option
+                  key={modelSelectionKey(selectionForModel(m))}
+                  value={modelSelectionKey(selectionForModel(m))}
+                >
                   {m.label}
                 </option>
               ))}
             </select>
           )}
         </Row>
+      </Section>
+
+      <Section title="自定义模型">
+        <Link
+          href="/settings/custom-models"
+          aria-label="自定义模型"
+          style={{
+            minHeight: 48,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            color: "var(--cw-fg)",
+            textDecoration: "none"
+          }}
+        >
+          <Bot size={18} aria-hidden="true" />
+          <span style={{ flex: 1, fontSize: 15 }}>自定义模型</span>
+          <ChevronRight size={18} color="var(--cw-fg-muted)" aria-hidden="true" />
+        </Link>
       </Section>
 
       <Section title="主题">
@@ -222,6 +264,12 @@ export default function SettingsPage(): JSX.Element {
       </Section>
     </main>
   );
+}
+
+function selectionForModel(model: SelectableModel): ModelSelection {
+  return model.source === "custom"
+    ? { source: "custom", customModelId: model.customModelId }
+    : { source: "app-server", model: model.model };
 }
 
 function errorMessage(error: unknown, fallback: string): string {

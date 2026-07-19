@@ -121,6 +121,19 @@ export function optionalStrictNullableString(value: unknown, fieldName: string):
   return value;
 }
 
+export function optionalApprovalPolicy(
+  value: unknown,
+  fieldName = "approvalPolicy"
+): "untrusted" | "on-request" | "never" | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (value === "untrusted" || value === "on-request" || value === "never") {
+    return value;
+  }
+  throw new RouteValidationError(`${fieldName} 无效`);
+}
+
 export function optionalStrictBoolean(value: unknown, fieldName: string): boolean | undefined {
   if (value === undefined) {
     return undefined;

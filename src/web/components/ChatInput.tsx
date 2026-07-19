@@ -12,14 +12,18 @@ export type ChatInputProps = {
   cwd?: string;
   running: boolean;
   disabled?: boolean;
+  imageInputSupported?: boolean;
+  sendBlockedReason?: string;
   draftOverride?: { text: string; version: number };
   permissionLabel?: string;
   permissionDescription?: string;
+  permissionPending?: boolean;
   modelLabel?: string;
   reasoningEffortLabel?: string;
   goal?: ThreadGoal | null;
   onOpenPermissionPicker?: () => void;
   onOpenModelPicker?: () => void;
+  onOpenReasoningPicker?: () => void;
   onOpenGoalEditor?: () => void;
   onHeightChange?: (height: number) => void;
   onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => Promise<void>;
@@ -253,8 +257,12 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   }
 
   const hasPendingImages = images.some((image) => image.status !== "ready");
+  const imageCompatibilityError = images.length > 0 && props.imageInputSupported === false
+    ? "当前模型不支持图片，请移除草稿图片或切换模型"
+    : null;
+  const sendBlockedReason = props.sendBlockedReason ?? imageCompatibilityError;
   const disabled = Boolean(props.disabled) || sending || images.some((image) => image.status === "uploading");
-  const canSend = !disabled && !props.running && text.trim().length > 0 && !hasPendingImages;
+  const canSend = !disabled && !props.running && !sendBlockedReason && text.trim().length > 0 && !hasPendingImages;
   const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
   const selectedSkillKeys = new Set(selectedSkills.map(skillKey));
 
@@ -318,6 +326,10 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
             </div>
           ) : null}
 
+          {sendBlockedReason ? (
+            <div role="status" style={compatibilityErrorStyle}>{sendBlockedReason}</div>
+          ) : null}
+
           <div style={composerToolbarStyle}>
             <button
               type="button"
@@ -335,7 +347,7 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
                   onClick={props.onOpenPermissionPicker}
                   aria-label={`权限 ${props.permissionLabel}`}
                   title={props.permissionDescription}
-                  style={stateChipStyle}
+                  style={props.permissionPending ? pendingStateChipStyle : stateChipStyle}
                   disabled={disabled}
                 >
                   {props.permissionLabel}
@@ -345,11 +357,22 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
                 <button
                   type="button"
                   onClick={props.onOpenModelPicker}
-                  aria-label={`模型 ${modelChipText(props.modelLabel, props.reasoningEffortLabel)}`}
+                  aria-label={`模型 ${props.modelLabel}`}
                   style={stateChipStyle}
                   disabled={disabled}
                 >
-                  {modelChipText(props.modelLabel, props.reasoningEffortLabel)}
+                  {props.modelLabel}
+                </button>
+              ) : null}
+              {props.reasoningEffortLabel && props.onOpenReasoningPicker ? (
+                <button
+                  type="button"
+                  onClick={props.onOpenReasoningPicker}
+                  aria-label={`推理强度 ${props.reasoningEffortLabel}`}
+                  style={effortChipStyle}
+                  disabled={disabled}
+                >
+                  {props.reasoningEffortLabel}
                 </button>
               ) : null}
             </div>
@@ -414,10 +437,6 @@ function skillKey(skill: SkillReference): string {
 function skillLoadKey(cwd?: string): string {
   const normalized = cwd?.trim();
   return normalized || "__default__";
-}
-
-function modelChipText(modelLabel: string, effortLabel?: string): string {
-  return effortLabel ? `${modelLabel} ${effortLabel}` : modelLabel;
 }
 
 function AddPanel({
@@ -1001,12 +1020,31 @@ const stateChipStyle: React.CSSProperties = {
   textOverflow: "ellipsis"
 };
 
+const pendingStateChipStyle: React.CSSProperties = {
+  ...stateChipStyle,
+  borderColor: "color-mix(in srgb, var(--cw-warning) 38%, var(--cw-border))",
+  color: "var(--cw-fg-muted)"
+};
+
+const effortChipStyle: React.CSSProperties = {
+  ...stateChipStyle,
+  maxWidth: 92,
+  flex: "0 0 auto"
+};
+
 const selectedContextStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
   overflowX: "auto",
   padding: "0 2px"
+};
+
+const compatibilityErrorStyle: React.CSSProperties = {
+  padding: "0 4px",
+  color: "var(--cw-danger)",
+  fontSize: 12,
+  lineHeight: "18px"
 };
 
 const skillChipRowStyle: React.CSSProperties = {

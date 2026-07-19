@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createRuntimeConfig, loadRuntimeEnvConfig } from "../../src/config/env";
@@ -50,6 +50,35 @@ describe("createRuntimeConfig", () => {
     });
 
     expect(config.auditLogPath).toBe("C:\\Users\\huang\\workspace\\codex-web\\logs\\audit.jsonl");
+  });
+
+  it("默认将持久化数据目录解析为项目 data 目录", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured"
+    });
+
+    expect(config.dataDir).toBe(resolve("data"));
+    expect(isAbsolute(config.dataDir)).toBe(true);
+  });
+
+  it("将显式数据目录解析为绝对路径", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_DATA_DIR: "./runtime/custom-model-data"
+    });
+
+    expect(config.dataDir).toBe(resolve("./runtime/custom-model-data"));
+  });
+
+  it("只接受服务端 CODEX_WEB_DATA_DIR，不读取浏览器提供的路径字段", () => {
+    const config = createRuntimeConfig({
+      CODEX_WEB_ACCESS_TOKEN: "sk-user-configured",
+      CODEX_WEB_DATA_DIR: "./server-data",
+      dataDir: "/browser-controlled",
+      persistencePath: "/browser-controlled"
+    });
+
+    expect(config.dataDir).toBe(resolve("./server-data"));
   });
 
   it("配置外部 app-server endpoint 时自动使用 external 模式", () => {
