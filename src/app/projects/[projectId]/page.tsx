@@ -34,13 +34,36 @@ export default function ProjectThreadsPage(): JSX.Element {
   const listRequestSeq = useRef(0);
 
   useEffect(() => {
-    const p = getProject(projectId);
-    if (!p) {
-      router.replace("/projects");
-      return;
+    let cancelled = false;
+    const localProject = getProject(projectId);
+    if (localProject) {
+      setProject(localProject);
+      touchProjectLastUsed(localProject.id);
+      return () => {
+        cancelled = true;
+      };
     }
-    setProject(p);
-    touchProjectLastUsed(p.id);
+    (async () => {
+      try {
+        const catalog = await codex.projectCatalog();
+        const serverProject = catalog.projects.find((entry) => entry.id === projectId);
+        if (!serverProject) {
+          router.replace("/projects");
+          return;
+        }
+        if (cancelled) return;
+        setProject(serverProject);
+        void codex.touchServerProject(serverProject.id, Date.now()).catch(() => undefined);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "无法读取服务端项目");
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, router]);
 
   useEffect(() => {
@@ -144,7 +167,13 @@ export default function ProjectThreadsPage(): JSX.Element {
     }
   }
 
-  if (!project) return <main style={{ padding: 16 }} />;
+  if (!project) {
+    return (
+      <main style={{ padding: 16 }}>
+        {error ? <div style={{ color: "var(--cw-danger)", fontSize: 14 }}>{error}</div> : null}
+      </main>
+    );
+  }
 
   return (
     <main

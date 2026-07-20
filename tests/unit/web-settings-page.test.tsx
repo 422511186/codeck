@@ -12,12 +12,16 @@ const mockModelCatalog = vi.fn();
 const mockAuthStatus = vi.fn();
 const mockTokenUsage = vi.fn();
 const mockLogout = vi.fn();
+const mockProjectCatalog = vi.fn();
+const mockUpdateDefaultProjectStorage = vi.fn();
 
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     modelCatalog: () => mockModelCatalog(),
     authStatus: () => mockAuthStatus(),
-    tokenUsage: () => mockTokenUsage()
+    tokenUsage: () => mockTokenUsage(),
+    projectCatalog: () => mockProjectCatalog(),
+    updateDefaultProjectStorage: (...args: unknown[]) => mockUpdateDefaultProjectStorage(...args)
   },
   auth: {
     logout: () => mockLogout()
@@ -76,6 +80,9 @@ describe("SettingsPage", () => {
       summary: { lifetimeTokens: 2_000_000, peakDailyTokens: 500_000 }
     });
     mockLogout.mockResolvedValue(undefined);
+    mockProjectCatalog.mockResolvedValue({ revision: 2, defaultStorage: "server", projects: [] });
+    mockUpdateDefaultProjectStorage.mockReset();
+    mockUpdateDefaultProjectStorage.mockResolvedValue({ revision: 3, defaultStorage: "client", projects: [] });
     mockLoadSettings.mockReturnValue({ defaultMode: "build", defaultModel: null, theme: "system" });
     mockMigrateLegacyDefaultModel.mockImplementation(() => mockLoadSettings());
     mockUpdateSettings.mockClear();
@@ -108,6 +115,28 @@ describe("SettingsPage", () => {
 
     expect(mockUpdateSettings).toHaveBeenCalledWith({ theme: "dark" });
     expect(mockApplyTheme).toHaveBeenCalledWith("dark");
+  });
+
+  it("读取并修改服务端共享的默认项目存储位置", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const select = await screen.findByLabelText("新增项目默认保存位置");
+    expect(select).toHaveValue("server");
+    await user.selectOptions(select, "client");
+
+    await waitFor(() => expect(mockUpdateDefaultProjectStorage).toHaveBeenCalledWith("client", 2));
+    expect(select).toHaveValue("client");
+    expect(mockUpdateSettings).not.toHaveBeenCalledWith(expect.objectContaining({ defaultProjectStorage: expect.anything() }));
+  });
+
+  it("项目设置读取失败时显示不可用而不影响其他设置", async () => {
+    mockProjectCatalog.mockRejectedValue(new Error("项目目录损坏"));
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("项目目录损坏")).toBeInTheDocument();
+    expect(screen.getByText("不可用")).toBeInTheDocument();
+    expect(await screen.findByText("GPT-5")).toBeInTheDocument();
   });
 
   it("shows account and token usage without Codex account logout controls", async () => {

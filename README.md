@@ -25,7 +25,7 @@
 - 前端：React 19、Next.js 16 app router、Zustand、react-markdown + mermaid。
 - API 路由：Next.js route handlers，经自定义 Node server 承载。
 - 协议：Codex app-server JSON-RPC/WebSocket。
-- 状态存储：个人模式不使用数据库；自定义模型目录与会话模型绑定保存在 `CODEX_WEB_DATA_DIR` 的版本化 JSON 文件中，其他运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
+- 状态存储：个人模式不使用数据库；服务端项目目录、自定义模型目录与会话模型绑定保存在 `CODEX_WEB_DATA_DIR` 的版本化 JSON 文件中，其他运行中状态放内存，Codex 会话仍由 Codex app-server 管理。
 - 登录方式：优先使用后端配置的 `CODEX_WEB_ACCESS_TOKEN`；如果没有配置，后端启动时自动生成一个随机长 token 并打印到控制台。
 
 ### 运行架构：单进程全栈
@@ -62,7 +62,7 @@
 - **路由**：
   - `/`：项目列表（首屏）
   - `/login`：token 登录
-  - `/projects`：项目列表（localStorage 管理，按 `cwd` 聚合会话）
+  - `/projects`：项目列表（合并仅当前设备与服务端项目记录，按 `cwd` 聚合会话）
   - `/projects/[projectId]`：项目内会话列表（进行中 / 已归档）
   - `/threads/[threadId]`：会话页（timeline + composer + Plan/Build + 模型切换 + 底部抽屉）
   - `/settings`：默认模型与模式、自定义模型入口、主题、账号状态、Token 用量、登出
@@ -190,7 +190,7 @@ CODEX_WEB_APP_SERVER_MODE=spawn
 - `CODEX_WEB_WORKSPACE_ROOTS` 用来限制后端允许操作的工作区范围。
 - `CODEX_WEB_UPLOAD_DIR` 是图片暂存目录；未配置时默认使用项目当前工作目录下的 `uploads`。
 - `CODEX_WEB_AUDIT_LOG_PATH` 是审计日志路径；未配置时默认使用项目当前工作目录下的 `logs/audit.jsonl`。
-- `CODEX_WEB_DATA_DIR` 保存 `custom-models.json` 和 `thread-model-bindings.json`；未配置时默认使用项目当前工作目录下的 `data`，生产环境必须持久化并备份。
+- `CODEX_WEB_DATA_DIR` 保存 `projects.json`、`custom-models.json` 和 `thread-model-bindings.json`；未配置时默认使用项目当前工作目录下的 `data`，生产环境必须持久化并备份。
 - 审批、question、WebSocket 连接状态等运行中状态默认放内存；服务重启后从 Codex app-server 重新读取会话即可。
 
 ## 自定义模型
@@ -253,7 +253,7 @@ CODEX_WEB_APP_SERVER_MODE=off
 - 图片上传目录额外允许作为 `localImage` 来源，但不会自动扩大 Files/Terminal 的工作区范围。
 - 发送消息、上传图片、执行终端命令、审批响应、fork、rollback、interrupt、steer、新建会话等敏感动作会写入 append-only JSONL 审计日志。
 - 审计日志会递归脱敏 key 中包含 `token`、`secret`、`password`、`url` 的字段。
-- 自定义模型与绑定文件只由后端在 `CODEX_WEB_DATA_DIR` 下创建，文件权限为 `0600`；浏览器不能指定持久化路径，文件中不保存 provider 配置或凭据。
+- 项目目录、自定义模型与绑定文件只由后端在 `CODEX_WEB_DATA_DIR` 下创建，文件权限为 `0600`；浏览器不能指定持久化路径，文件中不保存 provider 配置或凭据。
 - 这是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。对外网开放前需要额外接入反向代理、TLS、IP allowlist 和更强认证。
 
 ## 文档语言约定

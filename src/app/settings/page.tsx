@@ -15,6 +15,7 @@ import {
 } from "../../web/storage/settings";
 import type { ChatMode } from "../../web/api/types";
 import { modelSelectionKey, type ModelSelection, type SelectableModel } from "../../shared/custom-models";
+import type { ProjectCatalog, ProjectStorage } from "../../shared/projects";
 
 export default function SettingsPage(): JSX.Element {
   const router = useRouter();
@@ -29,6 +30,10 @@ export default function SettingsPage(): JSX.Element {
   const [usageLoading, setUsageLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [projectCatalog, setProjectCatalog] = useState<ProjectCatalog | null>(null);
+  const [projectStorageLoading, setProjectStorageLoading] = useState(true);
+  const [projectStoragePending, setProjectStoragePending] = useState(false);
+  const [projectStorageError, setProjectStorageError] = useState<string | null>(null);
 
   useEffect(() => {
     const settings = settingsStore.load();
@@ -83,6 +88,21 @@ export default function SettingsPage(): JSX.Element {
         if (!cancelled) setUsageLoading(false);
       });
 
+    codex
+      .projectCatalog()
+      .then((catalog) => {
+        if (!cancelled) {
+          setProjectCatalog(catalog);
+          setProjectStorageError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setProjectStorageError(errorMessage(err, "无法读取项目设置"));
+      })
+      .finally(() => {
+        if (!cancelled) setProjectStorageLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -106,6 +126,24 @@ export default function SettingsPage(): JSX.Element {
     setTheme(next);
     settingsStore.update({ theme: next });
     applyTheme(next);
+  }
+
+  async function updateProjectStorage(next: ProjectStorage): Promise<void> {
+    if (!projectCatalog || projectStoragePending) return;
+    setProjectStoragePending(true);
+    setProjectStorageError(null);
+    try {
+      setProjectCatalog(await codex.updateDefaultProjectStorage(next, projectCatalog.revision));
+    } catch (error) {
+      setProjectStorageError(errorMessage(error, "无法保存项目设置"));
+      try {
+        setProjectCatalog(await codex.projectCatalog());
+      } catch {
+        // 保留当前可见值，等待用户重新进入设置页或后端恢复。
+      }
+    } finally {
+      setProjectStoragePending(false);
+    }
   }
 
   async function logout(): Promise<void> {
@@ -156,6 +194,32 @@ export default function SettingsPage(): JSX.Element {
             </select>
           )}
         </Row>
+      </Section>
+
+      <Section title="项目">
+        <Row label="新增项目默认保存位置">
+          {projectStorageLoading ? (
+            <span style={{ color: "var(--cw-fg-muted)", fontSize: 14 }}>载入中…</span>
+          ) : projectCatalog ? (
+            <select
+              aria-label="新增项目默认保存位置"
+              value={projectCatalog.defaultStorage}
+              disabled={projectStoragePending}
+              onChange={(event) => void updateProjectStorage(event.target.value as ProjectStorage)}
+              style={selectStyle}
+            >
+              <option value="client">仅当前设备</option>
+              <option value="server">保存到服务端</option>
+            </select>
+          ) : (
+            <span style={{ color: "var(--cw-danger)", fontSize: 14 }}>不可用</span>
+          )}
+        </Row>
+        {projectStorageError ? (
+          <div style={{ color: "var(--cw-danger)", fontSize: 13, padding: "0 0 12px" }}>
+            {projectStorageError}
+          </div>
+        ) : null}
       </Section>
 
       <Section title="自定义模型">

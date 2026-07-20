@@ -5,6 +5,7 @@ import {
   addProject,
   removeProject,
   renameProject,
+  saveLocalProject,
   touchProjectLastUsed
 } from "../../src/web/storage/projects";
 
@@ -52,6 +53,7 @@ describe("projects storage", () => {
     expect(p.id).toBeTruthy();
     expect(p.addedAt).toBeGreaterThan(0);
     expect(p.lastUsedAt).toBeGreaterThan(0);
+    expect(p.storage).toBe("client");
   });
 
   it("should deduplicate by normalized path", () => {
@@ -106,5 +108,49 @@ describe("projects storage", () => {
     touchProjectLastUsed(p.id);
     const after = getProject(p.id)?.lastUsedAt ?? 0;
     expect(after).toBeGreaterThan(before);
+  });
+
+  it("旧项目 schema 读取后视为仅客户端且不改写服务端", () => {
+    window.localStorage.setItem("codex-web:projects", JSON.stringify([
+      { id: "legacy-1", name: "Legacy", path: "C:/legacy", addedAt: 1, lastUsedAt: 2 }
+    ]));
+
+    expect(listProjects()).toEqual([
+      { id: "legacy-1", name: "Legacy", path: "C:/legacy", addedAt: 1, lastUsedAt: 2, storage: "client" }
+    ]);
+  });
+
+  it("保存服务端迁回项目时保留 ID 和时间", () => {
+    const saved = saveLocalProject({
+      id: "server-1",
+      name: "Server Project",
+      path: "/workspace/server",
+      addedAt: 10,
+      lastUsedAt: 20,
+      storage: "server"
+    });
+
+    expect(saved).toEqual({
+      id: "server-1",
+      name: "Server Project",
+      path: "/workspace/server",
+      addedAt: 10,
+      lastUsedAt: 20,
+      storage: "client"
+    });
+    expect(getProject("server-1")).toEqual(saved);
+  });
+
+  it("保存迁回项目时拒绝另一个本地项目的同路径", () => {
+    addProject("C:/Work/Demo", "Local");
+
+    expect(() => saveLocalProject({
+      id: "server-1",
+      name: "Server",
+      path: "c:\\work\\demo\\",
+      addedAt: 10,
+      lastUsedAt: 20,
+      storage: "server"
+    })).toThrow("该工作区路径已存在当前设备项目");
   });
 });

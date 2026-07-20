@@ -1,75 +1,271 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { listProjects, addProject, removeProject, renameProject, touchProjectLastUsed, type Project } from "../../web/storage/projects";
-import { codex } from "../../web/api/endpoints";
 import { ApiError } from "../../web/api/client";
+import { codex } from "../../web/api/endpoints";
+import { findProjectByPath, mergeProjectCatalog, type ProjectPathConflict } from "../../web/projects/catalog";
+import {
+  addProject,
+  listProjects,
+  removeProject,
+  renameProject,
+  saveLocalProject,
+  touchProjectLastUsed,
+  type Project
+} from "../../web/storage/projects";
+import type { ProjectCatalog, ProjectStorage } from "../../shared/projects";
 
 export default function ProjectsPage(): JSX.Element {
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [localProjects, setLocalProjects] = useState<Project[]>([]);
+  const [serverCatalog, setServerCatalog] = useState<ProjectCatalog | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [serverLoading, setServerLoading] = useState(true);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showAdd, setShowAdd] = useState(false);
   const [actionFor, setActionFor] = useState<Project | null>(null);
   const [renameFor, setRenameFor] = useState<Project | null>(null);
+  const [conflictFor, setConflictFor] = useState<ProjectPathConflict | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [operationPending, setOperationPending] = useState(false);
+
+  const merged = useMemo(
+    () => mergeProjectCatalog(localProjects, serverCatalog?.projects ?? []),
+    [localProjects, serverCatalog]
+  );
 
   useEffect(() => {
-    refresh();
+    refreshLocal();
+    void refreshServer();
   }, []);
 
-  function refresh(): void {
-    const list = listProjects();
-    setProjects(list);
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       const next: Record<string, number> = {};
-      for (const p of list) {
+      for (const project of merged.projects) {
         try {
-          const res = await codex.listThreads({ cwd: p.path });
-          next[p.id] = res.threads?.length || 0;
+          const response = await codex.listThreads({ cwd: project.path });
+          next[project.id] = response.threads?.length ?? 0;
         } catch {
-          next[p.id] = 0;
+          next[project.id] = 0;
         }
       }
-      setCounts(next);
+      if (!cancelled) setCounts(next);
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [merged.projects]);
+
+  function refreshLocal(): void {
+    setLocalProjects(listProjects());
   }
 
-  function enterProject(p: Project): void {
-    touchProjectLastUsed(p.id);
-    router.push(`/projects/${p.id}`);
+  async function refreshServer(): Promise<void> {
+    setServerLoading(true);
+    try {
+      setServerCatalog(await codex.projectCatalog());
+      setServerError(null);
+    } catch (error) {
+      setServerCatalog(null);
+      setServerError(errorMessage(error, "服务端项目加载失败"));
+    } finally {
+      setServerLoading(false);
+    }
   }
+
+  function acceptCatalogFromError(error: unknown): void {
+    if (!(error instanceof ApiError) || typeof error.body !== "object" || error.body === null) return;
+    const body = error.body as Partial<ProjectCatalog>;
+    if (
+      typeof body.revision === "number" &&
+      (body.defaultStorage === "client" || body.defaultStorage === "server") &&
+      Array.isArray(body.projects)
+    ) {
+      setServerCatalog({
+        revision: body.revision,
+        defaultStorage: body.defaultStorage,
+        projects: body.projects
+      });
+    }
+  }
+
+  function enterProject(project: Project): void {
+    const now = Date.now();
+    if (storageOf(project) === "client") {
+      touchProjectLastUsed(project.id);
+      refreshLocal();
+    } else {
+      void codex.touchServerProject(project.id, now).then(setServerCatalog).catch(() => undefined);
+    }
+    router.push(`/projects/${project.id}`);
+  }
+
+  async function addNewProject(input: { path: string; name: string; storage: ProjectStorage }): Promise<void> {
+    await codex.listThreads({ cwd: input.path, limit: 1 });
+    if (findProjectByPath(merged.projects, input.path)) {
+      throw new Error("该工作区已在项目列表中");
+    }
+    if (input.storage === "client") {
+      addProject(input.path, input.name);
+      refreshLocal();
+      return;
+    }
+    if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
+    setServerCatalog(await codex.createServerProject({ name: input.name, path: input.path }, serverCatalog.revision));
+  }
+
+  async function renameSelected(name: string): Promise<void> {
+    if (!renameFor) return;
+    setOperationPending(true);
+    setOperationError(null);
+    try {
+      if (storageOf(renameFor) === "client") {
+        renameProject(renameFor.id, name);
+        refreshLocal();
+      } else {
+        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
+        setServerCatalog(await codex.renameServerProject(renameFor.id, name, serverCatalog.revision));
+      }
+      setRenameFor(null);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setOperationError(errorMessage(error, "重命名项目失败"));
+    } finally {
+      setOperationPending(false);
+    }
+  }
+
+  async function removeSelected(): Promise<void> {
+    if (!actionFor) return;
+    const project = actionFor;
+    setOperationPending(true);
+    setOperationError(null);
+    try {
+      if (storageOf(project) === "client") {
+        removeProject(project.id);
+        refreshLocal();
+      } else {
+        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
+        setServerCatalog(await codex.deleteServerProject(project.id, serverCatalog.revision));
+      }
+      setActionFor(null);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setOperationError(errorMessage(error, "移除项目失败"));
+    } finally {
+      setOperationPending(false);
+    }
+  }
+
+  async function moveSelected(): Promise<void> {
+    if (!actionFor || !serverCatalog) return;
+    const project = actionFor;
+    setOperationPending(true);
+    setOperationError(null);
+    try {
+      if (storageOf(project) === "client") {
+        const catalog = await codex.createServerProject(
+          {
+            id: project.id,
+            name: project.name,
+            path: project.path,
+            addedAt: project.addedAt,
+            lastUsedAt: project.lastUsedAt
+          },
+          serverCatalog.revision
+        );
+        removeProject(project.id);
+        refreshLocal();
+        setServerCatalog(catalog);
+      } else {
+        saveLocalProject(project);
+        try {
+          const catalog = await codex.deleteServerProject(project.id, serverCatalog.revision);
+          setServerCatalog(catalog);
+          refreshLocal();
+        } catch (error) {
+          removeProject(project.id);
+          refreshLocal();
+          throw error;
+        }
+      }
+      setActionFor(null);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setOperationError(errorMessage(error, "修改存储位置失败"));
+    } finally {
+      setOperationPending(false);
+    }
+  }
+
+  async function resolveConflict(keep: "client" | "server"): Promise<void> {
+    if (!conflictFor || !serverCatalog) return;
+    setOperationPending(true);
+    setOperationError(null);
+    try {
+      if (keep === "server") {
+        removeProject(conflictFor.local.id);
+        refreshLocal();
+      } else {
+        setServerCatalog(await codex.deleteServerProject(conflictFor.server.id, serverCatalog.revision));
+      }
+      setConflictFor(null);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setOperationError(errorMessage(error, "处理项目冲突失败"));
+    } finally {
+      setOperationPending(false);
+    }
+  }
+
+  const showEmpty = !serverLoading && !serverError && merged.projects.length === 0;
 
   return (
     <main style={{ padding: "var(--cw-space-4)", paddingBottom: 96 }}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "var(--cw-space-2) 0"
-        }}
-      >
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--cw-space-2) 0" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>项目</h1>
-        <Link href="/settings" aria-label="设置" style={{ fontSize: 22, textDecoration: "none" }}>
-          ⚙️
-        </Link>
+        <Link href="/settings" aria-label="设置" style={{ fontSize: 22, textDecoration: "none" }}>⚙️</Link>
       </header>
 
-      {projects.length === 0 ? (
+      {serverError ? (
+        <div role="alert" style={alertStyle}>
+          <span style={{ flex: 1 }}>{serverError}</span>
+          <button type="button" onClick={() => void refreshServer()} style={btnGhost}>重试</button>
+        </div>
+      ) : null}
+
+      {operationError ? <div role="alert" style={alertStyle}>{operationError}</div> : null}
+
+      {merged.conflicts.map((conflict) => (
+        <button
+          key={`${conflict.local.id}:${conflict.server.id}`}
+          type="button"
+          onClick={() => setConflictFor(conflict)}
+          style={{ ...alertStyle, width: "100%", textAlign: "left", color: "var(--cw-danger)" }}
+        >
+          {conflict.server.name} 存在存储冲突，点击处理
+        </button>
+      ))}
+
+      {showEmpty ? (
         <EmptyState onAdd={() => setShowAdd(true)} />
+      ) : serverLoading && merged.projects.length === 0 ? (
+        <div style={{ padding: 16, color: "var(--cw-fg-muted)" }}>加载项目中…</div>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-          {projects.map((p) => (
+          {merged.projects.map((project) => (
             <li
-              key={p.id}
-              onPointerDown={pressHandler(p, setActionFor)}
-              onClick={() => enterProject(p)}
+              key={project.id}
+              onPointerDown={pressHandler(project, setActionFor)}
+              onClick={() => enterProject(project)}
               style={{
                 background: "var(--cw-card)",
                 border: "1px solid var(--cw-border)",
-                borderRadius: 14,
+                borderRadius: 8,
                 padding: 14,
                 display: "flex",
                 flexDirection: "column",
@@ -77,10 +273,13 @@ export default function ProjectsPage(): JSX.Element {
                 userSelect: "none"
               }}
             >
-              <div style={{ fontWeight: 600, fontSize: 16 }}>{p.name}</div>
-              <div style={{ fontSize: 13, color: "var(--cw-fg-muted)", wordBreak: "break-all" }}>{p.path}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 16 }}>{project.name}</div>
+                <span style={storageBadgeStyle}>{storageOf(project) === "server" ? "服务端" : "当前设备"}</span>
+              </div>
+              <div style={{ fontSize: 13, color: "var(--cw-fg-muted)", wordBreak: "break-all" }}>{project.path}</div>
               <div style={{ fontSize: 12, color: "var(--cw-fg-muted)" }}>
-                {formatRelativeShort(p.lastUsedAt)} · {counts[p.id] ?? "—"} 个会话
+                {formatRelativeShort(project.lastUsedAt)} · {counts[project.id] ?? "—"} 个会话
               </div>
             </li>
           ))}
@@ -91,48 +290,50 @@ export default function ProjectsPage(): JSX.Element {
         type="button"
         onClick={() => setShowAdd(true)}
         aria-label="添加项目"
-        style={{
-          position: "fixed",
-          right: 20,
-          bottom: 24,
-          width: 56,
-          height: 56,
-          borderRadius: 28,
-          border: "none",
-          background: "var(--cw-accent)",
-          color: "#fff",
-          fontSize: 28,
-          boxShadow: "0 6px 18px rgba(0,0,0,0.25)"
-        }}
+        disabled={serverLoading}
+        style={{ ...fabStyle, opacity: serverLoading ? 0.6 : 1 }}
       >
         +
       </button>
 
-      {showAdd ? <AddProjectModal onClose={() => setShowAdd(false)} onAdded={refresh} /> : null}
+      {showAdd ? (
+        <AddProjectModal
+          defaultStorage={serverCatalog?.defaultStorage ?? "client"}
+          serverAvailable={Boolean(serverCatalog)}
+          onClose={() => setShowAdd(false)}
+          onSubmit={addNewProject}
+        />
+      ) : null}
       {actionFor ? (
         <ActionSheet
           project={actionFor}
+          pending={operationPending}
+          serverAvailable={Boolean(serverCatalog)}
           onClose={() => setActionFor(null)}
           onRename={() => {
             setRenameFor(actionFor);
             setActionFor(null);
           }}
-          onRemove={() => {
-            removeProject(actionFor.id);
-            setActionFor(null);
-            refresh();
-          }}
+          onMove={() => void moveSelected()}
+          onRemove={() => void removeSelected()}
         />
       ) : null}
       {renameFor ? (
         <RenameModal
           project={renameFor}
+          pending={operationPending}
+          error={operationError}
           onClose={() => setRenameFor(null)}
-          onSubmit={(name) => {
-            renameProject(renameFor.id, name);
-            setRenameFor(null);
-            refresh();
-          }}
+          onSubmit={(name) => void renameSelected(name)}
+        />
+      ) : null}
+      {conflictFor ? (
+        <ConflictModal
+          conflict={conflictFor}
+          pending={operationPending}
+          onClose={() => setConflictFor(null)}
+          onKeepClient={() => void resolveConflict("client")}
+          onKeepServer={() => void resolveConflict("server")}
         />
       ) : null}
     </main>
@@ -141,40 +342,28 @@ export default function ProjectsPage(): JSX.Element {
 
 function EmptyState({ onAdd }: { onAdd: () => void }): JSX.Element {
   return (
-    <div
-      style={{
-        marginTop: 80,
-        textAlign: "center",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 16,
-        color: "var(--cw-fg-muted)"
-      }}
-    >
+    <div style={{ marginTop: 80, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 16, color: "var(--cw-fg-muted)" }}>
       <div style={{ fontSize: 64 }}>📂</div>
       <div style={{ fontSize: 16 }}>还没有项目</div>
-      <button
-        type="button"
-        onClick={onAdd}
-        style={{
-          padding: "10px 22px",
-          borderRadius: 12,
-          border: "none",
-          background: "var(--cw-accent)",
-          color: "#fff",
-          fontSize: 15
-        }}
-      >
-        添加项目
-      </button>
+      <button type="button" onClick={onAdd} style={btnPrimary}>添加项目</button>
     </div>
   );
 }
 
-function AddProjectModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }): JSX.Element {
+function AddProjectModal({
+  defaultStorage,
+  serverAvailable,
+  onClose,
+  onSubmit
+}: {
+  defaultStorage: ProjectStorage;
+  serverAvailable: boolean;
+  onClose: () => void;
+  onSubmit: (input: { path: string; name: string; storage: ProjectStorage }) => Promise<void>;
+}): JSX.Element {
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
+  const [storage, setStorage] = useState<ProjectStorage>(serverAvailable ? defaultStorage : "client");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -183,17 +372,10 @@ function AddProjectModal({ onClose, onAdded }: { onClose: () => void; onAdded: (
     setSubmitting(true);
     setError(null);
     try {
-      await codex.listThreads({ cwd: path.trim(), limit: 1 });
-      const finalName = name.trim() || lastSegment(path.trim());
-      addProject(path.trim(), finalName);
-      onAdded();
+      await onSubmit({ path: path.trim(), name: name.trim() || lastSegment(path.trim()), storage });
       onClose();
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError((err as Error).message);
-      }
+    } catch (submitError) {
+      setError(errorMessage(submitError, "添加项目失败"));
     } finally {
       setSubmitting(false);
     }
@@ -203,27 +385,26 @@ function AddProjectModal({ onClose, onAdded }: { onClose: () => void; onAdded: (
     <Backdrop onClose={onClose}>
       <div style={modalStyle}>
         <h2 style={{ margin: 0, fontSize: 18 }}>添加项目</h2>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>工作区路径</span>
-          <input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="C:/Users/xxx/workspace/proj"
-            style={inputStyle}
-            autoFocus
-          />
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>工作区路径</span>
+          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="C:/Users/xxx/workspace/proj" style={inputStyle} autoFocus />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>别名（可选）</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空默认取目录名" style={inputStyle} />
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>别名（可选）</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="留空默认取目录名" style={inputStyle} />
+        </label>
+        <label style={fieldStyle}>
+          <span style={fieldLabelStyle}>保存位置</span>
+          <select value={storage} onChange={(event) => setStorage(event.target.value as ProjectStorage)} style={inputStyle}>
+            <option value="client">仅当前设备</option>
+            <option value="server" disabled={!serverAvailable}>保存到服务端</option>
+          </select>
         </label>
         {error ? <span style={{ color: "var(--cw-danger)", fontSize: 13 }}>{error}</span> : null}
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btnGhost}>
-            取消
-          </button>
-          <button type="button" onClick={submit} disabled={!path.trim() || submitting} style={btnPrimary}>
-            {submitting ? "校验中…" : "添加"}
+        <div style={dialogActionsStyle}>
+          <button type="button" onClick={onClose} style={btnGhost}>取消</button>
+          <button type="button" onClick={() => void submit()} disabled={!path.trim() || submitting} style={btnPrimary}>
+            {submitting ? "保存中…" : "添加"}
           </button>
         </div>
       </div>
@@ -233,28 +414,31 @@ function AddProjectModal({ onClose, onAdded }: { onClose: () => void; onAdded: (
 
 function ActionSheet({
   project,
+  pending,
+  serverAvailable,
   onClose,
   onRename,
+  onMove,
   onRemove
 }: {
   project: Project;
+  pending: boolean;
+  serverAvailable: boolean;
   onClose: () => void;
   onRename: () => void;
+  onMove: () => void;
   onRemove: () => void;
 }): JSX.Element {
   return (
     <Backdrop onClose={onClose} align="bottom">
       <div style={bottomSheetStyle}>
         <div style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>{project.name}</div>
-        <button type="button" style={sheetItem} onClick={onRename}>
-          重命名
+        <button type="button" disabled={pending || (storageOf(project) === "server" && !serverAvailable)} style={sheetItem} onClick={onRename}>重命名</button>
+        <button type="button" disabled={pending || !serverAvailable} style={sheetItem} onClick={onMove}>
+          {storageOf(project) === "server" ? "改为仅当前设备" : "保存到服务端"}
         </button>
-        <button type="button" style={{ ...sheetItem, color: "var(--cw-danger)" }} onClick={onRemove}>
-          从列表移除
-        </button>
-        <button type="button" style={sheetItem} onClick={onClose}>
-          取消
-        </button>
+        <button type="button" disabled={pending || (storageOf(project) === "server" && !serverAvailable)} style={{ ...sheetItem, color: "var(--cw-danger)" }} onClick={onRemove}>从列表移除</button>
+        <button type="button" disabled={pending} style={sheetItem} onClick={onClose}>取消</button>
       </div>
     </Backdrop>
   );
@@ -262,10 +446,14 @@ function ActionSheet({
 
 function RenameModal({
   project,
+  pending,
+  error,
   onClose,
   onSubmit
 }: {
   project: Project;
+  pending: boolean;
+  error: string | null;
   onClose: () => void;
   onSubmit: (name: string) => void;
 }): JSX.Element {
@@ -274,107 +462,55 @@ function RenameModal({
     <Backdrop onClose={onClose}>
       <div style={modalStyle}>
         <h2 style={{ margin: 0, fontSize: 18 }}>重命名项目</h2>
-        <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} autoFocus />
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btnGhost}>
-            取消
-          </button>
-          <button type="button" onClick={() => name.trim() && onSubmit(name.trim())} style={btnPrimary}>
-            保存
-          </button>
+        <input value={name} onChange={(event) => setName(event.target.value)} style={inputStyle} autoFocus />
+        {error ? <span style={{ color: "var(--cw-danger)", fontSize: 13 }}>{error}</span> : null}
+        <div style={dialogActionsStyle}>
+          <button type="button" onClick={onClose} disabled={pending} style={btnGhost}>取消</button>
+          <button type="button" onClick={() => name.trim() && onSubmit(name.trim())} disabled={pending} style={btnPrimary}>保存</button>
         </div>
       </div>
     </Backdrop>
   );
 }
 
-function Backdrop({
+function ConflictModal({
+  conflict,
+  pending,
   onClose,
-  align = "center",
-  children
+  onKeepClient,
+  onKeepServer
 }: {
+  conflict: ProjectPathConflict;
+  pending: boolean;
   onClose: () => void;
-  align?: "center" | "bottom";
-  children: React.ReactNode;
+  onKeepClient: () => void;
+  onKeepServer: () => void;
 }): JSX.Element {
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: align === "bottom" ? "flex-end" : "center",
-        justifyContent: "center",
-        zIndex: 50
-      }}
-    >
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}>
-        {children}
+    <Backdrop onClose={onClose}>
+      <div style={modalStyle}>
+        <h2 style={{ margin: 0, fontSize: 18 }}>处理项目冲突</h2>
+        <div style={{ fontSize: 14, color: "var(--cw-fg-muted)", wordBreak: "break-all" }}>{conflict.server.path}</div>
+        <button type="button" disabled={pending} style={sheetItem} onClick={onKeepServer}>保留服务端记录</button>
+        <button type="button" disabled={pending} style={sheetItem} onClick={onKeepClient}>保留当前设备记录</button>
+        <button type="button" disabled={pending} style={sheetItem} onClick={onClose}>取消</button>
       </div>
+    </Backdrop>
+  );
+}
+
+function Backdrop({ onClose, align = "center", children }: { onClose: () => void; align?: "center" | "bottom"; children: React.ReactNode }): JSX.Element {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: align === "bottom" ? "flex-end" : "center", justifyContent: "center", zIndex: 50 }}>
+      <div onClick={(event) => event.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}>{children}</div>
     </div>
   );
 }
 
-const modalStyle: React.CSSProperties = {
-  background: "var(--cw-card)",
-  border: "1px solid var(--cw-border)",
-  borderRadius: 16,
-  padding: 18,
-  margin: 16,
-  display: "flex",
-  flexDirection: "column",
-  gap: 12
-};
-
-const bottomSheetStyle: React.CSSProperties = {
-  ...modalStyle,
-  borderBottomLeftRadius: 0,
-  borderBottomRightRadius: 0,
-  margin: "0 16px",
-  paddingBottom: "calc(18px + var(--safe-bottom))"
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid var(--cw-border)",
-  background: "var(--cw-bg)",
-  color: "var(--cw-fg)",
-  fontSize: 15
-};
-
-const btnGhost: React.CSSProperties = {
-  padding: "8px 14px",
-  borderRadius: 10,
-  border: "1px solid var(--cw-border)",
-  background: "transparent",
-  color: "var(--cw-fg)"
-};
-
-const btnPrimary: React.CSSProperties = {
-  padding: "8px 14px",
-  borderRadius: 10,
-  border: "none",
-  background: "var(--cw-accent)",
-  color: "#fff"
-};
-
-const sheetItem: React.CSSProperties = {
-  padding: "12px 8px",
-  borderRadius: 10,
-  border: "none",
-  background: "transparent",
-  color: "var(--cw-fg)",
-  fontSize: 16,
-  textAlign: "left"
-};
-
-function pressHandler(p: Project, set: (v: Project) => void) {
+function pressHandler(project: Project, set: (value: Project) => void) {
   return (event: React.PointerEvent) => {
     const timer = window.setTimeout(() => {
-      set(p);
+      set(project);
       event.preventDefault();
     }, 500);
     const cancel = () => window.clearTimeout(timer);
@@ -384,16 +520,37 @@ function pressHandler(p: Project, set: (v: Project) => void) {
   };
 }
 
-function lastSegment(p: string): string {
-  const cleaned = p.replace(/[\\/]+$/, "");
+function storageOf(project: Project): ProjectStorage {
+  return project.storage === "server" ? "server" : "client";
+}
+
+function lastSegment(path: string): string {
+  const cleaned = path.replace(/[\\/]+$/, "");
   const parts = cleaned.split(/[\\/]/);
   return parts[parts.length - 1] || cleaned;
 }
 
-function formatRelativeShort(ts: number): string {
-  const diff = Date.now() - ts;
+function formatRelativeShort(timestamp: number): string {
+  const diff = Date.now() - timestamp;
   if (diff < 60_000) return "刚刚";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
   return `${Math.floor(diff / 86_400_000)} 天前`;
 }
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+const fieldStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 6 };
+const fieldLabelStyle: React.CSSProperties = { fontSize: 13, color: "var(--cw-fg-muted)" };
+const dialogActionsStyle: React.CSSProperties = { display: "flex", gap: 10, justifyContent: "flex-end" };
+const modalStyle: React.CSSProperties = { background: "var(--cw-card)", border: "1px solid var(--cw-border)", borderRadius: 8, padding: 18, margin: 16, display: "flex", flexDirection: "column", gap: 12 };
+const bottomSheetStyle: React.CSSProperties = { ...modalStyle, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, margin: "0 16px", paddingBottom: "calc(18px + var(--safe-bottom))" };
+const inputStyle: React.CSSProperties = { padding: "10px 12px", borderRadius: 8, border: "1px solid var(--cw-border)", background: "var(--cw-bg)", color: "var(--cw-fg)", fontSize: 15 };
+const btnGhost: React.CSSProperties = { padding: "8px 14px", borderRadius: 8, border: "1px solid var(--cw-border)", background: "transparent", color: "var(--cw-fg)" };
+const btnPrimary: React.CSSProperties = { padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--cw-accent)", color: "#fff" };
+const sheetItem: React.CSSProperties = { padding: "12px 8px", borderRadius: 8, border: "none", background: "transparent", color: "var(--cw-fg)", fontSize: 16, textAlign: "left" };
+const alertStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, padding: 10, marginBottom: 10, border: "1px solid var(--cw-border)", borderRadius: 8, background: "var(--cw-bg-elevated)", color: "var(--cw-danger)", fontSize: 13 };
+const storageBadgeStyle: React.CSSProperties = { flexShrink: 0, padding: "2px 6px", border: "1px solid var(--cw-border)", borderRadius: 4, color: "var(--cw-fg-muted)", fontSize: 11 };
+const fabStyle: React.CSSProperties = { position: "fixed", right: 20, bottom: 24, width: 56, height: 56, borderRadius: 28, border: "none", background: "var(--cw-accent)", color: "#fff", fontSize: 28, boxShadow: "0 6px 18px rgba(0,0,0,0.25)" };

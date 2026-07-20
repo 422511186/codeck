@@ -1,8 +1,5 @@
-# project-management Specification
+﻿## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-mobile-web-frontend. Update Purpose after archive.
-## Requirements
 ### Requirement: 项目列表由前端 localStorage 维护
 应用 SHALL 支持仅客户端项目和服务端项目。仅客户端项目 MUST 只持久化到当前浏览器 `localStorage`；服务端项目 MUST 只持久化到后端实例项目目录；项目页 SHALL 读取两边记录后在内存中合并展示，不得为服务端项目维护浏览器持久化镜像。
 
@@ -146,6 +143,8 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 #### Scenario: Server project stores normalized allowed path
 - **WHEN** 已认证用户创建服务端项目且路径在 allowlist 内
 - **THEN** route MUST 使用标准化后的 allowlist 内路径写入服务端项目目录
+
+## ADDED Requirements
 
 ### Requirement: 项目存储位置移动保持单一权威
 项目存储位置修改 SHALL 表示保留项目 ID 的移动而不是复制。系统 MUST 先写入目标存储，成功后删除源记录；源删除失败时 MUST 回滚目标写入并保留原权威记录。

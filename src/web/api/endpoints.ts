@@ -8,6 +8,7 @@ import type {
   ThreadModelStateView,
   UnifiedModelCatalog
 } from "../../shared/custom-models";
+import type { ProjectCatalog, ProjectCreateInput, ProjectStorage } from "../../shared/projects";
 import type {
   AppServerStatus,
   ApprovalPolicy,
@@ -111,6 +112,68 @@ export async function deleteCustomModel(
     { method: "DELETE", body: { expectedRevision } }
   );
   return { revision: data.revision, models: data.models ?? [] };
+}
+
+export async function getProjectCatalog(): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>("/api/codex/projects");
+  return {
+    revision: data.revision,
+    defaultStorage: data.defaultStorage,
+    projects: data.projects ?? []
+  };
+}
+
+export async function createServerProject(
+  input: ProjectCreateInput,
+  expectedRevision: number
+): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>("/api/codex/projects", {
+    method: "POST",
+    body: { expectedRevision, ...input }
+  });
+  return { revision: data.revision, defaultStorage: data.defaultStorage, projects: data.projects ?? [] };
+}
+
+export async function renameServerProject(
+  projectId: string,
+  name: string,
+  expectedRevision: number
+): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>(`/api/codex/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    body: { expectedRevision, name }
+  });
+  return { revision: data.revision, defaultStorage: data.defaultStorage, projects: data.projects ?? [] };
+}
+
+export async function deleteServerProject(
+  projectId: string,
+  expectedRevision: number
+): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>(`/api/codex/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+    body: { expectedRevision }
+  });
+  return { revision: data.revision, defaultStorage: data.defaultStorage, projects: data.projects ?? [] };
+}
+
+export async function touchServerProject(projectId: string, lastUsedAt: number): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>(`/api/codex/projects/${encodeURIComponent(projectId)}/touch`, {
+    method: "POST",
+    body: { lastUsedAt }
+  });
+  return { revision: data.revision, defaultStorage: data.defaultStorage, projects: data.projects ?? [] };
+}
+
+export async function updateDefaultProjectStorage(
+  defaultStorage: ProjectStorage,
+  expectedRevision: number
+): Promise<ProjectCatalog> {
+  const data = await api<ProjectCatalog>("/api/codex/projects/default-storage", {
+    method: "PUT",
+    body: { expectedRevision, defaultStorage }
+  });
+  return { revision: data.revision, defaultStorage: data.defaultStorage, projects: data.projects ?? [] };
 }
 
 export type ModelSwitchApiResult = {
@@ -531,6 +594,12 @@ export const codex = {
   createCustomModel,
   replaceCustomModel,
   deleteCustomModel,
+  projectCatalog: getProjectCatalog,
+  createServerProject,
+  renameServerProject,
+  deleteServerProject,
+  touchServerProject,
+  updateDefaultProjectStorage,
   switchThreadModel,
   recoverThreadModel,
   skills: listSkills,

@@ -46,6 +46,8 @@ const mockCollaborationModes = vi.fn();
 const mockArchiveThread = vi.fn();
 const mockUnarchiveThread = vi.fn();
 const mockModelCatalog = vi.fn();
+const mockProjectCatalog = vi.fn();
+const mockTouchServerProject = vi.fn();
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     listThreadsForCwd: (...args: unknown[]) => mockListThreadsForCwd(...args),
@@ -55,7 +57,9 @@ vi.mock("../../src/web/api/endpoints", () => ({
     updateThreadSettings: (...args: unknown[]) => mockUpdateThreadSettings(...args),
     archiveThread: (...args: unknown[]) => mockArchiveThread(...args),
     unarchiveThread: (...args: unknown[]) => mockUnarchiveThread(...args),
-    modelCatalog: (...args: unknown[]) => mockModelCatalog(...args)
+    modelCatalog: (...args: unknown[]) => mockModelCatalog(...args),
+    projectCatalog: (...args: unknown[]) => mockProjectCatalog(...args),
+    touchServerProject: (...args: unknown[]) => mockTouchServerProject(...args)
   }
 }));
 
@@ -69,7 +73,8 @@ describe("ProjectThreadsPage", () => {
       path: "C:/test",
       name: "Test Project",
       addedAt: Date.now(),
-      lastUsedAt: Date.now()
+      lastUsedAt: Date.now(),
+      storage: "client"
     });
     mockTouchProjectLastUsed.mockClear();
     mockListThreadsForCwd.mockResolvedValue([]);
@@ -107,16 +112,45 @@ describe("ProjectThreadsPage", () => {
         }
       ]
     });
+    mockProjectCatalog.mockReset();
+    mockProjectCatalog.mockResolvedValue({ revision: 0, defaultStorage: "server", projects: [] });
+    mockTouchServerProject.mockReset();
+    mockTouchServerProject.mockResolvedValue({ revision: 0, defaultStorage: "server", projects: [] });
   });
 
-  it("should redirect to /projects if project not found", () => {
+  it("should redirect to /projects if project not found", async () => {
     mockGetProject.mockReturnValue(null);
 
     mockUseParams.mockReturnValue({ projectId: "unknown" });
 
     render(<ProjectThreadsPage />);
 
-    expect(mockReplace).toHaveBeenCalledWith("/projects");
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/projects"));
+  });
+
+  it("本地查找失败时读取服务端项目并更新全局最近使用时间", async () => {
+    mockGetProject.mockReturnValue(null);
+    mockProjectCatalog.mockResolvedValue({
+      revision: 1,
+      defaultStorage: "server",
+      projects: [
+        {
+          id: "proj-1",
+          path: "C:/server-project",
+          name: "Server Project",
+          addedAt: 1,
+          lastUsedAt: 2,
+          storage: "server"
+        }
+      ]
+    });
+
+    render(<ProjectThreadsPage />);
+
+    expect(await screen.findByText("Server Project")).toBeInTheDocument();
+    expect(mockListThreadsForCwd).toHaveBeenCalledWith("C:/server-project", false);
+    expect(mockTouchServerProject).toHaveBeenCalledWith("proj-1", expect.any(Number));
+    expect(mockTouchProjectLastUsed).not.toHaveBeenCalled();
   });
 
   it("should render project name and path", async () => {
