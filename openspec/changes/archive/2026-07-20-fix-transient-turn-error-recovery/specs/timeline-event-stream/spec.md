@@ -13,7 +13,7 @@
 - **THEN** store MUST 保持当前 turn 为进行中
 - **AND** timeline MUST NOT 创建持久错误 entry
 
-#### Scenario: Final turn error remains an alert
+#### Scenario: True turn error remains an alert
 - **WHEN** store 处理 `turn_error` 且 `willRetry=false`，或处理 `recovery_failed`
 - **THEN** timeline MUST 保留现有错误 entry，并使用红色 alert 语义呈现
 
