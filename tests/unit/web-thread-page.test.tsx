@@ -2746,6 +2746,89 @@ describe("ThreadPage", () => {
     expect(scroller.scrollTop).toBe(200);
   });
 
+  it("长 timeline 由虚拟列表独占滚动锚点时页面层不再排队第二次恢复", async () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    });
+    mockThreadState.mockReturnValue({
+      entries: Array.from({ length: 120 }, (_value, index) => ({
+        id: `recent-${index}`,
+        turnId: `turn-${index}`,
+        createdAt: index,
+        body: { kind: "agent-message", text: `Recent message ${index}` }
+      })),
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: "turn-120",
+      reachedBeginning: false
+    });
+    let resolvePage: ((value: { items: Array<{ id: string; role: "user"; text: string }>; nextCursor: string }) => void) | null = null;
+    mockListTurnsBefore.mockReturnValue(new Promise((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    const { container } = render(<ThreadPage />);
+    const scroller = container.querySelector(".cw-thread-scroller") as HTMLDivElement;
+    await waitFor(() => {
+      expect(scroller.dataset.timelineAnchorManaged).toBe("true");
+    });
+
+    let scrollTop = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value;
+      }
+    });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, get: () => 20_000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => 500 });
+    Object.defineProperty(scroller, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width: 390,
+        height: 500,
+        top: 0,
+        right: 390,
+        bottom: 500,
+        left: 0,
+        toJSON: () => ({})
+      })
+    });
+    const visibleRow = container.querySelector("[data-timeline-row='true']") as HTMLElement;
+    Object.defineProperty(visibleRow, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 120,
+        width: 390,
+        height: 80,
+        top: 120,
+        right: 390,
+        bottom: 200,
+        left: 0,
+        toJSON: () => ({})
+      })
+    });
+
+    fireEvent.scroll(scroller, { target: { scrollTop: 0 } });
+    await waitFor(() => {
+      expect(mockListTurnsBefore).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      resolvePage?.({ items: [{ id: "older", role: "user", text: "Older message" }], nextCursor: "turn-5" });
+      await Promise.resolve();
+    });
+
+    expect(animationFrames).toEqual([]);
+  });
+
   it("should preserve paginated activity before the final assistant message with stable timestamps", async () => {
     mockThreadState.mockReturnValue({
       entries: [

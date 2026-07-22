@@ -2116,6 +2116,7 @@ function orderEntries(entries: TimelineEntry[]): TimelineEntry[] {
           leftOrder &&
           rightOrder &&
           leftOrder.sourceKind === rightOrder.sourceKind &&
+          leftOrder.sourceKind !== "pagination" &&
           leftOrder.ordinal !== rightOrder.ordinal
         ) {
           return leftOrder.ordinal - rightOrder.ordinal;

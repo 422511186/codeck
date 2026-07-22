@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Timeline,
   __getTimelineDerivationDiagnostics,
@@ -1286,6 +1288,18 @@ describe("Timeline", () => {
 
     expect(scroller.scrollTop).toBe(11_070);
     expect(screen.getByText("历史回复 125")).toBeInTheDocument();
+  });
+
+  it("prepend 的虚拟窗口修正在 layout phase 完成", async () => {
+    const source = await readFile(join(process.cwd(), "src/web/components/Timeline.tsx"), "utf8");
+    const reconciliationMarker = "const previous = previousBlocksRef.current;";
+    const markerIndex = source.indexOf(reconciliationMarker);
+    const restorationIndex = source.indexOf("const restoredOffset = timelineScrollOffsetForAnchor(");
+    const effectStart = source.lastIndexOf("\n  use", markerIndex);
+
+    expect(markerIndex).toBeGreaterThan(0);
+    expect(source.slice(effectStart, markerIndex)).toContain("useLayoutEffect(() => {");
+    expect(markerIndex).toBeLessThan(restorationIndex);
   });
 
   it("短列表 prepend 与高度变化均不与页面 DOM 锚点争抢 scrollTop", () => {

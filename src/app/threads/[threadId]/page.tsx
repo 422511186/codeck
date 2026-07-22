@@ -811,9 +811,12 @@ export default function ThreadPage(): JSX.Element {
         "pagination"
       );
       const scroller = scrollerRef.current;
-      const scrollAnchor = scroller ? captureTimelineDomScrollAnchor(scroller) : null;
+      const timelineManagesAnchor = scroller?.dataset.timelineAnchorManaged === "true";
+      const scrollAnchor = scroller && !timelineManagesAnchor
+        ? captureTimelineDomScrollAnchor(scroller)
+        : null;
       prependEntries(threadId, extra, page.nextCursor ?? null, page.nextCursor === null);
-      if (scroller && scrollAnchor) {
+      if (scroller && scrollAnchor && !timelineManagesAnchor) {
         window.requestAnimationFrame(() => {
           if (scrollerRef.current !== scroller) return;
           restoreTimelineDomScrollAnchor(scroller, scrollAnchor);

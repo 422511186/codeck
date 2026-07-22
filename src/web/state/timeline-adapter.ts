@@ -28,8 +28,8 @@ export type ThreadDetailTimelineSources = {
   detailBytes: number;
 };
 
-const legacyModelResumeWarningPattern = /^This session was recorded with model `[^`]+` but is resuming with `[^`]+`\. Consider switching back to `[^`]+` as it may affect Codex performance\.$/;
-const legacyModelMetadataWarningPattern = /^Model metadata for `[^`]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
+const legacyModelResumeWarningPattern = /^This session was recorded with model `([^`]+)` but is resuming with `([^`]+)`\. Consider switching back to `([^`]+)` as it may affect Codex performance\.$/;
+const legacyModelMetadataWarningPattern = /^Model metadata for `([^`]+)` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
 const legacyLongThreadWarningPattern = /^Heads up: Long threads and multiple compactions can cause the model to be less accurate\. Start a new thread when possible to keep threads small and targeted\.$/;
 
 export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
@@ -39,17 +39,22 @@ export function extractLegacyWarningNotices(entries: TimelineEntry[]): {
   const notices = new Map<string, ThreadNoticeInput>();
   const keptEntries = entries.filter((entry) => {
     if (entry.body.kind !== "error" || !isLegacyAppServerWarningText(entry.body.text)) return true;
-    const text = normalizedLegacyAppServerWarningText(entry.body.text) ?? entry.body.text;
-    notices.set(`app-server-warning:${text}`, {
-      id: `app-server-warning:${text}`,
-      kind: "warning",
-      source: "app-server",
-      text,
-      createdAt: entry.createdAt
-    });
+    const notice = appServerWarningNotice(entry.body.text, entry.createdAt);
+    notices.set(notice.id, notice);
     return false;
   });
   return { entries: keptEntries, notices: [...notices.values()] };
+}
+
+export function appServerWarningNotice(text: string, createdAt?: number): ThreadNoticeInput {
+  const noticeText = normalizedLegacyAppServerWarningText(text) ?? text;
+  return {
+    id: appServerWarningNoticeId(noticeText),
+    kind: "warning",
+    source: "app-server",
+    text: noticeText,
+    ...(typeof createdAt === "number" ? { createdAt } : {})
+  };
 }
 
 export function isLegacyAppServerWarningText(text: string): boolean {
@@ -63,6 +68,20 @@ export function normalizedLegacyAppServerWarningText(text: string): string | nul
     legacyLongThreadWarningPattern.test(normalized)
     ? normalized
     : null;
+}
+
+function appServerWarningNoticeId(text: string): string {
+  if (legacyModelResumeWarningPattern.test(text)) {
+    return "app-server-warning:model-resume";
+  }
+  const metadataMatch = legacyModelMetadataWarningPattern.exec(text);
+  if (metadataMatch) {
+    return `app-server-warning:model-metadata:${metadataMatch[1]}`;
+  }
+  if (legacyLongThreadWarningPattern.test(text)) {
+    return "app-server-warning:long-thread";
+  }
+  return `app-server-warning:${text}`;
 }
 
 export function threadDetailEntries(td: ThreadDetail): TimelineEntry[] {

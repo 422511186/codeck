@@ -718,7 +718,7 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** 会话标题、模型按钮和菜单状态 MUST NOT 因每条文本 delta 重建可见状态
 
 ### Requirement: 分页 timeline 顺序跨页面稳定
-历史分页和首屏窗口返回的 turns SHALL 在前端合并后保持全局时间顺序和稳定 turn 身份。每个页面和 opaque cursor MUST 绑定同一 `HistoryStamp`；分页适配层 MUST NOT 使用仅在单页内有效的 `turnIndex` 破坏跨页排序、rewind 或 fork 计算。旧 generation 的 page、cursor 或请求完成回调 MUST NOT 修改当前窗口。
+历史分页和首屏窗口返回的 turns SHALL 在前端合并后保持全局时间顺序和稳定 turn 身份。每个页面和 opaque cursor MUST 绑定同一 `HistoryStamp`；分页适配层 MUST NOT 使用仅在单页内有效的 `turnIndex` 或 `sourceOrder.ordinal` 破坏跨页排序、rewind 或 fork 计算。旧 generation 的 page、cursor 或请求完成回调 MUST NOT 修改当前窗口。分页候选与当前窗口 identity 重叠时，历史页 MUST 只去重，MUST NOT 用历史候选改写当前可见 entry。
 
 #### Scenario: 多页历史合并
 - **WHEN** 首屏已加载最近 turns
@@ -728,8 +728,8 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 
 #### Scenario: 页面内 turnIndex 重复
 - **WHEN** 不同分页返回的 entries 存在重复或页内重置的 `turnIndex`
-- **THEN** 前端 MUST 使用更可靠的 turn order 或插入顺序合并
-- **AND** MUST NOT 因 `turnIndex` 重复把新旧 turns 排错
+- **THEN** 前端 MUST 使用服务端页内正序、稳定 identity 和现有窗口相对顺序合并
+- **AND** MUST NOT 因 `turnIndex` 或 page-local ordinal 重复把新旧 turns 排错
 
 #### Scenario: Rollback invalidates an in-flight older page
 - **WHEN** generation G1 的历史页请求仍在进行
@@ -754,6 +754,11 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** 历史页候选正文比当前可见正文更长、更新或完整度不同
 - **THEN** pagination merge MUST 只去重该重叠项，不得改写当前窗口中的正文、详情展开状态或显示高度
 - **AND** 正文完整性提升 MUST 仅由 live、detail 或权威 repair 路径提交
+
+#### Scenario: Page boundary keeps existing relative order
+- **WHEN** 历史页末尾与当前窗口开头属于同一 turn 或同一 activity group
+- **THEN** 当前窗口已有 entries 的相对顺序 MUST 保持不变
+- **AND** 新历史 entries MUST 只插入到其权威前置位置
 
 ### Requirement: 会话聊天性能指标可观测
 会话聊天页 SHALL 在开发和测试环境中提供可验证的性能指标或测试钩子，覆盖首屏 entries 数量、timeline store 提交次数、engine fast-path 次数、结构性 normalization 次数、index rebuild entries、可见 row 数量、delta 批处理 flush 次数和昂贵输出派生次数。
@@ -1015,7 +1020,7 @@ Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分�
 - **THEN** 客户端 MUST 在写入 TimelineEntry 前转换为毫秒
 
 ### Requirement: Prepending history preserves visible reading progress
-加载上一页后，加载前顶部可见消息 SHALL 保持相同 identity 和 viewport 像素偏移。新加载消息 MUST 只出现在当前内容上方，由用户继续上滑查看。
+加载上一页后，加载前顶部可见消息 SHALL 保持相同 identity 和 viewport 像素偏移。新加载消息 MUST 只出现在当前内容上方，由用户继续上滑查看。一次 prepend MUST 只有一个滚动锚点所有者；虚拟 Timeline 已接管锚点时，页面层 MUST NOT 再次恢复 DOM anchor。可见窗口索引 MUST 在浏览器绘制前完成修正。
 
 #### Scenario: User loads an older page at the top
 - **WHEN** 用户滚动到顶部触发历史分页
@@ -1027,6 +1032,17 @@ Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分�
 - **WHEN** prepend 的 Markdown、activity 或图片在初次 commit 后继续改变高度
 - **THEN** Timeline SHALL 按原消息 identity 持续恢复锚点
 - **AND** 可见文字 MUST NOT 因延迟测量发生跳页或抖动
+
+#### Scenario: Virtual timeline owns the anchor
+- **WHEN** 长 timeline 已启用虚拟 block/layout 锚点
+- **AND** 页面加载并 prepend 更早历史
+- **THEN** 只有 Timeline MUST 写入锚点恢复后的 `scrollTop`
+- **AND** 页面 requestAnimationFrame MUST NOT 再执行第二次 DOM anchor 校正
+
+#### Scenario: Window changes before paint
+- **WHEN** prepend 使虚拟 blocks 的索引整体后移
+- **THEN** 可见 window range MUST 在浏览器绘制前同步移动到原 blocks
+- **AND** 用户 MUST NOT 短暂看到另一批历史消息后再恢复
 
 ### Requirement: Mutation responses preserve the progressive timeline window
 会话发送、resume、rename、steer、interrupt、review、fork 和 unarchive 等 mutation SHALL 只更新操作结果或 thread metadata，MUST NOT 通过响应中的完整 timeline 扩展或替换当前分页窗口。rollback 如需刷新可见消息，MUST 返回受控最新页和 cursor。
@@ -1102,8 +1118,7 @@ legacy app-server 不支持 thread-wide items 接口时，服务端 SHALL 跨多
 - **AND** MUST NOT 将未知错误伪装为空会话
 
 ### Requirement: Notices do not affect message ordering
-
-会话 notice MUST 不参与 timeline 排序、虚拟列表索引、底部自动滚动或新消息位置计算。
+会话 notice MUST 不参与 timeline 排序、虚拟列表索引、底部自动滚动或新消息位置计算。已知 app-server 模型、metadata 和长线程 warning SHALL 在 snapshot、pagination、live item、turn error 和直接 store timeline ingress 中统一迁移为 notice，MUST NOT 渲染为 `ErrorCard`。同类模型恢复 warning MUST 由最新状态覆盖旧状态。
 
 #### Scenario: Warning arrives after refresh
 - **WHEN** 页面刷新后异步收到历史 warning，随后用户发送新消息
@@ -1112,6 +1127,21 @@ legacy app-server 不支持 thread-wide items 接口时，服务端 SHALL 跨多
 #### Scenario: Notice is dismissed
 - **WHEN** 用户关闭头部 notice
 - **THEN** 仅 notice 区域更新，现有消息滚动位置和 timeline 顺序保持不变
+
+#### Scenario: Warning appears in an older page
+- **WHEN** 用户加载的历史分页包含已知模型 warning error item
+- **THEN** store MUST 在 pagination commit 中把它迁移为 thread notice
+- **AND** timeline MUST NOT 增加红色“操作失败”row 或改变滚动锚点
+
+#### Scenario: Warning arrives as a live item
+- **WHEN** `item.appended`、`item.updated` 或 completed item 携带已知 warning error entry
+- **THEN** store MUST 迁移该 entry 并保持真实 turn 状态不变
+- **AND** MUST NOT 把 warning 当作最终 turn failure
+
+#### Scenario: Latest model resume warning supersedes stale direction
+- **WHEN** 会话先收到模型 A 恢复为 B 的 warning，随后又收到模型 B 恢复为 A 的 warning
+- **THEN** notice 区域 MUST 只保留最新恢复方向
+- **AND** MUST NOT 同时展示互相矛盾的历史恢复提示
 
 ### Requirement: Cross-device running thread state converges
 会话页 SHALL 让后加入、重新加载或从后台恢复的设备收敛到同一 gateway 的当前 running turn。metadata / summary MUST 提供当前 `activeTurnId` 或等价稳定 identity；页面不得只依赖本设备之前收到的 `turn_started` event。

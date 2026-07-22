@@ -152,44 +152,6 @@ export function Timeline({
   );
 
   useLayoutEffect(() => {
-    const root = rootRef.current;
-    const scroller = root ? findTimelineScrollContainer(root) : null;
-    const previous = previousLayoutRef.current;
-    if (scroller && followTail) {
-      const tailRange = initialTimelineWindowRange(allBlocks.length);
-      if (windowRange.start !== tailRange.start || windowRange.end !== tailRange.end) {
-        setWindowRange(tailRange);
-        return;
-      }
-      scroller.scrollTop = scroller.scrollHeight;
-    }
-    if (
-      scroller &&
-      virtualized &&
-      scrollAnchorRef.current &&
-      !followTail &&
-      !scrollAnchorRef.current.followTail &&
-      (previous.blocks !== allBlocks || previous.layoutIndex !== layoutIndex)
-    ) {
-      const restoredOffset = timelineScrollOffsetForAnchor(scrollAnchorRef.current, allBlocks, layoutIndex);
-      if (restoredOffset !== null && Math.abs(scroller.scrollTop - restoredOffset) >= 1) {
-        scroller.scrollTop = restoredOffset;
-      }
-    }
-    previousLayoutRef.current = { blocks: allBlocks, layoutIndex };
-    if (scroller && virtualized) {
-      scrollAnchorRef.current = captureTimelineScrollAnchor(
-        allBlocks,
-        layoutIndex,
-        scroller.scrollTop,
-        scroller.clientHeight
-      );
-    } else if (!virtualized) {
-      scrollAnchorRef.current = null;
-    }
-  }, [allBlocks, layoutIndex, followTail, virtualized, windowRange.start, windowRange.end]);
-
-  useEffect(() => {
     const previous = previousBlocksRef.current;
     const nextFirstId = allBlocks[0]?.identity ?? null;
     const nextLastId = allBlocks[allBlocks.length - 1]?.identity ?? null;
@@ -238,6 +200,44 @@ export function Timeline({
       lastId: nextLastId
     };
   }, [allBlocks.length, allBlocks[0]?.identity, allBlocks[allBlocks.length - 1]?.identity, followTail]);
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const scroller = root ? findTimelineScrollContainer(root) : null;
+    const previous = previousLayoutRef.current;
+    if (scroller && followTail) {
+      const tailRange = initialTimelineWindowRange(allBlocks.length);
+      if (windowRange.start !== tailRange.start || windowRange.end !== tailRange.end) {
+        setWindowRange(tailRange);
+        return;
+      }
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+    if (
+      scroller &&
+      virtualized &&
+      scrollAnchorRef.current &&
+      !followTail &&
+      !scrollAnchorRef.current.followTail &&
+      (previous.blocks !== allBlocks || previous.layoutIndex !== layoutIndex)
+    ) {
+      const restoredOffset = timelineScrollOffsetForAnchor(scrollAnchorRef.current, allBlocks, layoutIndex);
+      if (restoredOffset !== null && Math.abs(scroller.scrollTop - restoredOffset) >= 1) {
+        scroller.scrollTop = restoredOffset;
+      }
+    }
+    previousLayoutRef.current = { blocks: allBlocks, layoutIndex };
+    if (scroller && virtualized) {
+      scrollAnchorRef.current = captureTimelineScrollAnchor(
+        allBlocks,
+        layoutIndex,
+        scroller.scrollTop,
+        scroller.clientHeight
+      );
+    } else if (!virtualized) {
+      scrollAnchorRef.current = null;
+    }
+  }, [allBlocks, layoutIndex, followTail, virtualized, windowRange.start, windowRange.end]);
 
   useEffect(() => {
     const visibleIds = new Set(allBlocks.map(timelineBlockHeightCacheKey));
@@ -292,7 +292,7 @@ export function Timeline({
     };
   }, [allBlocks, layoutIndex, virtualized, visibleBlocks]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) {
       return;

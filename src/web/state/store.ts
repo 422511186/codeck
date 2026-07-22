@@ -10,9 +10,9 @@ import {
 import { loadJson, saveJson, threadNoticeDismissalsKey } from "../storage/localStore";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import {
+  appServerWarningNotice,
   extractLegacyWarningNotices,
-  isLegacyAppServerWarningText,
-  normalizedLegacyAppServerWarningText
+  isLegacyAppServerWarningText
 } from "./timeline-adapter";
 import {
   applyTimelineInput,
@@ -398,11 +398,17 @@ export const useStore = create<State & Actions>((set, get) => ({
   setThreadEntries: (threadId, entries, cursor, detailEntries = []) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const snapshotEngine = reduceThreadTimelineState(prev, { kind: "snapshot-window", entries, cursor });
-      const reducedEngine = detailEntries.length
+      const snapshotIngress = migrateTimelineIngress(threadId, prev.notices, entries);
+      const detailIngress = migrateTimelineIngress(threadId, snapshotIngress.notices, detailEntries);
+      const snapshotEngine = reduceThreadTimelineState(prev, {
+        kind: "snapshot-window",
+        entries: snapshotIngress.entries,
+        cursor
+      });
+      const reducedEngine = detailIngress.entries.length
         ? applyTimelineInput(snapshotEngine, {
             kind: "live-event-batch",
-            inputs: detailEntries.map((entry) => ({ kind: "turn-item-detail" as const, entry }))
+            inputs: detailIngress.entries.map((entry) => ({ kind: "turn-item-detail" as const, entry }))
           })
         : snapshotEngine;
       const nextEntries = reducedEngine.entries;
@@ -414,6 +420,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             {
               ...prev,
               timelineEngine,
+              notices: detailIngress.notices,
               cursor,
               reachedBeginning: cursor === null,
               timelineGeneration: timelineEngine.generation,
@@ -431,9 +438,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   mergeThreadEntries: (threadId, entries, cursor) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "snapshot-merge",
-        entries,
+        entries: ingress.entries,
         cursor
       });
       const nextEntries = timelineEngine.entries;
@@ -444,6 +452,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             {
               ...prev,
               timelineEngine,
+              notices: ingress.notices,
               cursor,
               reachedBeginning: cursor === null,
               timelineGeneration: timelineEngine.generation,
@@ -461,38 +470,28 @@ export const useStore = create<State & Actions>((set, get) => ({
       const prev = state.threads[threadId] ?? emptyThread();
       const replacement = replaceLatestTimelineWindow(prev.entries, entries, window);
       if (!replacement) return state;
+      const ingress = migrateTimelineIngress(threadId, prev.notices, replacement);
       const timelineEngine = applyTimelineInput(currentTimelineEngine(prev), {
         kind: "snapshot-window",
-        entries: replacement,
+        entries: ingress.entries,
         cursor,
         generation: window.historyStamp.generation
       });
-      const extracted = extractLegacyWarningNotices(timelineEngine.entries);
-      const migratedTimelineEngine = extracted.notices.length
-        ? applyTimelineInput(timelineEngine, {
-            kind: "rollback-fork-replace",
-            entries: extracted.entries,
-            generation: timelineEngine.generation
-          })
-        : timelineEngine;
       applied = true;
       return {
         threads: {
           ...state.threads,
           [threadId]: indexedThreadState({
             ...prev,
-            timelineEngine: migratedTimelineEngine,
-            notices: mergeThreadNotices(
-              prev.notices,
-              extracted.notices.filter((notice) => !loadDismissedThreadNoticeIds(threadId).has(notice.id))
-            ),
+            timelineEngine,
+            notices: ingress.notices,
             cursor,
             reachedBeginning: cursor === null,
             timelineGeneration: window.historyStamp.generation,
-            processedEventIds: migratedTimelineEngine.processedEventIds,
-            itemRevisions: migratedTimelineEngine.itemRevisions,
-            snapshotDeltaSuppressions: migratedTimelineEngine.snapshotDeltaSuppressions
-          }, migratedTimelineEngine.entries)
+            processedEventIds: timelineEngine.processedEventIds,
+            itemRevisions: timelineEngine.itemRevisions,
+            snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions
+          }, timelineEngine.entries)
         }
       };
     });
@@ -501,9 +500,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   prependEntries: (threadId, entries, cursor, reachedBeginning) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "pagination-page",
-        entries,
+        entries: ingress.entries,
         cursor,
         reachedBeginning
       });
@@ -511,16 +511,23 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine, cursor, reachedBeginning }, nextEntries)
+          [threadId]: indexedThreadState({
+            ...prev,
+            timelineEngine,
+            notices: ingress.notices,
+            cursor,
+            reachedBeginning
+          }, nextEntries)
         }
       };
     }),
   appendEntries: (threadId, entries) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "live-event-batch",
-        inputs: entries.map((entry) => ({
+        inputs: ingress.entries.map((entry) => ({
           kind: entry.body.kind === "user-message" && entry.body.status === "sending"
             ? "optimistic-user" as const
             : "overlay-item" as const,
@@ -532,7 +539,12 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine, lastSeenItemId: last }, nextEntries)
+          [threadId]: indexedThreadState({
+            ...prev,
+            timelineEngine,
+            notices: ingress.notices,
+            lastSeenItemId: last
+          }, nextEntries)
         }
       };
     }),
@@ -573,9 +585,20 @@ export const useStore = create<State & Actions>((set, get) => ({
   replaceOrAddEntry: (threadId, entry, revision, eventId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, [entry]);
+      const migratedEntry = ingress.entries[0];
+      if (!migratedEntry) {
+        if (ingress.notices === prev.notices) return state;
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: { ...prev, notices: ingress.notices }
+          }
+        };
+      }
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "completed-item",
-        entry,
+        entry: migratedEntry,
         ...(eventId ? { eventId } : {}),
         ...(typeof revision === "number" ? { revision } : {})
       });
@@ -585,14 +608,15 @@ export const useStore = create<State & Actions>((set, get) => ({
           ...state.threads,
           [threadId]: indexedThreadState(
             {
-            ...prev,
-            timelineEngine,
-            timelineGeneration: timelineEngine.generation,
-            localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
-              normalizedEntries,
-              prev.localUserMessageIdsByTurn
-            ),
-            lastSeenItemId: entry.id
+              ...prev,
+              timelineEngine,
+              notices: ingress.notices,
+              timelineGeneration: timelineEngine.generation,
+              localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
+                normalizedEntries,
+                prev.localUserMessageIdsByTurn
+              ),
+              lastSeenItemId: migratedEntry.id
             },
             normalizedEntries
           )
@@ -1246,26 +1270,14 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         case "warning": {
           const message = typeof ev.message === "string" ? ev.message : "收到配置提示";
-          const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
-          get().upsertThreadNotice(threadId, {
-            id: `app-server-warning:${noticeText}`,
-            kind: "warning",
-            source: "app-server",
-            text: noticeText
-          });
+          get().upsertThreadNotice(threadId, appServerWarningNotice(message));
           break;
         }
         case "turn_error": {
           const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
           const message = typeof ev.message === "string" ? ev.message : "运行失败";
           if (isLegacyAppServerWarningText(message)) {
-            const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
-            get().upsertThreadNotice(threadId, {
-              id: `app-server-warning:${noticeText}`,
-              kind: "warning",
-              source: "app-server",
-              text: noticeText
-            });
+            get().upsertThreadNotice(threadId, appServerWarningNotice(message));
             break;
           }
           if (ev.willRetry === true) {
@@ -1545,6 +1557,25 @@ function mergeThreadNotices(existing: ThreadNotice[], incoming: ThreadNoticeInpu
     });
   }
   return [...merged.values()];
+}
+
+function migrateTimelineIngress(
+  threadId: string,
+  existingNotices: ThreadNotice[],
+  entries: TimelineEntry[]
+): { entries: TimelineEntry[]; notices: ThreadNotice[] } {
+  const extracted = extractLegacyWarningNotices(entries);
+  if (!extracted.notices.length) {
+    return { entries: extracted.entries, notices: existingNotices };
+  }
+  const dismissed = loadDismissedThreadNoticeIds(threadId);
+  return {
+    entries: extracted.entries,
+    notices: mergeThreadNotices(
+      existingNotices,
+      extracted.notices.filter((notice) => !dismissed.has(notice.id))
+    )
+  };
 }
 
 function loadDismissedThreadNoticeIds(threadId: string): Set<string> {

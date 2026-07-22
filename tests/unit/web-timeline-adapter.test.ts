@@ -25,7 +25,7 @@ describe("timeline adapter", () => {
 
     expect(result.entries.map((item) => item.id)).toEqual(["error-1"]);
     expect(result.notices).toEqual([expect.objectContaining({
-      id: expect.stringContaining("app-server-warning:"),
+      id: "app-server-warning:model-metadata:mimo-v2.5-pro",
       kind: "warning",
       source: "app-server",
       text: expect.stringContaining("Model metadata")
@@ -46,7 +46,7 @@ describe("timeline adapter", () => {
     expect(result.entries.map((item) => item.id)).toEqual(["error-1"]);
     expect(result.notices).toHaveLength(1);
     expect(result.notices[0]).toEqual(expect.objectContaining({
-      id: `app-server-warning:${warning}`,
+      id: "app-server-warning:long-thread",
       text: warning
     }));
   });
