@@ -1,6 +1,7 @@
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { MAX_FILE_SIZE, sanitizeFileName, type FileReference } from "../shared/file-attachments";
 
 const imageExtensions: Record<string, string> = {
   "image/png": ".png",
@@ -15,6 +16,8 @@ export type SavedUpload = {
   mimeType: string;
   size: number;
 };
+
+export type SavedFileUpload = FileReference;
 
 function isPathInside(root: string, candidate: string): boolean {
   const relativePath = relative(root, candidate);
@@ -50,6 +53,35 @@ export async function saveUploadedImage(input: {
   };
 }
 
+export async function saveUploadedFile(input: {
+  uploadDir: string;
+  bytes: Buffer;
+  mimeType: string;
+  originalName: string;
+}): Promise<SavedFileUpload> {
+  if (!input.bytes.byteLength) throw new Error("文件不能为空");
+  if (input.bytes.byteLength > MAX_FILE_SIZE) throw new Error("文件大小不能超过 20 MiB");
+  const originalExtension = extname(input.originalName).toLowerCase();
+  if (imageExtensions[input.mimeType] === originalExtension ||
+    (input.mimeType === "image/jpeg" && originalExtension === ".jpeg")) {
+    throw new Error("图片请使用图片上传入口");
+  }
+  const extension = /^\.[a-z0-9]{1,12}$/.test(originalExtension) ? originalExtension : "";
+  const root = resolve(/*turbopackIgnore: true*/ input.uploadDir);
+  await mkdir(/*turbopackIgnore: true*/ root, { recursive: true });
+  const id = randomUUID();
+  const filePath = resolve(/*turbopackIgnore: true*/ join(/*turbopackIgnore: true*/ root, `${id}${extension}`));
+  if (!isPathInside(root, filePath)) throw new Error("上传路径越界");
+  await writeFile(/*turbopackIgnore: true*/ filePath, input.bytes, { flag: "wx" });
+  return {
+    id,
+    name: sanitizeFileName(input.originalName),
+    path: filePath,
+    mimeType: input.mimeType || "application/octet-stream",
+    size: input.bytes.byteLength
+  };
+}
+
 export async function cleanupExpiredUploads(
   uploadDir: string,
   options: { maxAgeMs: number; now?: number }
@@ -77,4 +109,22 @@ export async function cleanupExpiredUploads(
   }
 
   return removed;
+}
+
+export async function inspectCanonicalRegularFile(filePath: string, uploadDir: string): Promise<{ path: string; size: number }> {
+  const root = resolve(uploadDir);
+  const canonicalRoot = await realpath(root);
+  const candidate = resolve(filePath);
+  if (!isPathInside(root, candidate)) throw new Error("附件路径越界");
+  const info = await lstat(candidate);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("附件不是普通文件");
+  const canonical = await realpath(candidate);
+  if (!isPathInside(canonicalRoot, canonical)) throw new Error("附件路径越界");
+  const canonicalInfo = await lstat(canonical);
+  if (!canonicalInfo.isFile() || canonicalInfo.isSymbolicLink()) throw new Error("附件不是普通文件");
+  return { path: canonical, size: canonicalInfo.size };
+}
+
+export async function assertCanonicalRegularFile(filePath: string, uploadDir: string): Promise<string> {
+  return (await inspectCanonicalRegularFile(filePath, uploadDir)).path;
 }

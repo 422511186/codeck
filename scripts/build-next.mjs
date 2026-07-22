@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-const nextBin = path.join("node_modules", ".bin", process.platform === "win32" ? "next.cmd" : "next");
+const nextBin = path.join("node_modules", "next", "dist", "bin", "next");
 
 await new Promise((resolve, reject) => {
-  const child = spawn(nextBin, ["build"], {
+  const child = spawn(process.execPath, [nextBin, "build"], {
     stdio: "inherit",
     env: {
       ...process.env,

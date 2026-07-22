@@ -64,6 +64,7 @@ cp .env.docker.example .env.docker
 CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=/home/你的用户名/workspace
 CODEX_WEB_UPLOAD_DIR=/var/lib/codex-web/uploads
+# 图片和普通文件附件暂存目录，应用会清理超过 24 小时的上传。
 CODEX_WEB_AUDIT_LOG_PATH=/var/log/codex-web/audit.jsonl
 CODEX_WEB_DATA_DIR=/var/lib/codex-web/data
 CODEX_WEB_BIND_HOST=0.0.0.0

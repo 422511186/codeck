@@ -1,5 +1,7 @@
 import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "./timeline-protocol";
 import type { ThreadModelStateView } from "./custom-models";
+import type { FileReference } from "./file-attachments";
+export type { FileReference } from "./file-attachments";
 
 export type AppServerStatusView = {
   state: "disabled" | "idle" | "starting" | "connecting" | "ready" | "error";
@@ -650,6 +652,7 @@ export type MobileTimelineItem = {
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
+  fileReferences?: FileReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";

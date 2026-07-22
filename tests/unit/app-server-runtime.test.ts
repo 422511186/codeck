@@ -722,7 +722,7 @@ class MaterializedHistoryOverlayPeer extends NotificationOverlayPeer {
 }
 
 class OversizeItemContentPeer extends NotificationOverlayPeer {
-  constructor(readonly fullText: string) {
+  constructor(public fullText: string) {
     super();
   }
 
@@ -1692,6 +1692,16 @@ class RollbackPeer implements ManagedAppServerPeer {
   }
 }
 
+class LostRollbackResponsePeer extends RollbackPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/rollback") {
+      await super.request(method, params);
+      throw new Error("rollback response lost");
+    }
+    return super.request(method, params);
+  }
+}
+
 describe("createAppServerGateway", () => {
   it("serializes duplicate rollback operations and rejects stale tails before mutation", async () => {
     const peer = new RollbackPeer();
@@ -1710,12 +1720,36 @@ describe("createAppServerGateway", () => {
 
     expect(peer.rollbackCalls).toBe(1);
     expect(duplicate).toEqual(first);
-    await expect(gateway.rollbackThread("thread-1", {
+    const staleRollbackRequest = {
       operationId: "rollback-op-2",
       targetTurnId: "turn-2",
       historyStamp: { bootId: gateway.getTimelineBootId(), generation: 0 },
       expectedTailTurnIds: ["turn-2"]
-    })).rejects.toMatchObject({ code: "ROLLBACK_CONFLICT" });
+    };
+    await expect(gateway.rollbackThread("thread-1", staleRollbackRequest)).rejects.toMatchObject({
+      code: "ROLLBACK_CONFLICT"
+    });
+    await expect(gateway.rollbackThread("thread-1", staleRollbackRequest)).rejects.toMatchObject({
+      code: "ROLLBACK_CONFLICT"
+    });
+    expect(peer.rollbackCalls).toBe(1);
+  });
+
+  it("fails closed when the same rollback operation is retried after its response is lost", async () => {
+    const peer = new LostRollbackResponsePeer();
+    const gateway = new AppServerGateway(peer);
+    const rollbackRequest = {
+      operationId: "rollback-op-response-lost",
+      targetTurnId: "turn-2",
+      historyStamp: { bootId: gateway.getTimelineBootId(), generation: 0 },
+      expectedTailTurnIds: ["turn-2"]
+    };
+
+    await expect(gateway.rollbackThread("thread-1", rollbackRequest)).rejects.toThrow("rollback response lost");
+    await expect(gateway.rollbackThread("thread-1", rollbackRequest)).rejects.toMatchObject({
+      code: "ROLLBACK_UNRESOLVED",
+      httpStatus: 409
+    });
     expect(peer.rollbackCalls).toBe(1);
   });
   it("mock 模式可以初始化并返回移动端基础数据", async () => {
@@ -2261,6 +2295,209 @@ describe("createAppServerGateway", () => {
     });
     expect(chunk.text).toBe(fullText);
     expect(chunk.completeness.status).toBe("complete");
+  });
+
+  it("app-server item 在首次 full-content 读取前变更时返回 source-revision", async () => {
+    const originalText = "首次读取前的正文🙂".repeat(40_000);
+    const peer = new OversizeItemContentPeer(originalText);
+    const gateway = new AppServerGateway(peer);
+    const events: Array<ReturnType<typeof gateway.listBrowserEventBacklog>["events"][number]> = [];
+    gateway.onBrowserEvent((event) => events.push(event));
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: {
+          type: "agentMessage",
+          id: "agent-oversize",
+          text: originalText,
+          phase: "final",
+          memoryCitation: null
+        }
+      }
+    });
+    const reference = events[0] as {
+      type: "codex-event";
+      event: { contentRef?: string };
+    };
+    peer.fullText = "首次读取前已更新🙂".repeat(40_000);
+
+    const chunk = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 64 * 1024
+    });
+
+    expect(chunk.text).toBe("");
+    expect(chunk.completeness).toEqual(
+      expect.objectContaining({ status: "repair-required", reason: "source-revision" })
+    );
+  });
+
+  it("app-server item 在 continuation 前变更时不拼接两个 revision", async () => {
+    const originalText = "分块读取的旧正文🙂".repeat(40_000);
+    const peer = new OversizeItemContentPeer(originalText);
+    const gateway = new AppServerGateway(peer);
+    const events: Array<ReturnType<typeof gateway.listBrowserEventBacklog>["events"][number]> = [];
+    gateway.onBrowserEvent((event) => events.push(event));
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: {
+          type: "agentMessage",
+          id: "agent-oversize",
+          text: originalText,
+          phase: "final",
+          memoryCitation: null
+        }
+      }
+    });
+    const reference = events[0] as {
+      type: "codex-event";
+      event: { contentRef?: string };
+    };
+    const first = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 64 * 1024
+    });
+    const firstRetry = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 64 * 1024
+    });
+    expect(firstRetry).toEqual(first);
+    expect(first.nextCursor).not.toBeNull();
+    peer.fullText = "分块读取的新正文🙃".repeat(40_000);
+
+    const continuation = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      cursor: first.nextCursor,
+      maxBytes: 64 * 1024
+    });
+
+    expect(continuation.text).toBe("");
+    expect(continuation.completeness).toEqual(
+      expect.objectContaining({ status: "repair-required", reason: "source-revision" })
+    );
+  });
+
+  it("app-server full-content source 与 cursor 缓存超限时成对淘汰旧索引", () => {
+    const gateway = new AppServerGateway(new OversizeItemContentPeer("cache source"));
+    const internals = gateway as unknown as {
+      registerAppServerItemContentSource(
+        threadId: string,
+        turnId: string,
+        itemId: string,
+        sourceRevision: string,
+        text?: string
+      ): string;
+      timelineContentCursor(
+        contentRef: string,
+        sourceRevision: string,
+        byteOffset: number,
+        chunkBytes: number
+      ): string;
+      timelineContentSources: Map<string, unknown>;
+      timelineContentCursors: Map<string, { contentRef: string }>;
+      timelineContentCursorByPosition: Map<string, string>;
+    };
+    const oldestRef = internals.registerAppServerItemContentSource(
+      "thread-1",
+      "turn-oldest",
+      "item-oldest",
+      "0:0",
+      "oldest"
+    );
+    const oldestCursor = internals.timelineContentCursor(oldestRef, "0:0:digest", 1, 1);
+    let newestRef = oldestRef;
+    for (let index = 0; index < 2_000; index += 1) {
+      newestRef = internals.registerAppServerItemContentSource(
+        "thread-1",
+        `turn-${index}`,
+        `item-${index}`,
+        `0:${index}`,
+        `content-${index}`
+      );
+    }
+
+    expect(internals.timelineContentSources.size).toBe(2_000);
+    expect(internals.timelineContentSources.has(oldestRef)).toBe(false);
+    expect(internals.timelineContentCursors.has(oldestCursor)).toBe(false);
+    expect([...internals.timelineContentCursorByPosition.values()]).not.toContain(oldestCursor);
+
+    const firstCursor = internals.timelineContentCursor(newestRef, "0:newest:digest", 0, 1);
+    for (let index = 1; index <= 10_000; index += 1) {
+      internals.timelineContentCursor(newestRef, "0:newest:digest", index, 1);
+    }
+
+    expect(internals.timelineContentCursors.size).toBe(10_000);
+    expect(internals.timelineContentCursors.has(firstCursor)).toBe(false);
+    expect([...internals.timelineContentCursorByPosition.values()]).not.toContain(firstCursor);
+    expect(internals.timelineContentCursorByPosition.size).toBe(internals.timelineContentCursors.size);
+  });
+
+  it("full-content 读取与 source 淘汰竞态时不创建 orphan cursor", async () => {
+    const gateway = new AppServerGateway(new OversizeItemContentPeer("cache source"));
+    const internals = gateway as unknown as {
+      registerAppServerItemContentSource(
+        threadId: string,
+        turnId: string,
+        itemId: string,
+        sourceRevision: string,
+        text?: string
+      ): string;
+      resolveTimelineContentSource(source: unknown): Promise<string>;
+      timelineContentSources: Map<string, unknown>;
+      timelineContentCursors: Map<string, unknown>;
+    };
+    const contentRef = internals.registerAppServerItemContentSource(
+      "thread-1",
+      "turn-race",
+      "item-race",
+      "0:0",
+      "original"
+    );
+    let release!: (text: string) => void;
+    const pendingSource = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    internals.resolveTimelineContentSource = async () => pendingSource;
+
+    const pendingRead = gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef,
+      maxBytes: 1
+    });
+    await Promise.resolve();
+    for (let index = 0; index < 2_000; index += 1) {
+      internals.registerAppServerItemContentSource(
+        "thread-1",
+        `turn-race-${index}`,
+        `item-race-${index}`,
+        `0:${index}`,
+        `replacement-${index}`
+      );
+    }
+    release("body from stale source");
+
+    const result = await pendingRead;
+    expect(result.text).toBe("");
+    expect(result.completeness).toEqual(
+      expect.objectContaining({ status: "repair-required", reason: "invalid-content-ref" })
+    );
+    expect(internals.timelineContentSources.has(contentRef)).toBe(false);
+    expect(internals.timelineContentCursors.size).toBe(0);
   });
 
   it("turn item page 按最终序列化 UTF-8 bytes 收敛到 1 MiB 且保留全部 identity", async () => {

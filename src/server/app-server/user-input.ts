@@ -1,5 +1,7 @@
 import type { UserInput } from "../../../docs/generated/app-server-ts/v2/UserInput";
 import type { MobileSkillReference } from "../../shared/codex";
+import type { FileReference } from "../../shared/file-attachments";
+import { encodeFilesMentioned, validateFileReferences } from "../../shared/file-attachments";
 
 export function createTextUserInput(text: string): UserInput {
   const trimmed = text.trim();
@@ -43,10 +45,12 @@ export function createSkillUserInput(skill: MobileSkillReference): UserInput {
 export function createTurnUserInput(
   text: string,
   imagePaths: string[] = [],
-  skillReferences: MobileSkillReference[] = []
+  skillReferences: MobileSkillReference[] = [],
+  fileReferences: FileReference[] = []
 ): UserInput[] {
+  const files = validateFileReferences(fileReferences);
   return [
-    createTextUserInput(text),
+    createTextUserInput(encodeFilesMentioned(text, files)),
     ...skillReferences.map(createSkillUserInput),
     ...imagePaths.map(createLocalImageUserInput)
   ];

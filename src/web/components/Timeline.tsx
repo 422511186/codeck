@@ -737,6 +737,17 @@ type TimelineRowProps = {
   onPreviewImage: (src: string) => void;
 };
 
+type FullContentIdentity = {
+  threadId: string;
+  entryId: string;
+  turnId?: string;
+  contentRef: string;
+};
+
+type FullContentState = FullContentIdentity & {
+  text: string;
+};
+
 const TimelineRow = memo(function TimelineRow({
   entry,
   threadId,
@@ -750,23 +761,44 @@ const TimelineRow = memo(function TimelineRow({
   onPreviewImage
 }: TimelineRowProps): JSX.Element {
   timelineDerivationDiagnostics.timelineRowRenderRuns += 1;
-  const [fullContent, setFullContent] = useState<{ contentRef: string; text: string } | null>(null);
+  const [fullContent, setFullContent] = useState<FullContentState | null>(null);
   const [contentLoadState, setContentLoadState] = useState<"idle" | "loading" | "error">("idle");
   const contentRef = entry.completeness?.contentRef;
+  const currentFullContentIdentity =
+    threadId && contentRef
+      ? {
+          threadId,
+          entryId: entry.id,
+          turnId: entry.turnId,
+          contentRef
+        }
+      : null;
+  const currentFullContentIdentityRef = useRef<FullContentIdentity | null>(currentFullContentIdentity);
+  currentFullContentIdentityRef.current = currentFullContentIdentity;
+  const contentLoaded = sameFullContentIdentity(fullContent, currentFullContentIdentity);
   const renderedEntry =
-    fullContent && fullContent.contentRef === contentRef
+    fullContent && contentLoaded
       ? timelineEntryWithFullText(entry, fullContent.text)
       : entry;
   const body = renderedEntry.body;
   const derivationKey = timelineEntryDerivationKey(renderedEntry);
 
   useEffect(() => {
-    setFullContent((current) => (current?.contentRef === contentRef ? current : null));
+    setFullContent((current) =>
+      sameFullContentIdentity(current, currentFullContentIdentity) ? current : null
+    );
     setContentLoadState("idle");
-  }, [contentRef]);
+  }, [threadId, entry.id, entry.turnId, contentRef]);
+
+  useEffect(() => {
+    return () => {
+      currentFullContentIdentityRef.current = null;
+    };
+  }, []);
 
   const loadFullContent = async () => {
-    if (!threadId || !contentRef || contentLoadState === "loading") {
+    const requestIdentity = currentFullContentIdentityRef.current;
+    if (!requestIdentity || contentLoadState === "loading") {
       return;
     }
     setContentLoadState("loading");
@@ -781,7 +813,10 @@ const TimelineRow = memo(function TimelineRow({
           }
           seenCursors.add(cursor);
         }
-        const chunk = await codex.readTimelineContent(threadId, contentRef, cursor);
+        const chunk = await codex.readTimelineContent(requestIdentity.threadId, requestIdentity.contentRef, cursor);
+        if (!sameFullContentIdentity(currentFullContentIdentityRef.current, requestIdentity)) {
+          return;
+        }
         if (chunk.completeness.status === "repair-required") {
           throw new Error(chunk.completeness.reason ?? "repair-required");
         }
@@ -789,13 +824,24 @@ const TimelineRow = memo(function TimelineRow({
         cursor = chunk.nextCursor;
       } while (cursor);
       const text = chunks.join("");
-      setFullContent({ contentRef, text });
-      const store = useStore.getState();
-      store.ensureThread(threadId);
-      store.replaceOrAddEntry(threadId, timelineEntryWithFullText(entry, text));
+      if (!sameFullContentIdentity(currentFullContentIdentityRef.current, requestIdentity)) {
+        return;
+      }
+      const storeEntry = findFullContentStoreEntry(requestIdentity);
+      if (!storeEntry) {
+        setContentLoadState("idle");
+        return;
+      }
+      setFullContent({ ...requestIdentity, text });
+      useStore.getState().replaceOrAddEntry(
+        requestIdentity.threadId,
+        timelineEntryWithFullText(storeEntry, text)
+      );
       setContentLoadState("idle");
     } catch {
-      setContentLoadState("error");
+      if (sameFullContentIdentity(currentFullContentIdentityRef.current, requestIdentity)) {
+        setContentLoadState("error");
+      }
     }
   };
   const content = (() => {
@@ -803,12 +849,12 @@ const TimelineRow = memo(function TimelineRow({
     case "user-message":
       return (
         <UserMessage
-          entry={entry}
+          entry={renderedEntry}
           actionAvailable={!running && actionAvailable}
           running={running}
-          onResend={() => onResendUser?.(entry)}
-          onRewind={() => onRewindToMessage?.(entry)}
-          onFork={() => onForkFromMessage?.(entry)}
+          onResend={() => onResendUser?.(renderedEntry)}
+          onRewind={() => onRewindToMessage?.(renderedEntry)}
+          onFork={() => onForkFromMessage?.(renderedEntry)}
           onPreviewImage={onPreviewImage}
         />
       );
@@ -837,8 +883,8 @@ const TimelineRow = memo(function TimelineRow({
       {entry.completeness && entry.completeness.status !== "complete" ? (
         <TimelineCompletenessFooter
           completeness={entry.completeness}
-          contentLoaded={Boolean(fullContent && fullContent.contentRef === contentRef)}
-          fullText={fullContent?.text ?? null}
+          contentLoaded={contentLoaded}
+          fullText={contentLoaded ? fullContent?.text ?? null : null}
           loadState={contentLoadState}
           canLoad={Boolean(threadId && contentRef)}
           onLoad={loadFullContent}
@@ -862,6 +908,28 @@ function timelineRowPropsEqual(previous: TimelineRowProps, next: TimelineRowProp
     previous.onForkFromMessage === next.onForkFromMessage &&
     previous.onPreviewImage === next.onPreviewImage
   );
+}
+
+function sameFullContentIdentity(
+  left: FullContentIdentity | null | undefined,
+  right: FullContentIdentity | null | undefined
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.threadId === right.threadId &&
+    left.entryId === right.entryId &&
+    left.turnId === right.turnId &&
+    left.contentRef === right.contentRef
+  );
+}
+
+function findFullContentStoreEntry(identity: FullContentIdentity): TimelineEntry | null {
+  return useStore.getState().threads[identity.threadId]?.entries.find((candidate) =>
+    candidate.id === identity.entryId &&
+    candidate.turnId === identity.turnId &&
+    candidate.completeness?.contentRef === identity.contentRef
+  ) ?? null;
 }
 
 function timelineEntryWithFullText(entry: TimelineEntry, text: string): TimelineEntry {
@@ -1793,7 +1861,7 @@ function UserMessage({
   const body = entry.body as Extract<TimelineEntry["body"], { kind: "user-message" }>;
   const [menuOpen, setMenuOpen] = useState(false);
   const failed = body.status === "failed";
-  const hasMessageBubble = Boolean(body.text || body.imagePaths?.length || body.skillReferences?.length || failed);
+  const hasMessageBubble = Boolean(body.text || body.imagePaths?.length || body.skillReferences?.length || body.fileReferences?.length || failed);
 
   function pressHandler(e: React.PointerEvent): void {
     const timer = window.setTimeout(() => setMenuOpen(true), 450);
@@ -1832,6 +1900,16 @@ function UserMessage({
           <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
             {body.imagePaths.map((src) => (
               <ImageThumb key={src} src={src} onPreview={onPreviewImage} />
+            ))}
+          </div>
+        ) : null}
+        {body.fileReferences?.length ? (
+          <div data-file-reference-group="true" style={fileReferenceRowStyle}>
+            {body.fileReferences.map((file) => (
+              <span key={`${file.id}\u0001${file.path}`} data-file-reference-chip="true" style={fileReferenceChipStyle}>
+                <span aria-hidden="true">▤</span>
+                <span style={skillReferenceLabelStyle}>{file.name}</span>
+              </span>
             ))}
           </div>
         ) : null}
@@ -2019,6 +2097,9 @@ const skillReferenceChipStyle: React.CSSProperties = {
   lineHeight: 1.4,
   boxSizing: "border-box"
 };
+
+const fileReferenceRowStyle: React.CSSProperties = { ...skillReferenceRowStyle, marginBottom: 8 };
+const fileReferenceChipStyle: React.CSSProperties = { ...skillReferenceChipStyle, maxWidth: "100%" };
 
 const skillReferenceLabelStyle: React.CSSProperties = {
   minWidth: 0,

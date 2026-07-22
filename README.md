@@ -73,8 +73,8 @@
   - WS 增量更新 + 断线重连 + 全量回填
   - 审批卡片：command_approval / file_approval / permissions_approval / question / mcp_elicitation / dynamic_tool
   - composer：自动增高文本区 + `+` 添加面板 + 权限 chip + 模型/思考档位 chip + send/interrupt + 草稿持久化
-  - `+` 添加面板：列表式 bottom sheet，提供图片、引用 Skill、设定/编辑目标；隐藏尚未支持的文件和插件入口
-  - 图片：相册单图、上传进度、失败重试；Skill 引用支持多选并作为结构化输入发送
+  - `+` 添加面板：列表式 bottom sheet，提供图片、文件、引用 Skill、设定/编辑目标；文件支持手机选择器多选和重复追加
+  - 图片：相册单图、上传进度、失败重试；普通文件逐项上传、显示 chip、失败重试和移除；Skill 引用支持多选并作为结构化输入发送
   - 目标：从添加面板设置、编辑或清除当前会话目标；Web UI 只暴露目标描述，不暴露 token budget
   - Plan/Build segmented + 来源敏感模型选择器 + 底部抽屉（重命名/归档/压缩/Fork）
   - 已有会话可在自定义模型与 Codex 目录模型间切换；切换失败时确定恢复原模型或阻塞并显示恢复操作
@@ -188,7 +188,7 @@ CODEX_WEB_APP_SERVER_MODE=spawn
 - 如果没有配置，后端启动时生成一个随机长 token，只在当前进程有效，并打印到控制台。
 - 这个 token 不需要等同于模型/API key。真正模型/API key 仍然放在后端环境或 Codex 配置里。
 - `CODEX_WEB_WORKSPACE_ROOTS` 用来限制后端允许操作的工作区范围。
-- `CODEX_WEB_UPLOAD_DIR` 是图片暂存目录；未配置时默认使用项目当前工作目录下的 `uploads`。
+- `CODEX_WEB_UPLOAD_DIR` 是附件暂存目录；未配置时默认使用项目当前工作目录下的 `uploads`。上传文件默认 24 小时清理；普通文件单文件 20 MiB、单条消息最多 10 个、合计最多 50 MiB。
 - `CODEX_WEB_AUDIT_LOG_PATH` 是审计日志路径；未配置时默认使用项目当前工作目录下的 `logs/audit.jsonl`。
 - `CODEX_WEB_DATA_DIR` 保存 `projects.json`、`custom-models.json` 和 `thread-model-bindings.json`；未配置时默认使用项目当前工作目录下的 `data`，生产环境必须持久化并备份。
 - 审批、question、WebSocket 连接状态等运行中状态默认放内存；服务重启后从 Codex app-server 重新读取会话即可。
@@ -250,7 +250,7 @@ CODEX_WEB_APP_SERVER_MODE=off
 
 - app-server 默认只绑定 loopback，原始 app-server URL 和 Web 登录 token 不通过状态接口暴露。状态接口只返回 mode、state、是否复用、是否由当前进程拥有、pid 是否已知、错误类别等安全诊断字段。
 - 文件读取、终端 cwd、新建会话 cwd、runtime workspace roots 和图片路径会经过 `CODEX_WEB_WORKSPACE_ROOTS` allowlist 校验。
-- 图片上传目录额外允许作为 `localImage` 来源，但不会自动扩大 Files/Terminal 的工作区范围。
+- 附件上传目录额外允许作为图片或受控普通文件引用来源，但不会自动扩大 Files/Terminal 的工作区范围；路径会执行 canonical 普通文件和符号链接校验。
 - 发送消息、上传图片、执行终端命令、审批响应、fork、rollback、interrupt、steer、新建会话等敏感动作会写入 append-only JSONL 审计日志。
 - 审计日志会递归脱敏 key 中包含 `token`、`secret`、`password`、`url` 的字段。
 - 项目目录、自定义模型与绑定文件只由后端在 `CODEX_WEB_DATA_DIR` 下创建，文件权限为 `0600`；浏览器不能指定持久化路径，文件中不保存 provider 配置或凭据。

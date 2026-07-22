@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, Search, Settings2, X } from "lucide-react";
 import { codex } from "../api/endpoints";
@@ -31,16 +31,22 @@ export function UnifiedModelPicker({
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const loadCatalogRef = useRef(loadCatalog);
+
+  useEffect(() => {
+    loadCatalogRef.current = loadCatalog;
+  }, [loadCatalog]);
 
   const load = useCallback(async () => {
     setCatalog(null);
     setError(null);
     try {
-      setCatalog(await (loadCatalog ? loadCatalog() : codex.modelCatalog()));
+      const loader = loadCatalogRef.current;
+      setCatalog(await (loader ? loader() : codex.modelCatalog()));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "无法读取模型目录");
     }
-  }, [loadCatalog]);
+  }, []);
 
   useEffect(() => {
     void load();

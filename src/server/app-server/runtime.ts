@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assertRuntimeSessionRolloutFileAllowed } from "../security";
 import type { AppServerConfig } from "../../config/env";
 import type { ThreadMemoryMode } from "../../../docs/generated/app-server-ts/ThreadMemoryMode";
@@ -234,6 +234,7 @@ type SessionTimelineContentSource = TimelineContentSourceBase & {
 
 type AppServerTimelineContentSource = TimelineContentSourceBase & {
   kind: "app-server";
+  contentDigest: string | null;
 };
 
 type TimelineContentSource = SessionTimelineContentSource | AppServerTimelineContentSource;
@@ -249,9 +250,12 @@ export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequ
 
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
 const MAX_BROWSER_EVENT_BACKLOG = 500;
+const MAX_TIMELINE_CONTENT_SOURCES = 2_000;
+const MAX_TIMELINE_CONTENT_CURSORS = 10_000;
 const MAX_BROWSER_EVENT_OWNER_LEDGER = 2_000;
 const SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT = 64 * 1024 * 1024;
 const SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT = 16 * 1024 * 1024;
+const TIMELINE_HARD_BUDGET_METADATA_BYTE_BUDGET = 16 * 1024;
 const SESSION_CONTEXT_USAGE_TAIL_LINES = 500;
 const SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT = 200_000;
 const SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT = 240;
@@ -346,6 +350,7 @@ function mergeOverlayItems(current: MobileTimelineItem, next: MobileTimelineItem
     ...next,
     text: next.text || current.text,
     imagePaths: next.imagePaths ?? current.imagePaths,
+    fileReferences: next.fileReferences ?? current.fileReferences,
     arguments: next.arguments ?? current.arguments,
     status: next.status ?? current.status,
     done: next.done ?? current.done
@@ -585,7 +590,8 @@ function cloneTimelineOverlay(
         item: {
           ...entry.item,
           ...(entry.item.imagePaths ? { imagePaths: [...entry.item.imagePaths] } : {}),
-          ...(entry.item.skillReferences ? { skillReferences: [...entry.item.skillReferences] } : {})
+          ...(entry.item.skillReferences ? { skillReferences: [...entry.item.skillReferences] } : {}),
+          ...(entry.item.fileReferences ? { fileReferences: entry.item.fileReferences.map((file) => ({ ...file })) } : {})
         }
       }
     ])
@@ -659,6 +665,9 @@ function chronologicalTimelineTransition(
 function mergeTimelineTurnMeta(base: MobileTimelineItem, overlay: MobileTimelineItem): MobileTimelineItem {
   return {
     ...overlay,
+    ...(overlay.imagePaths?.length || !base.imagePaths?.length ? {} : { imagePaths: base.imagePaths }),
+    ...(overlay.skillReferences?.length || !base.skillReferences?.length ? {} : { skillReferences: base.skillReferences }),
+    ...(overlay.fileReferences?.length || !base.fileReferences?.length ? {} : { fileReferences: base.fileReferences }),
     ...(overlay.turnId || !base.turnId ? {} : { turnId: base.turnId }),
     ...(typeof overlay.turnIndex === "number" || typeof base.turnIndex !== "number" ? {} : { turnIndex: base.turnIndex })
   };
@@ -3168,9 +3177,15 @@ export class RollbackUnresolvedError extends Error {
   }
 }
 
+function isTerminalRollbackOperationError(error: unknown): boolean {
+  return error instanceof RollbackConflictError || error instanceof RollbackUnresolvedError;
+}
+
 type RollbackOperationEntry = {
   fingerprint: string;
   promise: Promise<MobileThreadDetail>;
+  hasError: boolean;
+  error?: unknown;
 };
 
 export class CurrentModelProviderError extends Error {
@@ -4269,7 +4284,8 @@ export class AppServerGateway {
         detail.id,
         item.turnId,
         item.id,
-        `${item.generation ?? detail.generation ?? 0}:${item.snapshotSequence ?? detail.snapshotSequence ?? 0}`
+        `${item.generation ?? detail.generation ?? 0}:${item.snapshotSequence ?? detail.snapshotSequence ?? 0}`,
+        item.text
       );
       contentRefs.set(key, contentRef);
       return contentRef;
@@ -4692,6 +4708,9 @@ export class AppServerGateway {
       if (existing.fingerprint !== fingerprint) {
         throw new RollbackConflictError([], "同一 rollback operationId 的前置条件不一致");
       }
+      if (existing.hasError && !isTerminalRollbackOperationError(existing.error)) {
+        throw new RollbackUnresolvedError();
+      }
       return existing.promise;
     }
 
@@ -4749,7 +4768,19 @@ export class AppServerGateway {
         this.withTimelineGeneration(this.applyTimelineOverlay(detail))
       );
     });
-    this.rollbackOperations.set(operationKey, { fingerprint, promise });
+    const operation: RollbackOperationEntry = {
+      fingerprint,
+      promise,
+      hasError: false
+    };
+    void promise.then(
+      undefined,
+      (error) => {
+        operation.hasError = true;
+        operation.error = error;
+      }
+    );
+    this.rollbackOperations.set(operationKey, operation);
     this.trimRollbackOperations();
     return promise;
   }
@@ -5454,7 +5485,8 @@ export class AppServerGateway {
         threadId,
         item.turnId,
         item.id,
-        `${item.generation ?? 0}:${item.snapshotSequence ?? 0}`
+        `${item.generation ?? 0}:${item.snapshotSequence ?? 0}`,
+        item.text
       );
       contentRefs.set(key, contentRef);
       return contentRef;
@@ -5506,7 +5538,11 @@ export class AppServerGateway {
     maxBytes?: number;
   }): Promise<MobileTimelineContentChunk> {
     const source = this.timelineContentSources.get(input.contentRef);
-    if (!source || source.threadId !== input.threadId || source.expiresAt < Date.now()) {
+    if (!source || source.threadId !== input.threadId) {
+      return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
+    }
+    if (source.expiresAt < Date.now()) {
+      this.deleteTimelineContentSource(input.contentRef);
       return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
     }
 
@@ -5516,8 +5552,7 @@ export class AppServerGateway {
       const cursor = this.timelineContentCursors.get(input.cursor);
       if (
         !cursor ||
-        cursor.contentRef !== input.contentRef ||
-        cursor.sourceRevision !== source.sourceRevision
+        cursor.contentRef !== input.contentRef
       ) {
         return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
       }
@@ -5529,14 +5564,28 @@ export class AppServerGateway {
     if (typeof resolved !== "string") {
       return repairRequiredContentChunk(input.contentRef, resolved.reason);
     }
+    const currentSource = this.timelineContentSources.get(input.contentRef);
+    if (currentSource !== source || source.expiresAt < Date.now()) {
+      if (currentSource === source && source.expiresAt < Date.now()) {
+        this.deleteTimelineContentSource(input.contentRef);
+      }
+      return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
+    }
     const text = resolved;
+    const effectiveSourceRevision = timelineContentSourceRevision(source);
+    if (input.cursor) {
+      const cursor = this.timelineContentCursors.get(input.cursor);
+      if (!cursor || cursor.contentRef !== input.contentRef || cursor.sourceRevision !== effectiveSourceRevision) {
+        return repairRequiredContentChunk(input.contentRef, "invalid-content-ref");
+      }
+    }
 
     const chunk = utf8SafeChunk(text, byteOffset, chunkBytes);
     const nextCursor =
       chunk.endOffset < chunk.totalBytes
         ? this.timelineContentCursor(
             input.contentRef,
-            source.sourceRevision,
+            effectiveSourceRevision,
             chunk.endOffset,
             chunkBytes
           )
@@ -5581,11 +5630,7 @@ export class AppServerGateway {
       sourceRevision: `${metadata.size}:${metadata.mtimeMs}`,
       expiresAt: Date.now() + 15 * 60 * 1000
     });
-    while (this.timelineContentSources.size > 2_000) {
-      const oldest = this.timelineContentSources.keys().next().value;
-      if (!oldest) break;
-      this.timelineContentSources.delete(oldest);
-    }
+    this.pruneTimelineContentSources();
     return contentRef;
   }
 
@@ -5600,7 +5645,8 @@ export class AppServerGateway {
       content.threadId,
       content.turnId,
       content.itemId,
-      `${identity.generation ?? 0}:${identity.revision ?? 0}`
+      `${identity.generation ?? 0}:${identity.revision ?? 0}`,
+      content.originalKind === "item_updated" ? content.text : undefined
     );
   }
 
@@ -5608,7 +5654,8 @@ export class AppServerGateway {
     threadId: string,
     turnId: string,
     itemId: string,
-    sourceRevision: string
+    sourceRevision: string,
+    text?: string
   ): string {
     const contentRef = `tlc_${randomUUID().replace(/-/g, "")}`;
     this.timelineContentSources.set(contentRef, {
@@ -5618,9 +5665,56 @@ export class AppServerGateway {
       itemId,
       field: "text",
       sourceRevision,
+      contentDigest: typeof text === "string" ? timelineTextDigest(text) : null,
       expiresAt: Date.now() + 15 * 60 * 1000
     });
+    this.pruneTimelineContentSources();
     return contentRef;
+  }
+
+  private pruneTimelineContentSources(now = Date.now()): void {
+    for (const [contentRef, source] of this.timelineContentSources) {
+      if (source.expiresAt < now) {
+        this.deleteTimelineContentSource(contentRef);
+      }
+    }
+    while (this.timelineContentSources.size > MAX_TIMELINE_CONTENT_SOURCES) {
+      const oldest = this.timelineContentSources.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.deleteTimelineContentSource(oldest);
+    }
+  }
+
+  private deleteTimelineContentSource(contentRef: string): void {
+    this.timelineContentSources.delete(contentRef);
+    for (const [cursor, state] of this.timelineContentCursors) {
+      if (state.contentRef === contentRef) {
+        this.deleteTimelineContentCursor(cursor, state);
+      }
+    }
+  }
+
+  private deleteTimelineContentCursor(cursor: string, state?: TimelineContentCursorState): void {
+    const current = state ?? this.timelineContentCursors.get(cursor);
+    this.timelineContentCursors.delete(cursor);
+    if (!current) return;
+    const key = timelineContentCursorPositionKey(
+      current.contentRef,
+      current.sourceRevision,
+      current.byteOffset,
+      current.chunkBytes
+    );
+    if (this.timelineContentCursorByPosition.get(key) === cursor) {
+      this.timelineContentCursorByPosition.delete(key);
+    }
+  }
+
+  private trimTimelineContentCursors(): void {
+    while (this.timelineContentCursors.size > MAX_TIMELINE_CONTENT_CURSORS) {
+      const oldest = this.timelineContentCursors.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.deleteTimelineContentCursor(oldest);
+    }
   }
 
   private async resolveTimelineContentSource(
@@ -5679,6 +5773,11 @@ export class AppServerGateway {
         ) {
           return { reason: "source-revision" };
         }
+        const contentDigest = timelineTextDigest(item.text);
+        if (source.contentDigest && source.contentDigest !== contentDigest) {
+          return { reason: "source-revision" };
+        }
+        source.contentDigest ??= contentDigest;
         return item.text;
       }
       const nextCursor = page.nextCursor ?? null;
@@ -5698,7 +5797,7 @@ export class AppServerGateway {
     byteOffset: number,
     chunkBytes: number
   ): string {
-    const key = `${contentRef}\u0000${sourceRevision}\u0000${byteOffset}\u0000${chunkBytes}`;
+    const key = timelineContentCursorPositionKey(contentRef, sourceRevision, byteOffset, chunkBytes);
     const existing = this.timelineContentCursorByPosition.get(key);
     if (existing) {
       return existing;
@@ -5706,6 +5805,7 @@ export class AppServerGateway {
     const cursor = `tlcc_${randomUUID().replace(/-/g, "")}`;
     this.timelineContentCursorByPosition.set(key, cursor);
     this.timelineContentCursors.set(cursor, { contentRef, sourceRevision, byteOffset, chunkBytes });
+    this.trimTimelineContentCursors();
     return cursor;
   }
 
@@ -5878,6 +5978,25 @@ function clampTimelineContentChunkBytes(value: number | undefined): number {
   return Math.max(1, Math.min(Math.floor(value), TIMELINE_CONTENT_CHUNK_BYTE_BUDGET));
 }
 
+function timelineTextDigest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function timelineContentSourceRevision(source: TimelineContentSource): string {
+  return source.kind === "app-server" && source.contentDigest
+    ? `${source.sourceRevision}:${source.contentDigest}`
+    : source.sourceRevision;
+}
+
+function timelineContentCursorPositionKey(
+  contentRef: string,
+  sourceRevision: string,
+  byteOffset: number,
+  chunkBytes: number
+): string {
+  return `${contentRef}\u0000${sourceRevision}\u0000${byteOffset}\u0000${chunkBytes}`;
+}
+
 function repairRequiredContentChunk(
   contentRef: string,
   reason: "invalid-content-ref" | "source-revision" | "source-gap"
@@ -5904,6 +6023,9 @@ function compactTimelineItemForHardBudget(
   fallbackContentRef: string | undefined
 ): MobileTimelineItem {
   const contentRef = item.completeness?.contentRef ?? fallbackContentRef;
+  const imagePaths = cloneTimelineItemMetadataIfWithinBudget(item.imagePaths, (path) => path);
+  const skillReferences = cloneTimelineItemMetadataIfWithinBudget(item.skillReferences, (skill) => ({ ...skill }));
+  const fileReferences = cloneTimelineItemMetadataIfWithinBudget(item.fileReferences, (file) => ({ ...file }));
   const bounded = boundedTimelineText(item.text, {
     maxBytes: 0,
     ...(contentRef ? { contentRef } : {})
@@ -5927,10 +6049,27 @@ function compactTimelineItemForHardBudget(
     ...(item.toolKind ? { toolKind: item.toolKind } : {}),
     ...(item.actionKind ? { actionKind: item.actionKind } : {}),
     ...(item.status ? { status: item.status } : {}),
+    ...(imagePaths ? { imagePaths } : {}),
+    ...(skillReferences ? { skillReferences } : {}),
+    ...(fileReferences ? { fileReferences } : {}),
     ...(typeof item.added === "number" ? { added: item.added } : {}),
     ...(typeof item.removed === "number" ? { removed: item.removed } : {}),
     ...(completeness ? { completeness } : {})
   };
+}
+
+function cloneTimelineItemMetadataIfWithinBudget<T>(
+  items: readonly T[] | undefined,
+  cloneItem: (item: T) => T
+): T[] | undefined {
+  if (!items?.length) {
+    return undefined;
+  }
+  const cloned = items.map(cloneItem);
+  if (utf8ByteLength(JSON.stringify(cloned)) > TIMELINE_HARD_BUDGET_METADATA_BYTE_BUDGET) {
+    return undefined;
+  }
+  return cloned;
 }
 
 function timelinePageWithCompleteness(

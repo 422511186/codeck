@@ -109,6 +109,18 @@ describe("timeline engine", () => {
     expect(state.generation).toBe(1);
   });
 
+  it("removes one local entry by id without changing adjacent timeline entries", () => {
+    const state = applyTimelineInput(createTimelineEngineState({
+      entries: [
+        userEntry("user-1", "turn-1", "prompt", 1),
+        { id: "local-error", createdAt: 2, body: { kind: "error", text: "结果未确认" } },
+        agentEntry("agent-1", "turn-1", "reply", 3)
+      ]
+    }), { kind: "remove-entry", entryId: "local-error" });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["user-1", "agent-1"]);
+  });
+
   it("keeps multi-source batch merging within a bounded normalization budget", () => {
     let state = createTimelineEngineState();
     state = applyTimelineInput(state, {
@@ -392,6 +404,7 @@ describe("timeline engine", () => {
           text: "same prompt",
           imagePaths: ["/tmp/a.png"],
           skillReferences: [{ name: "skill-a", path: "/skills/a/SKILL.md" }],
+          fileReferences: [{ id: "file-a", name: "a.txt", path: "/uploads/a.txt", mimeType: "application/octet-stream", size: 0 }],
           status: "sending"
         }
       }
@@ -420,6 +433,7 @@ describe("timeline engine", () => {
         kind: "user-message",
         imagePaths: ["/tmp/a.png"],
         skillReferences: [{ name: "skill-a", path: "/skills/a/SKILL.md" }],
+        fileReferences: [{ id: "file-a", name: "a.txt", path: "/uploads/a.txt", mimeType: "application/octet-stream", size: 0 }],
         status: "sent"
       }
     });

@@ -203,6 +203,7 @@ type Actions = {
   upsertThreadNotice: (threadId: string, notice: ThreadNoticeInput) => void;
   dismissThreadNotice: (threadId: string, noticeId: string) => void;
   replaceOrAddEntry: (threadId: string, entry: TimelineEntry, revision?: number, eventId?: string) => void;
+  removeEntry: (threadId: string, entryId: string) => void;
   appendTextToEntry: (threadId: string, entry: TimelineEntry) => void;
   startReasoningEntry: (
     threadId: string,
@@ -595,6 +596,19 @@ export const useStore = create<State & Actions>((set, get) => ({
             },
             normalizedEntries
           )
+        }
+      };
+    }),
+  removeEntry: (threadId, entryId) =>
+    set((state) => {
+      const prev = state.threads[threadId];
+      if (!prev) return state;
+      const timelineEngine = reduceThreadTimelineState(prev, { kind: "remove-entry", entryId });
+      if (timelineEngine === prev.timelineEngine) return state;
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
         }
       };
     }),

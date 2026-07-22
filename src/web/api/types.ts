@@ -1,5 +1,7 @@
 import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
 import type { ThreadModelStateView } from "../../shared/custom-models";
+import type { FileReference } from "../../shared/file-attachments";
+export type { FileReference } from "../../shared/file-attachments";
 
 export type ApiOk<T> = { ok: true } & T;
 export type ApiErr = { ok: false; error?: string };
@@ -53,6 +55,7 @@ export type TimelineItem = {
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: SkillReference[];
+  fileReferences?: FileReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";
@@ -169,6 +172,8 @@ export type UploadedImage = {
   mimeType: string;
   size: number;
 };
+
+export type UploadedFile = FileReference;
 
 export type SkillReference = {
   name: string;

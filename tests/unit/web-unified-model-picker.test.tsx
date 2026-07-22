@@ -93,6 +93,25 @@ describe("UnifiedModelPicker", () => {
     await waitFor(() => expect(mockModelCatalog).toHaveBeenCalledTimes(2));
   });
 
+  it("父级重渲染不会重复刷新目录", async () => {
+    const loadCatalog = vi.fn().mockResolvedValue(catalog);
+    const props = {
+      current,
+      onSelect: vi.fn(),
+      onReapply: vi.fn(),
+      onClose: vi.fn()
+    };
+    const { rerender } = render(
+      <UnifiedModelPicker {...props} loadCatalog={() => loadCatalog()} />
+    );
+
+    await screen.findByText("私有同名模型");
+    rerender(<UnifiedModelPicker {...props} loadCatalog={() => loadCatalog()} />);
+    rerender(<UnifiedModelPicker {...props} loadCatalog={() => loadCatalog()} />);
+
+    await waitFor(() => expect(loadCatalog).toHaveBeenCalledTimes(1));
+  });
+
   it("按 label 与 model 搜索，并用目录修订号提交来源敏感选择", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn().mockResolvedValue(undefined);

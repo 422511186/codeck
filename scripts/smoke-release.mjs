@@ -40,10 +40,18 @@ child.stderr.on("data", (chunk) => {
 
 try {
   await waitForHealth(`http://${host}:${port}/api/health`, timeoutMs);
+  await assertFileUploadRoute(`http://${host}:${port}/api/codex/uploads/files`);
   console.log(`Release smoke test passed on http://${host}:${port}`);
 } finally {
   await stopChild(child);
   await rm(smokeDir, { recursive: true, force: true });
+}
+
+async function assertFileUploadRoute(url) {
+  const response = await fetch(url, { method: "POST" });
+  if (response.status !== 401) {
+    throw new Error(`普通文件上传路由 smoke 失败: ${response.status}`);
+  }
 }
 
 async function waitForHealth(url, timeout) {

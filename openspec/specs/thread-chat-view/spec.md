@@ -560,7 +560,7 @@ timeline 背景 SHALL 使用纯背景色，消息块 SHALL 通过浅底色或边
 - **AND** 页面 MUST 使用 G2 的 metadata/latest page 或事件流建立当前基线
 
 ### Requirement: Repair replace is serialized with local mutations
-snapshot repair、rollback replace、fork initialization、本地 send mutation 和 SSE/live 提交 SHALL 通过 thread-local mutation/delivery epoch、`HistoryStamp` 与 request token 串行化。旧请求完成后 MUST NOT 回退较新的本地或实时 timeline 状态；旧 generation 请求的清理 MUST NOT 清除新 generation 的 repair 标记。
+snapshot repair、rollback replace、fork initialization、本地 send mutation 和 SSE/live 提交 SHALL 通过 thread-local mutation/delivery epoch、`HistoryStamp` 与 request token 串行化。旧请求完成后 MUST NOT 回退较新的本地或实时 timeline 状态；旧 generation 请求的清理 MUST NOT 清除新 generation 的 repair 标记。已取消、已卸载或 route/thread 已切换的 repair attempt MUST NOT 安排 completion retry、清理当前 thread repair 标记或把旧 thread 的 repair 需求转移到新 thread。
 
 #### Scenario: Repair finishes after a new send
 - **WHEN** 客户端因 gap 发起 snapshot repair
@@ -575,6 +575,13 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** repair 响应没有通过同 generation overlay 或 watermark 覆盖该更新
 - **THEN** 客户端 MUST NOT 用该响应删除或回退已提交 live entry
 - **AND** repair 需求 MUST 保留或以当前 barrier 重新排队
+
+#### Scenario: Cancelled repair failure does not retry
+- **WHEN** 会话页为 thread A 发起 latest-page repair
+- **AND** repair pending 期间页面卸载，或路由切换到 thread B
+- **AND** thread A 的旧 repair 请求随后以非 abort 错误失败
+- **THEN** 客户端 MUST 将该 repair attempt 视为已取消，并且 MUST NOT 为 thread A 或 thread B 安排 completion retry
+- **AND** 该旧 attempt MUST NOT 清理或覆盖当前 thread 的 repair 标记
 
 ### Requirement: Confirmed snapshot repair is not lost across local mutations
 会话页 SHALL 使用 thread-local epoch 或等价机制阻止旧 snapshot repair 覆盖较新的 send/rewind/fork 本地状态；但由确认缺口触发的 snapshot repair MUST NOT 因本地 mutation 发生而被静默清除。旧 repair 返回且不能应用时，系统 MUST 保留或重新排队 repair，直到某次 repair 成功应用或被新的权威 snapshot 明确替代。
@@ -1147,3 +1154,76 @@ initial metadata/latest-page 响应因 live delivery、mutation epoch、HistoryS
 - **THEN** 重试 MUST 继续只读取 metadata 与 bounded latest page
 - **AND** MUST 按当前 `HistoryStamp` 去重并遵守最大重试预算
 
+### Requirement: Initial timeline read errors are retryable in place
+
+Thread 页面首屏 metadata 或 bounded timeline page 因未知连接、权限或 app-server 错误失败时，页面 SHALL 保留错误反馈并提供页内 retry。retry MUST 重新执行当前 thread 的首屏读取，不得把未知错误伪装为空会话，也不得依赖用户离开页面或浏览器刷新。
+
+#### Scenario: Retry initial page after transient failure
+
+- **WHEN** 首屏 timeline page 第一次读取失败且当前没有可见 detail
+- **THEN** 页面 MUST 显示错误反馈和 `重试` 操作
+- **AND** 点击 `重试` MUST 重新请求当前 thread 的 metadata 与 bounded latest page
+- **AND** 成功后 MUST 显示正常 empty/timeline 页面
+
+#### Scenario: Retry failure remains visible
+
+- **WHEN** 用户点击 `重试` 后请求再次失败
+- **THEN** 页面 MUST 显示最新错误反馈
+- **AND** MUST 保留 `重试` 操作
+- **AND** MUST NOT 清空或伪造 timeline detail
+
+### Requirement: 用户消息展示普通文件附件
+会话 timeline SHALL 将普通文件作为用户消息气泡内的结构化附件 chip 展示。文件 chip MUST 显示可读文件名和文件语义图标，MUST NOT 显示绝对路径，也 MUST NOT 在首版提供通用预览或下载操作。
+
+#### Scenario: 普通文件与正文属于同一消息气泡
+- **WHEN** timeline 渲染一条包含 `fileReferences` 的用户消息
+- **THEN** Skill、图片、普通文件与正文 MUST 位于同一个用户消息气泡内
+- **AND** 展示顺序 MUST 为 Skill、图片、普通文件、正文
+- **AND** timeline MUST NOT 为普通文件创建独立消息行或第二个气泡
+
+#### Scenario: 文件名适配手机宽度
+- **WHEN** 一条消息包含多个普通文件或超长文件名
+- **THEN** 文件 chip MUST 在完整 chip 之间自动换行
+- **AND** 单个文件名 MUST 省略溢出内容
+- **AND** 气泡 MUST 不产生横向滚动
+
+#### Scenario: 路径不进入可见内容
+- **WHEN** 普通文件引用包含服务端绝对路径
+- **THEN** user bubble、复制文本、无障碍名称和 tooltip MUST NOT 暴露绝对路径
+- **AND** 复制用户消息 MUST 只复制用户正文
+
+#### Scenario: 首版文件 chip 不可打开
+- **WHEN** 用户点击或长按普通文件 chip
+- **THEN** 系统 MUST NOT 导航到本地路径
+- **AND** MUST NOT 发起通用预览或下载请求
+
+### Requirement: 普通文件附件可从历史恢复
+Web SHALL 从可信 Files-mentioned 包装或结构化 timeline 元数据恢复普通文件附件。乐观消息、实时确认、snapshot repair、历史分页和页面刷新 MUST 对同一用户消息呈现一致的文件 chip。
+
+#### Scenario: 乐观消息立即显示文件
+- **WHEN** 用户发送带普通文件的消息
+- **THEN** 本地乐观消息 MUST 立即显示所有文件 chip
+- **AND** 文件顺序 MUST 与发送顺序一致
+
+#### Scenario: 服务端历史恢复文件
+- **WHEN** app-server user item 包含合法 Files-mentioned 包装
+- **THEN** Web MUST 恢复对应 `fileReferences`
+- **AND** MUST 只显示 marker 后的用户原始正文
+
+#### Scenario: 过期文件仍显示历史 chip
+- **WHEN** 历史包装中的文件本体已经被 24 小时清理器删除
+- **THEN** timeline MUST 继续显示文件名 chip
+- **AND** MUST NOT 因文件不存在而删除、隐藏或拆分该用户消息
+
+### Requirement: Timeline 更新不得重置普通文件草稿
+timeline 的 delta、repair、分页、窗口化重排和状态收敛 SHALL 与 composer 普通文件状态隔离。除非 thread 被用户切换，timeline 更新 MUST NOT 清空、重建或重复上传待发送普通文件。
+
+#### Scenario: 高频 delta 到达
+- **WHEN** 当前 turn 高频产生 agent delta
+- **AND** composer 包含待发送普通文件
+- **THEN** 普通文件队列、状态、选择顺序和文本草稿 MUST 保持不变
+
+#### Scenario: Snapshot repair replace timeline
+- **WHEN** snapshot repair 替换当前可见 timeline 窗口
+- **THEN** composer 普通文件 MUST 保持不变
+- **AND** repair MUST NOT 触发附件重新上传

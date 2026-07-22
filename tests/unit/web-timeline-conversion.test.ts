@@ -22,6 +22,19 @@ describe("timeline conversion", () => {
     expect((entry.body as any).imagePaths).toEqual(["C:/shot.png"]);
   });
 
+  it("恢复可信 Files-mentioned 包装为正文和普通文件引用", () => {
+    const entry = timelineItemToEntry({
+      id: "file-user",
+      role: "user",
+      text: "# Files mentioned by the user:\n\n## notes.txt: C:/uploads/123e4567-e89b-42d3-a456-426614174000.txt\n\n## My request for Codex:\n读取附件"
+    }, 1001);
+    expect(entry.body).toMatchObject({
+      kind: "user-message",
+      text: "读取附件",
+      fileReferences: [{ name: "notes.txt", path: "C:/uploads/123e4567-e89b-42d3-a456-426614174000.txt" }]
+    });
+  });
+
   it("uses UUIDv7 turn time instead of the pagination request time", () => {
     const turnId = "019f5e2a-80c2-72a2-9b84-e9b54ec7a26e";
     const turnCreatedAt = Number.parseInt("019f5e2a80c2", 16);

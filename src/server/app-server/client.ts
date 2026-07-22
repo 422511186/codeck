@@ -301,6 +301,8 @@ import type {
   MobileWindowsSandboxSetupResultView
 } from "../../shared/codex";
 import { createTurnUserInput } from "./user-input";
+import { decodeFilesMentioned, type FileReference } from "../../shared/file-attachments";
+import { getRuntimeConfig } from "../runtime";
 
 const DEFAULT_TIMELINE_PAGE_LIMIT = 30;
 const MAX_TIMELINE_PAGE_LIMIT = 100;
@@ -388,6 +390,7 @@ export type StartTurnInput = {
   text: string;
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
+  fileReferences?: FileReference[];
   clientUserMessageId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -722,7 +725,7 @@ function diffStats(diff: string): { added: number; removed: number } {
 function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): MobileTimelineItem {
   const imagePaths: string[] = [];
   const skillReferences: MobileSkillReference[] = [];
-  const text = item.content
+  const rawText = item.content
     .map((content) => {
       if (content.type === "text") {
         return content.text;
@@ -747,14 +750,16 @@ function userMessageView(item: Extract<ThreadItem, { type: "userMessage" }>): Mo
     })
     .filter((part) => part.trim().length > 0)
     .join("\n");
+  const recovered = decodeFilesMentioned(rawText, getRuntimeConfig().uploadDir);
 
   return {
     id: item.id,
     ...(item.clientId ? { clientUserMessageId: item.clientId } : {}),
     role: "user",
-    text,
+    text: recovered.text,
     ...(imagePaths.length ? { imagePaths } : {}),
-    ...(skillReferences.length ? { skillReferences } : {})
+    ...(skillReferences.length ? { skillReferences } : {}),
+    ...(recovered.fileReferences.length ? { fileReferences: recovered.fileReferences } : {})
   };
 }
 
@@ -1696,7 +1701,7 @@ export class CodexAppServerClient {
     const params: TurnStartParams = {
       threadId: input.threadId,
       clientUserMessageId: input.clientUserMessageId,
-      input: createTurnUserInput(input.text, input.imagePaths, input.skillReferences),
+      input: createTurnUserInput(input.text, input.imagePaths, input.skillReferences, input.fileReferences),
       model: input.model,
       effort: input.reasoningEffort,
       summary: input.reasoningSummary,
