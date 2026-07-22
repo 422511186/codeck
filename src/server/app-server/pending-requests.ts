@@ -4,10 +4,20 @@ export type AppServerServerRequestMessage = {
   params?: unknown;
 };
 
+export class PendingServerRequestOptionError extends Error {
+  readonly httpStatus = 400 as const;
+
+  constructor() {
+    super("审批选项无效或已过期");
+    this.name = "PendingServerRequestOptionError";
+  }
+}
+
 export type PendingRequestOption = {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 };
 
 export type PendingServerRequestView = {
@@ -51,22 +61,67 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === "string" ? value : undefined;
 }
 
-function approvalOptions(values: unknown): PendingRequestOption[] {
+function approvalOptions(values: unknown, params: Record<string, unknown> = {}): PendingRequestOption[] {
   const decisions = Array.isArray(values) && values.length > 0 ? values : ["accept", "decline"];
-  return decisions.map((decision) => {
-    const value = typeof decision === "string" ? decision : JSON.stringify(decision);
-    const labelByValue: Record<string, string> = {
-      accept: "允许",
-      acceptForSession: "本次会话允许",
-      decline: "拒绝",
-      cancel: "取消"
-    };
+  return decisions.map((decision, index) => {
+    if (typeof decision === "string") {
+      const labelByValue: Record<string, string> = {
+        accept: "允许一次",
+        acceptForSession: "本次会话允许",
+        decline: "拒绝",
+        cancel: "中断"
+      };
+      const label = labelByValue[decision];
+      return label
+        ? { value: decision, label }
+        : {
+            value: decision,
+            label: "不支持的审批选项",
+            description: "当前客户端无法安全表达该审批选项",
+            disabled: true
+          };
+    }
 
+    const value = `decision:${index}`;
+    const structured = structuredDecisionPresentation(decision, params);
     return {
       value,
-      label: labelByValue[value] || value
+      label: structured?.label ?? "不支持的审批选项",
+      ...(structured?.description
+        ? { description: structured.description }
+        : { description: "当前客户端无法安全表达该审批选项" }),
+      ...(structured ? {} : { disabled: true })
     };
   });
+}
+
+function structuredDecisionPresentation(
+  decision: unknown,
+  params: Record<string, unknown>
+): { label: string; description?: string } | null {
+  const record = asRecord(decision);
+  const execPolicy = asRecord(record.acceptWithExecpolicyAmendment);
+  const execAmendment = execPolicy.execpolicy_amendment;
+  if (Array.isArray(execAmendment) && execAmendment.every((token) => typeof token === "string")) {
+    return {
+      label: "允许并应用命令规则",
+      description: stringField(params, "command") || execAmendment.join(" ")
+    };
+  }
+
+  const network = asRecord(record.applyNetworkPolicyAmendment);
+  const amendment = asRecord(network.network_policy_amendment);
+  if (
+    typeof amendment.host === "string" &&
+    (amendment.action === "allow" || amendment.action === "deny")
+  ) {
+    return {
+      label: "应用网络规则",
+      description: `${amendment.action === "allow" ? "允许" : "拒绝"} ${amendment.host}`
+    };
+  }
+
+  return null;
 }
 
 function questionOptions(params: Record<string, unknown>): PendingRequestOption[] {
@@ -121,7 +176,7 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
       kind: "command_approval",
       title: "命令审批",
       description: stringField(params, "command") || stringField(params, "reason") || "Codex 请求执行命令",
-      options: approvalOptions(params.availableDecisions)
+      options: approvalOptions(params.availableDecisions, params)
     };
   }
 
@@ -131,7 +186,7 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
       kind: "file_approval",
       title: "文件变更审批",
       description: stringField(params, "reason") || stringField(params, "grantRoot") || "Codex 请求修改文件",
-      options: approvalOptions(["accept", "decline"])
+      options: approvalOptions(["accept", "decline"], params)
     };
   }
 
@@ -151,7 +206,7 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
       kind: "mcp_elicitation",
       title: "MCP 请求",
       description: stringField(params, "message") || "MCP 服务器需要你确认",
-      options: approvalOptions(["accept", "decline", "cancel"])
+      options: approvalOptions(["accept", "decline", "cancel"], params)
     };
   }
 
@@ -161,7 +216,7 @@ export function normalizePendingServerRequest(message: AppServerServerRequestMes
       kind: "permissions_approval",
       title: "权限审批",
       description: stringField(params, "reason") || stringField(params, "cwd") || "Codex 请求新的权限",
-      options: approvalOptions(["accept", "decline"])
+      options: approvalOptions(["accept", "decline"], params)
     };
   }
 
@@ -191,10 +246,11 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   const params = asRecord(request.params);
 
   if (request.kind === "command_approval" || request.kind === "file_approval") {
-    return { decision: value };
+    return { decision: approvalDecisionForRequest(request, value) };
   }
 
   if (request.kind === "permissions_approval") {
+    assertAvailableOption(request, value);
     if (value === "accept") {
       return {
         permissions: asRecord(params.permissions),
@@ -209,6 +265,7 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   }
 
   if (request.kind === "question") {
+    assertAvailableOption(request, value);
     const id = questionId(params);
     if (!id) {
       throw new Error("question 缺少 id，无法回答");
@@ -224,6 +281,7 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   }
 
   if (request.kind === "mcp_elicitation") {
+    assertAvailableOption(request, value);
     return {
       action: value,
       content: value === "accept" ? {} : null,
@@ -246,4 +304,35 @@ export function buildPendingServerRequestResponse(request: PendingServerRequestV
   }
 
   return { decision: value };
+}
+
+function approvalDecisionForRequest(request: PendingServerRequestView, value: string): unknown {
+  const optionIndex = request.options.findIndex((option) => option.value === value);
+  const option = optionIndex >= 0 ? request.options[optionIndex] : undefined;
+  if (!option || option.disabled) {
+    throw new PendingServerRequestOptionError();
+  }
+
+  const params = asRecord(request.params);
+  const fallbackDecisions = request.kind === "file_approval" ? ["accept", "decline"] : ["accept", "decline"];
+  const decisions = Array.isArray(params.availableDecisions) && params.availableDecisions.length
+    ? params.availableDecisions
+    : fallbackDecisions;
+  const rawDecision = decisions[optionIndex];
+  if (typeof rawDecision === "string" && rawDecision === value) {
+    return rawDecision;
+  }
+  if (value === `decision:${optionIndex}` && rawDecision && typeof rawDecision === "object") {
+    if (structuredDecisionPresentation(rawDecision, params)) {
+      return rawDecision;
+    }
+  }
+  throw new PendingServerRequestOptionError();
+}
+
+function assertAvailableOption(request: PendingServerRequestView, value: string): void {
+  const option = request.options.find((candidate) => candidate.value === value);
+  if (!option || option.disabled) {
+    throw new PendingServerRequestOptionError();
+  }
 }

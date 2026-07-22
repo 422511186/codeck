@@ -85,44 +85,78 @@ function ApprovalActions({
   disabled?: boolean;
   onSelect: (value: string) => void;
 }): JSX.Element {
-  const options = normalizedOptions(approval);
-  const acceptValue = findOptionValue(options, ["accept", "acceptForSession"]) ?? "accept";
-  const declineValue = findOptionValue(options, ["decline", "cancel"]) ?? "decline";
+  const explicitOptions = normalizedOptions(approval);
+  const options = explicitOptions.length ? explicitOptions : defaultApprovalOptions(approval.kind);
+
+  if (!options.length) {
+    return (
+      <div style={unsupportedStateStyle}>
+        当前请求没有可安全提交的审批选项。
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-      <button
-        type="button"
-        onClick={() => onSelect(declineValue)}
-        disabled={!!submitting || disabled}
-        style={{
-          padding: "8px 14px",
-          borderRadius: 10,
-          border: "1px solid var(--cw-border)",
-          background: "transparent",
-          color: "var(--cw-fg)",
-          fontSize: 14
-        }}
-      >
-        {submitting === declineValue ? "处理中…" : "拒绝"}
-      </button>
-      <button
-        type="button"
-        onClick={() => onSelect(acceptValue)}
-        disabled={!!submitting || disabled}
-        style={{
-          padding: "8px 14px",
-          borderRadius: 10,
-          border: "none",
-          background: "var(--cw-accent)",
-          color: "var(--cw-accent-fg)",
-          fontSize: 14
-        }}
-      >
-        {submitting === acceptValue ? "处理中…" : "同意"}
-      </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {options.map((option) => {
+        const reject = option.value === "decline" || option.value === "cancel";
+        return (
+          <button
+            key={`${option.value}:${option.label}`}
+            type="button"
+            onClick={() => onSelect(option.value)}
+            disabled={!!submitting || disabled || option.disabled === true}
+            style={{
+              width: "100%",
+              minHeight: 44,
+              padding: "9px 12px",
+              borderRadius: 8,
+              border: reject || option.disabled ? "1px solid var(--cw-border)" : "none",
+              background: reject || option.disabled ? "transparent" : "var(--cw-accent)",
+              color: option.disabled
+                ? "var(--cw-fg-muted)"
+                : reject
+                  ? "var(--cw-fg)"
+                  : "var(--cw-accent-fg)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 3,
+              textAlign: "left",
+              fontSize: 14,
+              lineHeight: 1.35
+            }}
+          >
+            {option.description ? (
+              <>
+                <span style={{ fontWeight: 600 }}>
+                  {submitting === option.value ? "处理中…" : option.label}
+                </span>
+                <span style={{ fontSize: 12, opacity: 0.82 }}>{option.description}</span>
+              </>
+            ) : (
+              submitting === option.value ? "处理中…" : option.label
+            )}
+          </button>
+        );
+      })}
     </div>
   );
+}
+
+function defaultApprovalOptions(kind: PendingServerRequest["kind"]): PendingServerRequestOption[] {
+  if (
+    kind !== "command_approval" &&
+    kind !== "file_approval" &&
+    kind !== "permissions_approval" &&
+    kind !== "mcp_elicitation"
+  ) {
+    return [];
+  }
+  return [
+    { value: "decline", label: "拒绝" },
+    { value: "accept", label: "同意" }
+  ];
 }
 
 function QuestionActions({
@@ -162,7 +196,7 @@ function QuestionActions({
           key={`${option.value}:${option.label}`}
           type="button"
           onClick={() => onSelect(option.value)}
-          disabled={!!submitting || disabled}
+          disabled={!!submitting || disabled || option.disabled === true}
           style={{
             width: "100%",
             minHeight: 48,
@@ -272,11 +306,22 @@ function normalizedOptions(approval: PendingServerRequest): PendingServerRequest
       const value = typeof record.value === "string" ? record.value : label;
       if (!value || !label) return null;
       const description = typeof record.description === "string" ? record.description : undefined;
-      return { value, label, ...(description ? { description } : {}) };
+      const optionDisabled = record.disabled === true;
+      return {
+        value,
+        label,
+        ...(description ? { description } : {}),
+        ...(optionDisabled ? { disabled: true } : {})
+      };
     })
     .filter((option): option is PendingServerRequestOption => option !== null);
 }
 
-function findOptionValue(options: PendingServerRequestOption[], values: string[]): string | null {
-  return options.find((option) => values.includes(option.value))?.value ?? null;
-}
+const unsupportedStateStyle: React.CSSProperties = {
+  padding: 10,
+  border: "1px solid var(--cw-border)",
+  borderRadius: 8,
+  color: "var(--cw-fg-muted)",
+  fontSize: 13,
+  lineHeight: 1.5
+};

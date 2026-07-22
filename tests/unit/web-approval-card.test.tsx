@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { ApprovalCard } from "../../src/web/components/cards/ApprovalCard";
 import type { PendingServerRequest } from "../../src/web/api/types";
@@ -98,6 +98,60 @@ describe("ApprovalCard", () => {
       expect(mockResolveRequest).toHaveBeenCalledWith("req-1", { value: "accept" });
       expect(onResolved).toHaveBeenCalledWith("accept");
     });
+  });
+
+  it("should render and submit every supported command approval decision", async () => {
+    const user = userEvent.setup();
+    const approval: PendingServerRequest = {
+      requestId: "req-decisions",
+      kind: "command_approval",
+      options: [
+        { value: "accept", label: "允许一次" },
+        { value: "acceptForSession", label: "本次会话允许" },
+        { value: "decision:2", label: "允许并应用命令规则", description: "npm test" },
+        { value: "decline", label: "拒绝" },
+        { value: "cancel", label: "中断" }
+      ],
+      request: { command: "npm test" }
+    };
+
+    render(<ApprovalCard approval={approval} />);
+
+    expect(screen.getByRole("button", { name: "允许一次" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "本次会话允许" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /允许并应用命令规则/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拒绝" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "中断" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "本次会话允许" }));
+
+    await waitFor(() => {
+      expect(mockResolveRequest).toHaveBeenCalledWith("req-decisions", {
+        value: "acceptForSession"
+      });
+    });
+  });
+
+  it("should disable unsupported decisions while keeping decline available", () => {
+    const approval = {
+      requestId: "req-unsupported",
+      kind: "command_approval",
+      options: [
+        {
+          value: "decision:0",
+          label: "不支持的审批选项",
+          description: "当前客户端无法安全表达该审批选项",
+          disabled: true
+        },
+        { value: "decline", label: "拒绝" }
+      ],
+      request: { command: "npm test" }
+    } as PendingServerRequest;
+
+    render(<ApprovalCard approval={approval} />);
+
+    expect(screen.getByRole("button", { name: /不支持的审批选项/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "拒绝" })).toBeEnabled();
   });
 
   it("should deny request successfully", async () => {
@@ -292,6 +346,9 @@ describe("ApprovalCard", () => {
     expect(mockResolveRequest).toHaveBeenCalledTimes(1);
 
     // Resolve the promise
-    resolvePromise!();
+    await act(async () => {
+      resolvePromise!();
+      await slowResolve;
+    });
   });
 });

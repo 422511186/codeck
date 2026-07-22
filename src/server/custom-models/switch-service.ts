@@ -98,11 +98,20 @@ function safeErrorSummary(error: unknown): string {
   return message.replace(/[\r\n\t]+/gu, " ").slice(0, 300);
 }
 
-function permissionSelectionFromDetail(detail: MobileThreadDetail): MobilePermissionSelection {
+function permissionSelectionFromDetail(
+  detail: MobileThreadDetail
+): MobilePermissionSelection | undefined {
+  if (
+    detail.activePermissionProfile === undefined ||
+    detail.approvalPolicy === undefined ||
+    detail.approvalsReviewer === undefined
+  ) {
+    return undefined;
+  }
   return {
     permissions: detail.activePermissionProfile?.id ?? null,
-    approvalPolicy: detail.approvalPolicy ?? null,
-    approvalsReviewer: detail.approvalsReviewer ?? null
+    approvalPolicy: detail.approvalPolicy,
+    approvalsReviewer: detail.approvalsReviewer
   };
 }
 

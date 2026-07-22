@@ -103,6 +103,30 @@ describe("binding-aware thread lifecycle routes", () => {
     expect(body.thread.modelState).toMatchObject({ bindingVersion: "binding-1" });
   });
 
+  it("resume route 校验并转发完整 configured 权限 override", async () => {
+    mockResumeThread.mockResolvedValue({ id: "thread-1", timeline: [] });
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/resume/route");
+    const response = await POST(
+      new Request("http://localhost/resume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          permissions: ":danger-full-access",
+          approvalPolicy: "never",
+          approvalsReviewer: null
+        })
+      }),
+      { params: Promise.resolve({ threadId: "thread-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-1", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+  });
+
   it("thread GET 通过生命周期服务返回来源状态", async () => {
     mockReadThreadMetadata.mockResolvedValue({
       id: "thread-1",

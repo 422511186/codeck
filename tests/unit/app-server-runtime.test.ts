@@ -540,6 +540,18 @@ class NotificationOverlayPeer implements ManagedAppServerPeer {
   }
 }
 
+class PermissionStatePeer extends NotificationOverlayPeer {
+  override async request(method: string, _params?: unknown): Promise<unknown> {
+    if (method === "thread/settings/update") {
+      return {};
+    }
+    if (method === "turn/start") {
+      return { turn: { id: "turn-permission" } };
+    }
+    return super.request(method);
+  }
+}
+
 class LatestPageOverlayPeer extends NotificationOverlayPeer {
   override async request(method: string): Promise<unknown> {
     if (method === "thread/items/list") {
@@ -4792,6 +4804,92 @@ describe("createAppServerGateway", () => {
     await gateway.startTurn({ threadId: started.id, text: "完全访问无需审批" });
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(gateway.listPendingServerRequests()).toEqual([]);
+  });
+
+  it("does not promote resume runtime permissions without explicit overrides", async () => {
+    const gateway = createAppServerGateway({ mode: "mock" });
+    await gateway.ensureReady();
+
+    const resumed = await gateway.resumeThread("mock-thread-1");
+
+    expect(resumed.activePermissionProfile).toBeUndefined();
+    expect(resumed.approvalPolicy).toBeUndefined();
+    expect(resumed.approvalsReviewer).toBeUndefined();
+  });
+
+  it("broadcasts configured permission updates and ignores later runtime settings observations", async () => {
+    const peer = new PermissionStatePeer();
+    const gateway = new AppServerGateway(peer);
+    const events: Array<{ event?: Record<string, unknown> }> = [];
+    gateway.onBrowserEvent((event) => events.push(event as { event?: Record<string, unknown> }));
+    await gateway.ensureReady();
+
+    await gateway.updateThreadSettings({
+      threadId: "thread-1",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    expect(events).toContainEqual({
+      type: "codex-event",
+      event: expect.objectContaining({
+        kind: "thread_permission_configured",
+        threadId: "thread-1",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null,
+        eventId: expect.any(String),
+        bootId: expect.any(String),
+        revision: expect.any(Number)
+      })
+    });
+
+    peer.emitNotification({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-1",
+        threadSettings: {
+          model: "gpt-5-codex",
+          modelProvider: "openai",
+          effort: "medium",
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+          activePermissionProfile: { id: ":workspace", extends: null },
+          collaborationMode: null
+        }
+      }
+    });
+
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({
+      activePermissionProfile: { id: ":danger-full-access" },
+      approvalPolicy: "never",
+      approvalsReviewer: null,
+      runtimePermissionObservation: {
+        permissions: ":workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user"
+      }
+    });
+  });
+
+  it("rebuilds configured permissions from a successful turn start payload", async () => {
+    const gateway = new AppServerGateway(new PermissionStatePeer());
+    await gateway.ensureReady();
+
+    await gateway.startTurn({
+      threadId: "thread-1",
+      text: "continue",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    await expect(gateway.readThreadSummary("thread-1")).resolves.toMatchObject({
+      activePermissionProfile: { id: ":danger-full-access" },
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
   });
 
   it("新建空会话 metadata 保留 runtime identity，并区分未物化状态", async () => {

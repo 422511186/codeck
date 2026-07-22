@@ -3286,7 +3286,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("syncs thread mode, model, reasoning effort, and permission profile from settings update events", () => {
+  it("syncs thread mode and model while keeping permission settings as runtime observation", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -3306,9 +3306,38 @@ describe("web store codex events", () => {
         mode: "plan",
         model: "gpt-5-codex",
         modelEffort: "high",
-        permissionProfileId: ":workspace",
+        runtimePermissionProfileId: ":workspace",
+        runtimeApprovalPolicy: "on-request",
+        runtimeApprovalsReviewer: "auto_review"
+      })
+    );
+  });
+
+  it("keeps configured full access when a runtime settings event reports workspace approval", () => {
+    useStore.getState().setPermissionProfile("thread-1", ":danger-full-access", "never", null);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_settings_updated",
+        threadId: "thread-1",
+        model: null,
+        reasoningEffort: null,
         approvalPolicy: "on-request",
-        approvalsReviewer: "auto_review"
+        activePermissionProfile: { id: ":workspace", extends: null },
+        approvalsReviewer: "user",
+        collaborationMode: null
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]).toEqual(
+      expect.objectContaining({
+        permissionProfileId: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null,
+        runtimePermissionProfileId: ":workspace",
+        runtimeApprovalPolicy: "on-request",
+        runtimeApprovalsReviewer: "user"
       })
     );
   });
@@ -3812,6 +3841,45 @@ describe("web store codex events", () => {
         }
       })
     ]);
+  });
+
+  it("keeps command approvals fail closed and deduplicates full-access mismatch notices", () => {
+    useStore.getState().setPermissionProfile("thread-1", ":danger-full-access", "never", null);
+
+    for (const requestId of ["req-command-1", "req-command-2"]) {
+      useStore.getState().dispatchEvent({
+        type: "server-request",
+        request: {
+          requestId,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          kind: "command_approval",
+          title: "命令审批",
+          description: "npm test",
+          options: [
+            { value: "accept", label: "允许一次" },
+            { value: "decline", label: "拒绝" }
+          ]
+        }
+      });
+    }
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.pendingApprovals).toHaveLength(2);
+    expect(thread?.notices).toEqual([
+      expect.objectContaining({
+        kind: "warning",
+        source: "permission-configuration",
+        text: expect.stringContaining("权限配置未生效")
+      })
+    ]);
+    expect(thread).toEqual(
+      expect.objectContaining({
+        permissionProfileId: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      })
+    );
   });
 
   it("keeps long-thread timeline updates within a linear complexity budget", () => {

@@ -172,7 +172,12 @@ describe("SettingsPage", () => {
 
   it("logs out web session and returns to login", async () => {
     const user = userEvent.setup();
-    render(<SettingsPage />);
+    const { container } = render(<SettingsPage />);
+
+    expect(container.querySelector("main")).toHaveStyle({
+      paddingBottom: "calc(40px + var(--safe-bottom))"
+    });
+    expect(screen.getByRole("button", { name: "登出" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "登出" }));
 

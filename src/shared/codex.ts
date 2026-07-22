@@ -32,6 +32,7 @@ export type MobileThreadSummary = {
   activePermissionProfile?: MobileActivePermissionProfile | null;
   approvalPolicy?: MobileApprovalPolicy | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
+  runtimePermissionObservation?: MobileRuntimePermissionObservation;
   modelState?: ThreadModelStateView;
 };
 
@@ -68,6 +69,12 @@ export type MobilePermissionSelection = {
   permissions: string | null;
   approvalPolicy: MobileApprovalPolicy | null;
   approvalsReviewer: MobileApprovalsReviewer | null;
+};
+
+export type MobileRuntimePermissionObservation = {
+  permissions: string | null;
+  approvalPolicy: string | null;
+  approvalsReviewer: string | null;
 };
 
 export type MobileAccountView = {

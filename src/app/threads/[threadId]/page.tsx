@@ -38,7 +38,13 @@ import {
   type ThreadSummary,
   type ThreadGoal
 } from "../../../web/api/types";
-import { loadJson, saveJson, threadModeKey, threadPermissionProfileKey } from "../../../web/storage/localStore";
+import {
+  loadJson,
+  removeKey,
+  saveJson,
+  threadModeKey,
+  threadPermissionProfileKey
+} from "../../../web/storage/localStore";
 import { setDraft } from "../../../web/storage/drafts";
 import { getContextUsage, type ContextUsageSnapshot } from "../../../web/storage/contextUsage";
 import { settingsStore } from "../../../web/storage/settings";
@@ -106,6 +112,7 @@ export default function ThreadPage(): JSX.Element {
   const applyModelSwitchResult = useStore((s) => s.applyModelSwitchResult);
   const clearModelSwitchPending = useStore((s) => s.clearModelSwitchPending);
   const setPermissionProfile = useStore((s) => s.setPermissionProfile);
+  const setRuntimePermissionProfile = useStore((s) => s.setRuntimePermissionProfile);
   const setContextUsage = useStore((s) => s.setContextUsage);
   const setThreadStatus = useStore((s) => s.setThreadStatus);
   const setActiveTurnId = useStore((s) => s.setActiveTurnId);
@@ -440,6 +447,14 @@ export default function ThreadPage(): JSX.Element {
           savePermissionSelection(targetThreadId, selection);
         }
       }
+      if (td.runtimePermissionObservation) {
+        setRuntimePermissionProfile(
+          targetThreadId,
+          td.runtimePermissionObservation.permissions,
+          td.runtimePermissionObservation.approvalPolicy,
+          td.runtimePermissionObservation.approvalsReviewer
+        );
+      }
       setThreadStatus(
         targetThreadId,
         td.status,
@@ -456,6 +471,7 @@ export default function ThreadPage(): JSX.Element {
       setModelState,
       setContextUsage,
       setPermissionProfile,
+      setRuntimePermissionProfile,
       setThreadStatus,
       upsertThreadNotice
     ]
@@ -896,13 +912,29 @@ export default function ThreadPage(): JSX.Element {
       let startRequested = false;
       try {
         const clientUserMessageId = optimisticEntry.clientUserMessageId ?? optimisticEntry.id;
-        let permissionSelection = effectivePermissionPayload;
+        const latestThread = useStore.getState().threads[threadId];
+        const latestPermissionSelection = normalizePermissionSelection(
+          latestThread?.permissionProfileId,
+          latestThread?.approvalPolicy,
+          latestThread?.approvalsReviewer
+        );
+        let permissionSelection = latestPermissionSelection ?? effectivePermissionPayload;
         if (currentStatus === "notLoaded") {
           const resumed = await requestCoordinatorRef.current.dedupeRequest(
             `thread:${threadId}:resume`,
-            () => codex.resumeThread(threadId)
+            () => codex.resumeThread(threadId, permissionSelection)
           );
-          permissionSelection = permissionSelectionFromDetail(resumed) ?? permissionSelection;
+          const resumedSelection = permissionSelectionFromDetail(resumed);
+          if (resumedSelection) {
+            setPermissionProfile(
+              threadId,
+              resumedSelection.permissions,
+              resumedSelection.approvalPolicy,
+              resumedSelection.approvalsReviewer
+            );
+            savePermissionSelection(threadId, resumedSelection);
+            permissionSelection = resumedSelection;
+          }
         }
         const currentMode = useStore.getState().threads[threadId]?.mode ?? "build";
         const collaborationMode =
@@ -1024,7 +1056,8 @@ export default function ThreadPage(): JSX.Element {
       registerAuthoritativeTurn,
       bindLocalUserMessageTurn,
       bumpMutationEpoch,
-      requestSnapshotRepair
+      requestSnapshotRepair,
+      setPermissionProfile
     ]
   );
 
@@ -1517,6 +1550,8 @@ export default function ThreadPage(): JSX.Element {
         );
         if (previous) {
           savePermissionSelection(threadId, previous);
+        } else {
+          removeKey(threadPermissionProfileKey(threadId));
         }
         appendEntries(threadId, [
           {

@@ -18,6 +18,7 @@ import type {
   CollaborationModePreset,
   ModelOption,
   PendingServerRequest,
+  PermissionSelection,
   SkillError,
   SkillOption,
   SkillReference,
@@ -303,10 +304,16 @@ export async function readThreadSummary(threadId: string): Promise<ThreadSummary
   return data.thread;
 }
 
-export async function resumeThread(threadId: string): Promise<ThreadDetail> {
+export async function resumeThread(
+  threadId: string,
+  permissionSelection?: PermissionSelection
+): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/resume`,
-    { method: "POST" }
+    {
+      method: "POST",
+      ...(permissionSelection ? { body: permissionSelection } : {})
+    }
   );
   return data.thread;
 }
@@ -523,7 +530,7 @@ export async function listPendingRequests(): Promise<PendingServerRequest[]> {
 
 export async function resolveRequest(
   requestId: string,
-  input: { value: string } | { response: unknown }
+  input: { value: string }
 ): Promise<void> {
   await api(`/api/codex/requests/${encodeURIComponent(requestId)}/resolve`, {
     method: "POST",

@@ -32,6 +32,7 @@ const mockBeginModelSwitch = vi.fn();
 const mockApplyModelSwitchResult = vi.fn();
 const mockClearModelSwitchPending = vi.fn();
 const mockSetPermissionProfile = vi.fn();
+const mockSetRuntimePermissionProfile = vi.fn();
 const mockSetContextUsage = vi.fn();
 const mockSetRunning = vi.fn();
 const mockSetThreadStatus = vi.fn();
@@ -83,6 +84,7 @@ function mockStoreState(): unknown {
       applyModelSwitchResult: mockApplyModelSwitchResult,
       clearModelSwitchPending: mockClearModelSwitchPending,
       setPermissionProfile: mockSetPermissionProfile,
+      setRuntimePermissionProfile: mockSetRuntimePermissionProfile,
       setContextUsage: mockSetContextUsage,
       setRunning: mockSetRunning,
       setThreadStatus: mockSetThreadStatus,
@@ -291,6 +293,7 @@ describe("ThreadPage", () => {
     mockApplyModelSwitchResult.mockClear();
     mockClearModelSwitchPending.mockClear();
     mockSetPermissionProfile.mockClear();
+    mockSetRuntimePermissionProfile.mockClear();
     mockSetContextUsage.mockClear();
     mockSetRunning.mockClear();
     mockSetThreadStatus.mockClear();
@@ -2576,7 +2579,7 @@ describe("ThreadPage", () => {
       expect(mockListTurnsBefore).toHaveBeenCalledTimes(1);
     });
 
-    act(() => {
+    await act(async () => {
       resolvePage?.({ items: [], nextCursor: null });
     });
   });
@@ -3408,6 +3411,36 @@ describe("ThreadPage", () => {
     });
   });
 
+  it("should remove a failed optimistic permission selection from local storage", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockUpdateThreadSettings.mockRejectedValueOnce(new Error("settings failed"));
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "权限 权限状态待确认" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "权限模式" })).getByRole("button", {
+        name: /完全访问权限/
+      })
+    );
+
+    await waitFor(() => {
+      expect(mockUpdateThreadSettings).toHaveBeenCalledWith("thread-1", {
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      });
+    });
+    await waitFor(() => {
+      expect(localStorage.getItem("codex-web:thread-permission-profile:thread-1")).toBeNull();
+    });
+  });
+
   it("should include the current permission payload when starting a turn", async () => {
     const user = userEvent.setup();
     mockThreadState.mockReturnValue({
@@ -3441,6 +3474,58 @@ describe("ThreadPage", () => {
       })
     );
     expect(JSON.stringify(mockStartTurn.mock.calls[0][0])).not.toMatch(/read-only|workspace-write|full-auto/);
+  });
+
+  it("should read the latest configured permission selection when the next turn is sent", async () => {
+    const user = userEvent.setup();
+    let currentThreadState: {
+      entries: unknown[];
+      pendingApprovals: unknown[];
+      mode: "build";
+      running: boolean;
+      plan: unknown[];
+      cursor: null;
+      reachedBeginning: boolean;
+      permissionProfileId: string;
+      approvalPolicy: "on-request" | "never";
+      approvalsReviewer: "user" | null;
+    } = {
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      permissionProfileId: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user"
+    };
+    mockThreadState.mockImplementation(() => currentThreadState);
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
+    });
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "use latest configured permissions");
+    currentThreadState = {
+      ...currentThreadState,
+      permissionProfileId: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    };
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockStartTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "use latest configured permissions",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      })
+    );
   });
 
   it("should send permissions null for config.toml default mode", async () => {
@@ -3502,6 +3587,44 @@ describe("ThreadPage", () => {
     expect(screen.getByText(/权限状态待确认/)).toBeInTheDocument();
   });
 
+  it("should restore runtime permission observation without replacing configured permissions", async () => {
+    mockReadThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Permission observation",
+      modelProvider: "custom",
+      status: "idle",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now(),
+      activePermissionProfile: { id: ":danger-full-access", extends: null },
+      approvalPolicy: "never",
+      approvalsReviewer: null,
+      runtimePermissionObservation: {
+        permissions: ":workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user"
+      }
+    });
+
+    render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetPermissionProfile).toHaveBeenCalledWith(
+        "thread-1",
+        ":danger-full-access",
+        "never",
+        null
+      );
+      expect(mockSetRuntimePermissionProfile).toHaveBeenCalledWith(
+        "thread-1",
+        ":workspace",
+        "on-request",
+        "user"
+      );
+    });
+  });
+
   it("should omit unknown permission overrides instead of clearing config defaults", async () => {
     const user = userEvent.setup();
     render(<ThreadPage />);
@@ -3557,6 +3680,44 @@ describe("ThreadPage", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user"
     }));
+  });
+
+  it("should pass the latest configured permission selection when resuming before send", async () => {
+    const user = userEvent.setup();
+    mockThreadState.mockReturnValue({
+      entries: [],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      plan: [],
+      cursor: null,
+      reachedBeginning: false,
+      permissionProfileId: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+    mockReadThread.mockResolvedValueOnce({
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Resume configured permissions",
+      modelProvider: "custom",
+      status: "notLoaded",
+      timeline: [],
+      lastTurnId: null,
+      updatedAt: Date.now()
+    });
+
+    render(<ThreadPage />);
+    await waitFor(() => expect(screen.queryByText(/载入中/)).not.toBeInTheDocument());
+
+    await user.type(screen.getByPlaceholderText("输入消息"), "resume configured");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-1", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
   });
 
   it("should keep Codex App permission modes available when settings aggregation fails", async () => {
@@ -4168,7 +4329,7 @@ describe("ThreadPage", () => {
     fireEvent.click(modelButton);
     expect(mockModelCatalog).toHaveBeenCalledTimes(1);
 
-    act(() => {
+    await act(async () => {
       resolveModels?.({ catalogRevision: 1, appServerModelNames: [], models: [] });
     });
   });
@@ -5344,7 +5505,7 @@ describe("ThreadPage", () => {
     await user.type(screen.getByPlaceholderText("输入消息"), "resume then send");
     await user.click(screen.getByLabelText("发送"));
 
-    expect(mockResumeThread).toHaveBeenCalledWith("thread-1");
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-1", undefined);
     expect(mockStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "thread-1",

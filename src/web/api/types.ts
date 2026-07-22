@@ -26,6 +26,7 @@ export type ThreadSummary = {
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  runtimePermissionObservation?: RuntimePermissionObservation;
 };
 
 export type ThreadPage = {
@@ -167,6 +168,12 @@ export type PermissionSelection = {
   approvalsReviewer: ApprovalsReviewer | null;
 };
 
+export type RuntimePermissionObservation = {
+  permissions: string | null;
+  approvalPolicy: string | null;
+  approvalsReviewer: string | null;
+};
+
 export type UploadedImage = {
   path: string;
   mimeType: string;
@@ -207,11 +214,14 @@ export type PendingServerRequestOption = {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 };
 
 export type PendingServerRequest = {
   requestId: string;
   threadId?: string;
+  turnId?: string;
+  itemId?: string;
   kind: ServerRequestKind;
   title?: string;
   description?: string;

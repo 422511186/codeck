@@ -60,6 +60,7 @@ import type {
   MobileThreadGoalView,
   MobileThreadMetadataUpdateInput,
   MobilePermissionSelection,
+  MobileRuntimePermissionObservation,
   MobileThreadRealtimeStatusResult,
   MobileThreadRealtimeVoicesResult,
   MobileThreadUnsubscribeResult,
@@ -3212,6 +3213,39 @@ export type ThreadRuntimeIdentity = {
   reasoningEffort: string | null;
 };
 
+function completePermissionSelection(source: {
+  permissions?: unknown;
+  approvalPolicy?: unknown;
+  approvalsReviewer?: unknown;
+}): MobilePermissionSelection | null {
+  const permissions =
+    typeof source.permissions === "string" || source.permissions === null
+      ? source.permissions
+      : undefined;
+  const approvalPolicy =
+    source.approvalPolicy === null ||
+    source.approvalPolicy === "untrusted" ||
+    source.approvalPolicy === "on-request" ||
+    source.approvalPolicy === "never"
+      ? source.approvalPolicy
+      : undefined;
+  const approvalsReviewer =
+    source.approvalsReviewer === null ||
+    source.approvalsReviewer === "user" ||
+    source.approvalsReviewer === "auto_review" ||
+    source.approvalsReviewer === "guardian_subagent"
+      ? source.approvalsReviewer
+      : undefined;
+  if (
+    permissions === undefined ||
+    approvalPolicy === undefined ||
+    approvalsReviewer === undefined
+  ) {
+    return null;
+  }
+  return { permissions, approvalPolicy, approvalsReviewer };
+}
+
 export type ThreadMaterializationState = "unmaterialized" | "materialized" | "unknown";
 
 export class ThreadRuntimeVerificationError extends Error {
@@ -3271,7 +3305,8 @@ export class AppServerGateway {
   private readonly timelineContentCursorByPosition = new Map<string, string>();
   private readonly activeTurnIds = new Map<string, string>();
   private readonly runtimeIdentitiesByThread = new Map<string, ThreadRuntimeIdentity>();
-  private readonly permissionSelectionsByThread = new Map<string, MobilePermissionSelection>();
+  private readonly configuredPermissionSelectionsByThread = new Map<string, MobilePermissionSelection>();
+  private readonly runtimePermissionObservationsByThread = new Map<string, MobileRuntimePermissionObservation>();
   private readonly terminalTurnIdsByThread = new Map<string, Set<string>>();
   private readonly threadMutationLocks = new Map<string, Promise<void>>();
   private readonly rollbackOperations = new Map<string, RollbackOperationEntry>();
@@ -3306,7 +3341,7 @@ export class AppServerGateway {
         return;
       }
       this.recordActiveTurnIdentity(event);
-      this.recordPermissionSelectionEvent(event);
+      this.recordRuntimePermissionObservationEvent(event);
       if (this.isDeletedTurnEvent(event)) {
         return;
       }
@@ -3423,18 +3458,14 @@ export class AppServerGateway {
 
   async resolveServerRequest(
     requestId: number,
-    value: string,
-    options?: { response?: unknown }
+    value: string
   ): Promise<void> {
     const request = this.pendingServerRequests.get(requestId);
     if (!request) {
       throw new Error("找不到待处理请求");
     }
 
-    const response =
-      options && Object.prototype.hasOwnProperty.call(options, "response")
-        ? options.response
-        : buildPendingServerRequestResponse(request, value);
+    const response = buildPendingServerRequestResponse(request, value);
 
     await this.peer.respondToServerRequest(requestId, response);
     this.pendingServerRequests.delete(requestId);
@@ -3443,6 +3474,25 @@ export class AppServerGateway {
 
   private emitBrowserEvent(event: BrowserTimelineEvent): void {
     this.recordBrowserEvent(event);
+    for (const handler of this.browserEventHandlers) {
+      handler(event);
+    }
+  }
+
+  private broadcastConfiguredPermissionSelection(
+    threadId: string,
+    selection: MobilePermissionSelection
+  ): void {
+    const event = this.enrichCodexEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_permission_configured",
+        threadId,
+        permissions: selection.permissions,
+        approvalPolicy: selection.approvalPolicy,
+        approvalsReviewer: selection.approvalsReviewer
+      }
+    });
     for (const handler of this.browserEventHandlers) {
       handler(event);
     }
@@ -3670,15 +3720,19 @@ export class AppServerGateway {
     }
   }
 
-  private recordPermissionSelectionEvent(envelope: BrowserCodexEventEnvelope): void {
+  private recordRuntimePermissionObservationEvent(envelope: BrowserCodexEventEnvelope): void {
     const event = envelope.event as BrowserCodexEventEnvelope["event"] & Record<string, unknown>;
     if (event.kind !== "thread_settings_updated" || typeof event.threadId !== "string") {
       return;
     }
-    this.recordPermissionSelection(event.threadId, {
-      activePermissionProfile: event.activePermissionProfile as MobileThreadSummary["activePermissionProfile"],
-      approvalPolicy: event.approvalPolicy as MobileThreadSummary["approvalPolicy"],
-      approvalsReviewer: event.approvalsReviewer as MobileThreadSummary["approvalsReviewer"]
+    const activePermissionProfile = event.activePermissionProfile as { id?: unknown } | null;
+    this.runtimePermissionObservationsByThread.set(event.threadId, {
+      permissions:
+        activePermissionProfile && typeof activePermissionProfile.id === "string"
+          ? activePermissionProfile.id
+          : null,
+      approvalPolicy: typeof event.approvalPolicy === "string" ? event.approvalPolicy : null,
+      approvalsReviewer: typeof event.approvalsReviewer === "string" ? event.approvalsReviewer : null
     });
   }
 
@@ -3724,32 +3778,57 @@ export class AppServerGateway {
     return identity ? { ...thread, ...identity } : thread;
   }
 
-  private recordPermissionSelection(
+  private setConfiguredPermissionSelection(
     threadId: string,
-    source: Pick<MobileThreadSummary, "activePermissionProfile" | "approvalPolicy" | "approvalsReviewer">
-  ): void {
-    if (
-      source.activePermissionProfile === undefined ||
-      source.approvalPolicy === undefined ||
-      source.approvalsReviewer === undefined
-    ) {
-      return;
+    selection: MobilePermissionSelection | null
+  ): MobilePermissionSelection | null {
+    if (!selection) {
+      return null;
     }
-    this.permissionSelectionsByThread.set(threadId, {
-      permissions: source.activePermissionProfile?.id ?? null,
-      approvalPolicy: source.approvalPolicy,
-      approvalsReviewer: source.approvalsReviewer
-    });
+    this.configuredPermissionSelectionsByThread.set(threadId, selection);
+    return selection;
+  }
+
+  private mergeConfiguredPermissionSelection(
+    threadId: string,
+    source: {
+      permissions?: unknown;
+      approvalPolicy?: unknown;
+      approvalsReviewer?: unknown;
+    }
+  ): MobilePermissionSelection | null {
+    const previous = this.configuredPermissionSelectionsByThread.get(threadId);
+    return this.setConfiguredPermissionSelection(
+      threadId,
+      completePermissionSelection({
+        permissions: source.permissions !== undefined ? source.permissions : previous?.permissions,
+        approvalPolicy:
+          source.approvalPolicy !== undefined ? source.approvalPolicy : previous?.approvalPolicy,
+        approvalsReviewer:
+          source.approvalsReviewer !== undefined
+            ? source.approvalsReviewer
+            : previous?.approvalsReviewer
+      })
+    );
   }
 
   private withPermissionSelection<T extends MobileThreadSummary>(thread: T): T {
-    this.recordPermissionSelection(thread.id, thread);
-    const selection = this.permissionSelectionsByThread.get(thread.id);
+    const selection = this.configuredPermissionSelectionsByThread.get(thread.id);
+    const observation = this.runtimePermissionObservationsByThread.get(thread.id);
+    const threadWithObservation = observation
+      ? { ...thread, runtimePermissionObservation: observation }
+      : thread;
     if (!selection) {
-      return thread;
+      const {
+        activePermissionProfile: _activePermissionProfile,
+        approvalPolicy: _approvalPolicy,
+        approvalsReviewer: _approvalsReviewer,
+        ...unknownPermissionThread
+      } = threadWithObservation;
+      return unknownPermissionThread as T;
     }
     return {
-      ...thread,
+      ...threadWithObservation,
       activePermissionProfile: selection.permissions
         ? { id: selection.permissions, extends: null }
         : null,
@@ -4618,7 +4697,7 @@ export class AppServerGateway {
       await this.client.resumeThread(threadId, overrides)
     );
     this.recordThreadRuntimeIdentity(threadId, detail);
-    this.recordPermissionSelection(threadId, detail);
+    this.setConfiguredPermissionSelection(threadId, completePermissionSelection(overrides));
     return this.timelineThreadWithinBudget(
       this.withTimelineGeneration(this.applyTimelineOverlay(this.withPermissionSelection(detail)))
     );
@@ -4628,8 +4707,14 @@ export class AppServerGateway {
     await this.ensureReady();
     const thread = await this.client.startThread(input);
     this.recordThreadRuntimeIdentity(thread.id, thread);
-    this.recordPermissionSelection(thread.id, thread);
-    return thread;
+    const selection = completePermissionSelection(input) ?? completePermissionSelection({
+      permissions: thread.activePermissionProfile?.id ??
+        (thread.activePermissionProfile === null ? null : undefined),
+      approvalPolicy: thread.approvalPolicy,
+      approvalsReviewer: thread.approvalsReviewer
+    });
+    this.setConfiguredPermissionSelection(thread.id, selection);
+    return this.withPermissionSelection(thread);
   }
 
   async readCurrentModelProvider(): Promise<string> {
@@ -4674,6 +4759,13 @@ export class AppServerGateway {
   async startTurn(input: StartTurnInput): Promise<{ turnId: string }> {
     await this.ensureReady();
     const result = await this.client.startTurn(input);
+    if (
+      input.permissions !== undefined ||
+      input.approvalPolicy !== undefined ||
+      input.approvalsReviewer !== undefined
+    ) {
+      this.mergeConfiguredPermissionSelection(input.threadId, input);
+    }
     if (!this.isTerminalTurn(input.threadId, result.turnId)) {
       this.activeTurnIds.set(input.threadId, result.turnId);
     }
@@ -4876,7 +4968,8 @@ export class AppServerGateway {
     await this.ensureReady();
     await this.client.deleteThread(threadId);
     this.runtimeIdentitiesByThread.delete(threadId);
-    this.permissionSelectionsByThread.delete(threadId);
+    this.configuredPermissionSelectionsByThread.delete(threadId);
+    this.runtimePermissionObservationsByThread.delete(threadId);
   }
 
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
@@ -4890,27 +4983,15 @@ export class AppServerGateway {
         reasoningEffort: input.reasoningEffort ?? previousIdentity.reasoningEffort
       });
     }
-    const previous = this.permissionSelectionsByThread.get(input.threadId);
-    const permissions = input.permissions !== undefined ? input.permissions : previous?.permissions;
-    const inputApprovalPolicy =
-      input.approvalPolicy === null ||
-      input.approvalPolicy === "untrusted" ||
-      input.approvalPolicy === "on-request" ||
-      input.approvalPolicy === "never"
-        ? input.approvalPolicy
-        : undefined;
-    const approvalPolicy = inputApprovalPolicy !== undefined
-      ? inputApprovalPolicy
-      : previous?.approvalPolicy;
-    const approvalsReviewer = input.approvalsReviewer !== undefined
-      ? input.approvalsReviewer
-      : previous?.approvalsReviewer;
-    if (permissions !== undefined && approvalPolicy !== undefined && approvalsReviewer !== undefined) {
-      this.permissionSelectionsByThread.set(input.threadId, {
-        permissions,
-        approvalPolicy,
-        approvalsReviewer
-      });
+    const hasPermissionUpdate =
+      input.permissions !== undefined ||
+      input.approvalPolicy !== undefined ||
+      input.approvalsReviewer !== undefined;
+    if (hasPermissionUpdate) {
+      const selection = this.mergeConfiguredPermissionSelection(input.threadId, input);
+      if (selection) {
+        this.broadcastConfiguredPermissionSelection(input.threadId, selection);
+      }
     }
   }
 

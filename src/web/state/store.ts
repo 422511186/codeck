@@ -7,7 +7,12 @@ import {
   setContextUsage as saveContextUsageSnapshot,
   type ContextUsageSnapshot
 } from "../storage/contextUsage";
-import { loadJson, saveJson, threadNoticeDismissalsKey } from "../storage/localStore";
+import {
+  loadJson,
+  saveJson,
+  threadNoticeDismissalsKey,
+  threadPermissionProfileKey
+} from "../storage/localStore";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import {
   appServerWarningNotice,
@@ -160,6 +165,9 @@ export type ThreadState = {
   permissionProfileId?: string | null;
   approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  runtimePermissionProfileId?: string | null;
+  runtimeApprovalPolicy?: string | null;
+  runtimeApprovalsReviewer?: string | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
   contextUsage: ContextUsageSnapshot | null;
@@ -246,6 +254,12 @@ type Actions = {
     approvalPolicy?: ApprovalPolicy | null,
     approvalsReviewer?: ApprovalsReviewer | null
   ) => void;
+  setRuntimePermissionProfile: (
+    threadId: string,
+    profileId: string | null | undefined,
+    approvalPolicy?: string | null,
+    approvalsReviewer?: string | null
+  ) => void;
   setContextUsage: (threadId: string, usage: ContextUsageSnapshot) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
   addApproval: (threadId: string, req: PendingServerRequest) => void;
@@ -299,6 +313,9 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     permissionProfileId: undefined,
     approvalPolicy: undefined,
     approvalsReviewer: undefined,
+    runtimePermissionProfileId: undefined,
+    runtimeApprovalPolicy: undefined,
+    runtimeApprovalsReviewer: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
     contextUsage: null,
@@ -1004,7 +1021,22 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
-  setPermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) =>
+  setPermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) => {
+    const current = get().threads[threadId] ?? emptyThread();
+    const nextApprovalPolicy = approvalPolicy === undefined ? current.approvalPolicy : approvalPolicy;
+    const nextApprovalsReviewer =
+      approvalsReviewer === undefined ? current.approvalsReviewer : approvalsReviewer;
+    if (
+      profileId !== undefined &&
+      nextApprovalPolicy !== undefined &&
+      nextApprovalsReviewer !== undefined
+    ) {
+      saveJson(threadPermissionProfileKey(threadId), {
+        permissions: profileId,
+        approvalPolicy: nextApprovalPolicy,
+        approvalsReviewer: nextApprovalsReviewer
+      });
+    }
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
       return {
@@ -1015,6 +1047,25 @@ export const useStore = create<State & Actions>((set, get) => ({
             permissionProfileId: profileId,
             approvalPolicy: approvalPolicy === undefined ? prev.approvalPolicy : approvalPolicy,
             approvalsReviewer: approvalsReviewer === undefined ? prev.approvalsReviewer : approvalsReviewer
+          }
+        }
+      };
+    });
+  },
+  setRuntimePermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            runtimePermissionProfileId:
+              profileId === undefined ? prev.runtimePermissionProfileId : profileId,
+            runtimeApprovalPolicy:
+              approvalPolicy === undefined ? prev.runtimeApprovalPolicy : approvalPolicy,
+            runtimeApprovalsReviewer:
+              approvalsReviewer === undefined ? prev.runtimeApprovalsReviewer : approvalsReviewer
           }
         }
       };
@@ -1036,10 +1087,17 @@ export const useStore = create<State & Actions>((set, get) => ({
       const normalizedReq = normalizePendingRequest(req);
       const prev = state.threads[threadId] ?? emptyThread();
       if (prev.pendingApprovals.some((r) => r.requestId === normalizedReq.requestId)) return state;
+      const mismatchNotice = permissionMismatchNotice(threadId, prev, normalizedReq);
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, pendingApprovals: [...prev.pendingApprovals, normalizedReq] }
+          [threadId]: {
+            ...prev,
+            notices: mismatchNotice
+              ? mergeThreadNotices(prev.notices, [mismatchNotice])
+              : prev.notices,
+            pendingApprovals: [...prev.pendingApprovals, normalizedReq]
+          }
         }
       };
     }),
@@ -1056,7 +1114,14 @@ export const useStore = create<State & Actions>((set, get) => ({
       const nextThreads = { ...state.threads };
       for (const [tid, list] of byThread) {
         const prev = nextThreads[tid] ?? emptyThread();
-        nextThreads[tid] = { ...prev, pendingApprovals: list };
+        const mismatchNotices = list
+          .map((request) => permissionMismatchNotice(tid, prev, request))
+          .filter((notice): notice is ThreadNoticeInput => notice !== null);
+        nextThreads[tid] = {
+          ...prev,
+          notices: mergeThreadNotices(prev.notices, mismatchNotices),
+          pendingApprovals: list
+        };
       }
       return { threads: nextThreads };
     }),
@@ -1311,17 +1376,34 @@ export const useStore = create<State & Actions>((set, get) => ({
           if ("activePermissionProfile" in ev) {
             const activeProfile = ev.activePermissionProfile as { id?: unknown } | null;
             const profileId = activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null;
-            const approvalPolicy = "approvalPolicy" in ev ? approvalPolicyOrUndefined(ev.approvalPolicy) : undefined;
-            const reviewer = "approvalsReviewer" in ev ? approvalsReviewerOrUndefined(ev.approvalsReviewer) : undefined;
-            const current = get().threads[threadId];
-            const complete = approvalPolicy !== undefined && reviewer !== undefined;
-            const currentComplete =
-              current?.permissionProfileId !== undefined &&
-              current.approvalPolicy !== undefined &&
-              current.approvalsReviewer !== undefined;
-            if (complete || !currentComplete) {
-              get().setPermissionProfile(threadId, profileId, approvalPolicy, reviewer);
-            }
+            const approvalPolicy = ev.approvalPolicy === null
+              ? null
+              : typeof ev.approvalPolicy === "string"
+                ? ev.approvalPolicy
+                : undefined;
+            const reviewer = ev.approvalsReviewer === null
+              ? null
+              : typeof ev.approvalsReviewer === "string"
+                ? ev.approvalsReviewer
+                : undefined;
+            get().setRuntimePermissionProfile(threadId, profileId, approvalPolicy, reviewer);
+          }
+          break;
+        }
+        case "thread_permission_configured": {
+          const permissions = ev.permissions === null
+            ? null
+            : typeof ev.permissions === "string"
+              ? ev.permissions
+              : undefined;
+          const approvalPolicy = approvalPolicyOrUndefined(ev.approvalPolicy);
+          const reviewer = approvalsReviewerOrUndefined(ev.approvalsReviewer);
+          if (
+            permissions !== undefined &&
+            approvalPolicy !== undefined &&
+            reviewer !== undefined
+          ) {
+            get().setPermissionProfile(threadId, permissions, approvalPolicy, reviewer);
           }
           break;
         }
@@ -2147,6 +2229,32 @@ function normalizePendingRequest(req: PendingServerRequest): PendingServerReques
     ...req,
     requestId: String(req.requestId),
     request: req.request ?? (typeof req.params === "object" && req.params !== null ? (req.params as Record<string, unknown>) : {})
+  };
+}
+
+function permissionMismatchNotice(
+  threadId: string,
+  thread: ThreadState,
+  request: PendingServerRequest
+): ThreadNoticeInput | null {
+  if (
+    request.kind !== "command_approval" ||
+    thread.permissionProfileId !== ":danger-full-access" ||
+    thread.approvalPolicy !== "never"
+  ) {
+    return null;
+  }
+  const requestPayload = request.request ?? {};
+  const turnId = request.turnId ??
+    (typeof requestPayload.turnId === "string" ? requestPayload.turnId : null) ??
+    thread.activeTurnId ??
+    "unknown-turn";
+  const reviewer = thread.approvalsReviewer ?? "none";
+  return {
+    id: `permission-configuration-mismatch:${threadId}:${turnId}:${thread.permissionProfileId}:never:${reviewer}`,
+    kind: "warning",
+    source: "permission-configuration",
+    text: "权限配置未生效：当前配置为完全访问权限，但 app-server 仍要求命令审批。本次操作仍需你确认。"
   };
 }
 
