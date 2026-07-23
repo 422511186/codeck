@@ -103,25 +103,6 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **THEN** 表单 MUST 禁用保存到服务端
 - **AND** MUST 仍允许新增仅客户端项目
 
-### Requirement: 项目长按出操作菜单
-项目条目 SHALL 通过长按手势触发底部操作菜单，菜单项包含「重命名」「修改存储位置」和「从列表移除」。
-
-#### Scenario: 长按项目
-- **WHEN** 用户在项目页长按某个项目条目超过 500ms
-- **THEN** 系统 MUST 弹出底部操作菜单
-- **AND** 菜单 MUST 包含重命名、修改存储位置和从列表移除
-
-#### Scenario: 从列表移除仅客户端项目
-- **WHEN** 用户移除仅客户端项目
-- **THEN** 系统 MUST 只从当前浏览器 `localStorage` 删除该记录
-- **AND** MUST NOT 删除工作区目录、文件或后端 thread
-
-#### Scenario: 从列表移除服务端项目
-- **WHEN** 用户以最新 revision 移除服务端项目
-- **THEN** 系统 MUST 只从服务端项目目录删除该记录
-- **AND** 其他设备刷新后 MUST 不再显示该项目
-- **AND** MUST NOT 删除工作区目录、文件或后端 thread
-
 ### Requirement: 项目列表完全空时引导空状态
 应用 SHALL 仅在客户端项目为空、服务端项目为空且服务端目录读取成功时渲染引导式空状态。
 
@@ -206,3 +187,31 @@ TBD - created by archiving change add-mobile-web-frontend. Update Purpose after 
 - **WHEN** 服务端项目创建、重命名、删除或默认存储位置修改成功
 - **THEN** 审计日志 MUST 记录项目 ID、动作和 revision 变化
 - **AND** MUST NOT 记录目录文件内容
+
+### Requirement: 项目操作入口位于项目内而非列表长按
+项目级操作（重命名、修改存储位置、从列表移除）SHALL 通过进入项目后的页面入口触发，MUST NOT 以项目列表长按作为主入口。项目列表条目点击 SHALL 仅用于进入该项目会话列表。
+
+#### Scenario: 项目列表点击进入
+- **WHEN** 用户在项目页点击某个项目条目
+- **THEN** 系统 MUST 进入该项目的会话列表页
+- **AND** MUST NOT 因单击打开项目操作菜单
+
+#### Scenario: 项目内打开操作菜单
+- **WHEN** 用户在项目会话列表页打开项目设置/操作入口
+- **THEN** 系统 MUST 弹出底部操作菜单
+- **AND** 菜单 MUST 包含重命名、修改存储位置和从列表移除
+
+#### Scenario: 项目列表长按不再打开菜单
+- **WHEN** 用户在项目页长按某个项目条目
+- **THEN** 系统 MUST NOT 因长按弹出项目操作菜单
+
+#### Scenario: 从列表移除仅客户端项目
+- **WHEN** 用户移除仅客户端项目
+- **THEN** 系统 MUST 只从当前浏览器 `localStorage` 删除该记录
+- **AND** MUST NOT 删除工作区目录、文件或后端 thread
+
+#### Scenario: 从列表移除服务端项目
+- **WHEN** 用户以最新 revision 移除服务端项目
+- **THEN** 系统 MUST 只从服务端项目目录删除该记录
+- **AND** 其他设备刷新后 MUST 不再显示该项目
+- **AND** MUST NOT 删除工作区目录、文件或后端 thread

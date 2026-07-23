@@ -1867,12 +1867,8 @@ function UserMessage({
   const failed = body.status === "failed";
   const hasMessageBubble = Boolean(body.text || body.imagePaths?.length || body.skillReferences?.length || body.fileReferences?.length || failed);
 
-  function pressHandler(e: React.PointerEvent): void {
-    const timer = window.setTimeout(() => setMenuOpen(true), 450);
-    const cancel = () => window.clearTimeout(timer);
-    e.currentTarget.addEventListener("pointerup", cancel, { once: true });
-    e.currentTarget.addEventListener("pointermove", cancel, { once: true });
-    e.currentTarget.addEventListener("pointercancel", cancel, { once: true });
+  function openMenu(): void {
+    setMenuOpen(true);
   }
 
   return (
@@ -1880,7 +1876,7 @@ function UserMessage({
       {hasMessageBubble ? (
         <div
           data-user-message-bubble="true"
-          onPointerDown={pressHandler}
+          onClick={openMenu}
           style={{
             ...userMessageBubbleStyle,
             background: failed ? "var(--cw-danger-bg)" : "var(--cw-bg-elevated)"

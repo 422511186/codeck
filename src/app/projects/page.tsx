@@ -10,8 +10,6 @@ import {
   addProject,
   listProjects,
   removeProject,
-  renameProject,
-  saveLocalProject,
   touchProjectLastUsed,
   type Project
 } from "../../web/storage/projects";
@@ -25,8 +23,6 @@ export default function ProjectsPage(): JSX.Element {
   const [serverLoading, setServerLoading] = useState(true);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showAdd, setShowAdd] = useState(false);
-  const [actionFor, setActionFor] = useState<Project | null>(null);
-  const [renameFor, setRenameFor] = useState<Project | null>(null);
   const [conflictFor, setConflictFor] = useState<ProjectPathConflict | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationPending, setOperationPending] = useState(false);
@@ -118,89 +114,8 @@ export default function ProjectsPage(): JSX.Element {
     setServerCatalog(await codex.createServerProject({ name: input.name, path: input.path }, serverCatalog.revision));
   }
 
-  async function renameSelected(name: string): Promise<void> {
-    if (!renameFor) return;
-    setOperationPending(true);
-    setOperationError(null);
-    try {
-      if (storageOf(renameFor) === "client") {
-        renameProject(renameFor.id, name);
-        refreshLocal();
-      } else {
-        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
-        setServerCatalog(await codex.renameServerProject(renameFor.id, name, serverCatalog.revision));
-      }
-      setRenameFor(null);
-    } catch (error) {
-      acceptCatalogFromError(error);
-      setOperationError(errorMessage(error, "重命名项目失败"));
-    } finally {
-      setOperationPending(false);
-    }
-  }
 
-  async function removeSelected(): Promise<void> {
-    if (!actionFor) return;
-    const project = actionFor;
-    setOperationPending(true);
-    setOperationError(null);
-    try {
-      if (storageOf(project) === "client") {
-        removeProject(project.id);
-        refreshLocal();
-      } else {
-        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
-        setServerCatalog(await codex.deleteServerProject(project.id, serverCatalog.revision));
-      }
-      setActionFor(null);
-    } catch (error) {
-      acceptCatalogFromError(error);
-      setOperationError(errorMessage(error, "移除项目失败"));
-    } finally {
-      setOperationPending(false);
-    }
-  }
 
-  async function moveSelected(): Promise<void> {
-    if (!actionFor || !serverCatalog) return;
-    const project = actionFor;
-    setOperationPending(true);
-    setOperationError(null);
-    try {
-      if (storageOf(project) === "client") {
-        const catalog = await codex.createServerProject(
-          {
-            id: project.id,
-            name: project.name,
-            path: project.path,
-            addedAt: project.addedAt,
-            lastUsedAt: project.lastUsedAt
-          },
-          serverCatalog.revision
-        );
-        removeProject(project.id);
-        refreshLocal();
-        setServerCatalog(catalog);
-      } else {
-        saveLocalProject(project);
-        try {
-          const catalog = await codex.deleteServerProject(project.id, serverCatalog.revision);
-          setServerCatalog(catalog);
-          refreshLocal();
-        } catch (error) {
-          removeProject(project.id);
-          refreshLocal();
-          throw error;
-        }
-      }
-      setActionFor(null);
-    } catch (error) {
-      acceptCatalogFromError(error);
-      setOperationError(errorMessage(error, "修改存储位置失败"));
-    } finally {
-      setOperationPending(false);
-    }
-  }
 
   async function resolveConflict(keep: "client" | "server"): Promise<void> {
     if (!conflictFor || !serverCatalog) return;
@@ -260,7 +175,6 @@ export default function ProjectsPage(): JSX.Element {
           {merged.projects.map((project) => (
             <li
               key={project.id}
-              onPointerDown={pressHandler(project, setActionFor)}
               onClick={() => enterProject(project)}
               style={{
                 background: "var(--cw-card)",
@@ -302,29 +216,6 @@ export default function ProjectsPage(): JSX.Element {
           serverAvailable={Boolean(serverCatalog)}
           onClose={() => setShowAdd(false)}
           onSubmit={addNewProject}
-        />
-      ) : null}
-      {actionFor ? (
-        <ActionSheet
-          project={actionFor}
-          pending={operationPending}
-          serverAvailable={Boolean(serverCatalog)}
-          onClose={() => setActionFor(null)}
-          onRename={() => {
-            setRenameFor(actionFor);
-            setActionFor(null);
-          }}
-          onMove={() => void moveSelected()}
-          onRemove={() => void removeSelected()}
-        />
-      ) : null}
-      {renameFor ? (
-        <RenameModal
-          project={renameFor}
-          pending={operationPending}
-          error={operationError}
-          onClose={() => setRenameFor(null)}
-          onSubmit={(name) => void renameSelected(name)}
         />
       ) : null}
       {conflictFor ? (
@@ -412,66 +303,7 @@ function AddProjectModal({
   );
 }
 
-function ActionSheet({
-  project,
-  pending,
-  serverAvailable,
-  onClose,
-  onRename,
-  onMove,
-  onRemove
-}: {
-  project: Project;
-  pending: boolean;
-  serverAvailable: boolean;
-  onClose: () => void;
-  onRename: () => void;
-  onMove: () => void;
-  onRemove: () => void;
-}): JSX.Element {
-  return (
-    <Backdrop onClose={onClose} align="bottom">
-      <div style={bottomSheetStyle}>
-        <div style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>{project.name}</div>
-        <button type="button" disabled={pending || (storageOf(project) === "server" && !serverAvailable)} style={sheetItem} onClick={onRename}>重命名</button>
-        <button type="button" disabled={pending || !serverAvailable} style={sheetItem} onClick={onMove}>
-          {storageOf(project) === "server" ? "改为仅当前设备" : "保存到服务端"}
-        </button>
-        <button type="button" disabled={pending || (storageOf(project) === "server" && !serverAvailable)} style={{ ...sheetItem, color: "var(--cw-danger)" }} onClick={onRemove}>从列表移除</button>
-        <button type="button" disabled={pending} style={sheetItem} onClick={onClose}>取消</button>
-      </div>
-    </Backdrop>
-  );
-}
 
-function RenameModal({
-  project,
-  pending,
-  error,
-  onClose,
-  onSubmit
-}: {
-  project: Project;
-  pending: boolean;
-  error: string | null;
-  onClose: () => void;
-  onSubmit: (name: string) => void;
-}): JSX.Element {
-  const [name, setName] = useState(project.name);
-  return (
-    <Backdrop onClose={onClose}>
-      <div style={modalStyle}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>重命名项目</h2>
-        <input value={name} onChange={(event) => setName(event.target.value)} style={inputStyle} autoFocus />
-        {error ? <span style={{ color: "var(--cw-danger)", fontSize: 13 }}>{error}</span> : null}
-        <div style={dialogActionsStyle}>
-          <button type="button" onClick={onClose} disabled={pending} style={btnGhost}>取消</button>
-          <button type="button" onClick={() => name.trim() && onSubmit(name.trim())} disabled={pending} style={btnPrimary}>保存</button>
-        </div>
-      </div>
-    </Backdrop>
-  );
-}
 
 function ConflictModal({
   conflict,
@@ -507,18 +339,6 @@ function Backdrop({ onClose, align = "center", children }: { onClose: () => void
   );
 }
 
-function pressHandler(project: Project, set: (value: Project) => void) {
-  return (event: React.PointerEvent) => {
-    const timer = window.setTimeout(() => {
-      set(project);
-      event.preventDefault();
-    }, 500);
-    const cancel = () => window.clearTimeout(timer);
-    event.currentTarget.addEventListener("pointerup", cancel, { once: true });
-    event.currentTarget.addEventListener("pointermove", cancel, { once: true });
-    event.currentTarget.addEventListener("pointercancel", cancel, { once: true });
-  };
-}
 
 function storageOf(project: Project): ProjectStorage {
   return project.storage === "server" ? "server" : "client";
@@ -546,7 +366,6 @@ const fieldStyle: React.CSSProperties = { display: "flex", flexDirection: "colum
 const fieldLabelStyle: React.CSSProperties = { fontSize: 13, color: "var(--cw-fg-muted)" };
 const dialogActionsStyle: React.CSSProperties = { display: "flex", gap: 10, justifyContent: "flex-end" };
 const modalStyle: React.CSSProperties = { background: "var(--cw-card)", border: "1px solid var(--cw-border)", borderRadius: 8, padding: 18, margin: 16, display: "flex", flexDirection: "column", gap: 12 };
-const bottomSheetStyle: React.CSSProperties = { ...modalStyle, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, margin: "0 16px", paddingBottom: "calc(18px + var(--safe-bottom))" };
 const inputStyle: React.CSSProperties = { padding: "10px 12px", borderRadius: 8, border: "1px solid var(--cw-border)", background: "var(--cw-bg)", color: "var(--cw-fg)", fontSize: 15 };
 const btnGhost: React.CSSProperties = { padding: "8px 14px", borderRadius: 8, border: "1px solid var(--cw-border)", background: "transparent", color: "var(--cw-fg)" };
 const btnPrimary: React.CSSProperties = { padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--cw-accent)", color: "#fff" };

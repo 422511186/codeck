@@ -3,24 +3,6 @@
 ## Purpose
 TBD - created by archiving change message-level-rewind-fork. Update Purpose after archive.
 ## Requirements
-### Requirement: 用户消息长按菜单
-timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作为复制、回滚到这里和从这里 Fork 的唯一入口。
-
-#### Scenario: 打开用户消息菜单
-- **WHEN** thread 静止且用户长按一条 user message
-- **THEN** 系统 MUST 显示消息级操作菜单
-- **AND** 菜单 MUST 包含「复制」「回滚到这里」「从这里 Fork」「取消」
-
-#### Scenario: 非用户消息无菜单
-- **WHEN** 用户长按 agent message、reasoning、tool、diff、system 或 error 条目
-- **THEN** 系统 MUST NOT 显示回滚或 Fork 操作
-
-#### Scenario: 运行中禁用历史操作
-- **WHEN** thread 处于运行态
-- **AND** 用户长按 user message
-- **THEN** 系统 MUST NOT 允许触发「回滚到这里」或「从这里 Fork」
-- **AND** 系统 MAY 继续提供「复制」操作
-
 ### Requirement: 复制用户消息
 用户消息菜单中的「复制」SHALL 将该 user message 的文本复制到系统剪贴板，不改变会话历史或输入框草稿。
 
@@ -127,6 +109,7 @@ timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作
 - **THEN** 系统 MUST NOT 静默跳转到错误历史状态
 - **AND** MUST 向用户呈现失败反馈
 - **AND** MUST 保持原 thread 可继续使用
+
 ### Requirement: 消息级操作只回滚对话历史
 消息级「回滚到这里」和「从这里 Fork」SHALL 只改变 thread history，不还原 agent 已经写入本地工作区的文件变更。
 
@@ -240,6 +223,7 @@ timeline SHALL 在用户自己的 user message 上提供长按操作菜单，作
 - **THEN** timeline MUST 同时保留两条 user message
 - **AND** 每条 user message MUST 绑定各自的 `turnId`
 - **AND** rewind/fork MUST 能定位用户实际选择的那一条
+
 ### Requirement: Server confirmation does not cross turn boundaries
 server user item 确认 optimistic local user message 时，客户端 SHALL 优先按 `clientUserMessageId`、`turnId`、server item id 或等价稳定身份原位替换。已绑定 `turnId` 的 local user message MAY 被同 turn 的 server user item 确认，即使 server item 暂缺 `skillReferences`、图片附件、普通文件附件或 `clientUserMessageId`；此时合并结果 MUST 保留本地已知的 Skill、图片与普通文件展示。纯文本 fallback MUST 仅用于未绑定 turn、仍处于 sending 且候选唯一的本地消息；MUST NOT 匹配已经绑定其他 turn 的 sent local message。
 
@@ -268,6 +252,7 @@ server user item 确认 optimistic local user message 时，客户端 SHALL 优�
 - **THEN** 客户端 MUST 仍将两条 user entries 识别为同一用户发送
 - **AND** timeline MUST 只保留一条该 turn 的 user message
 - **AND** 被夹在中间的 activity entries MUST 保持可见并保留 turn metadata
+
 ### Requirement: Fork rollback fails closed when fork-local target is unavailable
 消息级 fork SHALL 在 fork 后基于新 thread 的服务端历史定位等价目标 turn。若无法可靠定位 fork-local 目标，系统 MUST NOT 使用原 thread 的 `numTurns` 猜测 rollback 范围。
 
@@ -470,3 +455,26 @@ app-server rollback response 中更新后的 turn membership SHALL 作为本次 
 - **THEN** 系统 MUST 告知用户附件已过期并要求重新选择
 - **AND** MUST NOT 启动缺少该文件的新 turn
 - **AND** 原历史消息和文件 chip MUST 保持可见
+
+### Requirement: 用户消息轻点操作菜单
+timeline SHALL 在用户自己的 user message 上提供轻点操作入口，作为复制、回滚到这里和从这里 Fork 的入口。MUST NOT 以长按作为唯一或主入口。
+
+#### Scenario: 打开用户消息菜单
+- **WHEN** thread 静止且用户轻点一条 user message 气泡
+- **THEN** 系统 MUST 显示消息级操作菜单或工具条
+- **AND** 菜单 MUST 包含「复制」「回滚到这里」「从这里 Fork」「取消」
+
+#### Scenario: 非用户消息无菜单
+- **WHEN** 用户点击或长按 agent message、reasoning、tool、diff、system 或 error 条目
+- **THEN** 系统 MUST NOT 显示回滚或 Fork 操作
+
+#### Scenario: 运行中禁用历史操作
+- **WHEN** thread 处于运行态
+- **AND** 用户轻点 user message
+- **THEN** 系统 MUST NOT 允许触发「回滚到这里」或「从这里 Fork」
+- **AND** 系统 MAY 继续提供「复制」操作
+
+#### Scenario: 长按不再作为消息操作入口
+- **WHEN** 用户长按 user message
+- **THEN** 系统 MUST NOT 仅因长按打开消息级操作菜单
+- **AND** 用户仍 MUST 能通过轻点打开操作菜单

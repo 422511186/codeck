@@ -2114,7 +2114,6 @@ describe("Timeline", () => {
   });
 
   it("用户消息把 Skill 引用显示在同一气泡顶部，复制时只复制正文", () => {
-    vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -2152,11 +2151,7 @@ describe("Timeline", () => {
     expect(bubble?.firstElementChild).toHaveAttribute("data-skill-reference-group", "true");
     expect(screen.queryByText("[skill]")).not.toBeInTheDocument();
 
-    fireEvent.pointerDown(screen.getByText("自建 agent 的意义是什么？"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("自建 agent 的意义是什么？"));
 
     fireEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(writeText).toHaveBeenCalledWith("自建 agent 的意义是什么？");
@@ -3125,8 +3120,7 @@ describe("Timeline", () => {
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 
-  it("长按用户消息显示复制、回滚和 Fork 操作", async () => {
-    vi.useFakeTimers();
+  it("轻点用户消息显示复制、回滚和 Fork 操作", async () => {
     const onRewindToMessage = vi.fn();
     const onForkFromMessage = vi.fn();
 
@@ -3146,11 +3140,7 @@ describe("Timeline", () => {
       />
     );
 
-    fireEvent.pointerDown(screen.getByText("历史消息"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("历史消息"));
 
     expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "回滚到这里" })).toBeInTheDocument();
@@ -3163,8 +3153,7 @@ describe("Timeline", () => {
     );
   });
 
-  it("运行中长按用户消息只显示复制和取消", async () => {
-    vi.useFakeTimers();
+  it("运行中轻点用户消息只显示复制和取消", async () => {
     render(
       <Timeline
         running
@@ -3179,11 +3168,7 @@ describe("Timeline", () => {
       />
     );
 
-    fireEvent.pointerDown(screen.getByText("运行中消息"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("运行中消息"));
 
     expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "回滚到这里" })).not.toBeInTheDocument();
