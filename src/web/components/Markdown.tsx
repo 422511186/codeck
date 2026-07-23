@@ -8,6 +8,7 @@ import rehypeHighlight from "rehype-highlight";
 import { ImageOff, RotateCcw } from "lucide-react";
 import { createPortal } from "react-dom";
 import { ImagePreviewDialog, imagePreviewSrc } from "./ImagePreview";
+import { copyText } from "../clipboard";
 
 type Props = { text: string; cacheKey?: string };
 
@@ -250,52 +251,24 @@ function textFromChildren(children: ReactNode): string {
 }
 
 function CodeBlock({ code, className }: { code: string; className?: string }): JSX.Element {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
-  function copy(): void {
-    navigator.clipboard?.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
+  async function copy(): Promise<void> {
+    const result = await copyText(code);
+    setCopyState(result.ok ? "copied" : "failed");
+    window.setTimeout(() => setCopyState("idle"), 1200);
   }
 
+  const copyLabel = copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制";
+
   return (
-    <div style={{ position: "relative", margin: "8px 0", maxWidth: "100%", minWidth: 0 }}>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label="复制代码"
-        style={{
-          position: "absolute",
-          top: 6,
-          right: 6,
-          minHeight: 28,
-          padding: "3px 9px",
-          fontSize: 12,
-          borderRadius: 6,
-          border: "1px solid var(--cw-border-strong)",
-          background: "var(--cw-bg-overlay)",
-          color: "var(--cw-fg)",
-          boxShadow: "0 1px 4px rgba(0,0,0,0.12)"
-        }}
-      >
-        {copied ? "已复制" : "复制"}
-      </button>
-      <pre
-        style={{
-          margin: 0,
-          padding: 12,
-          background: "var(--cw-code-bg)",
-          color: "var(--cw-code-fg)",
-          borderRadius: 10,
-          border: "1px solid var(--cw-code-border)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          maxWidth: "100%",
-          overflowX: "auto",
-          paddingRight: 72
-        }}
-      >
+    <div data-code-block="true" style={codeBlockShellStyle}>
+      <div data-code-block-toolbar="true" style={codeBlockToolbarStyle}>
+        <button type="button" onClick={() => void copy()} aria-label="复制代码" style={codeBlockCopyButtonStyle}>
+          {copyLabel}
+        </button>
+      </div>
+      <pre style={codeBlockPreStyle}>
         <code
           className={className}
           style={{
@@ -309,6 +282,48 @@ function CodeBlock({ code, className }: { code: string; className?: string }): J
     </div>
   );
 }
+
+const codeBlockShellStyle: CSSProperties = {
+  margin: "8px 0",
+  maxWidth: "100%",
+  minWidth: 0,
+  borderRadius: 10,
+  border: "1px solid var(--cw-code-border)",
+  background: "var(--cw-code-bg)",
+  overflow: "hidden"
+};
+
+const codeBlockToolbarStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 8px",
+  borderBottom: "1px solid var(--cw-code-border)",
+  background: "color-mix(in srgb, var(--cw-code-bg) 88%, var(--cw-bg-overlay))"
+};
+
+const codeBlockCopyButtonStyle: CSSProperties = {
+  minHeight: 28,
+  padding: "3px 9px",
+  fontSize: 12,
+  borderRadius: 6,
+  border: "1px solid var(--cw-border-strong)",
+  background: "var(--cw-bg-overlay)",
+  color: "var(--cw-fg)",
+  boxShadow: "0 1px 4px rgba(0,0,0,0.12)"
+};
+
+const codeBlockPreStyle: CSSProperties = {
+  margin: 0,
+  padding: 12,
+  background: "transparent",
+  color: "var(--cw-code-fg)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
+  maxWidth: "100%",
+  overflowX: "auto"
+};
 
 function MermaidBlock({ code }: { code: string }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);

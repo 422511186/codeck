@@ -20,6 +20,7 @@ import {
 import { skillDisplayName, type TimelineEntry } from "../state/timeline";
 import type { PendingServerRequest, SkillReference } from "../api/types";
 import { Markdown } from "./Markdown";
+import { splitStreamingMarkdown } from "../streaming-markdown";
 import { CommandCard } from "./cards/CommandCard";
 import { DiffCard, DiffView } from "./cards/DiffCard";
 import { ReasoningCard } from "./cards/ReasoningCard";
@@ -1448,9 +1449,12 @@ function AgentMessage({
   cacheKey: string;
 }): JSX.Element {
   if (live) {
+    const { stableMarkdown, pendingPlain } = splitStreamingMarkdown(text);
     return (
       <div style={agentMessageStyle}>
-        <PlainAgentText text={text} />
+        {stableMarkdown ? <Markdown text={stableMarkdown} cacheKey={`${cacheKey}:live-stable`} /> : null}
+        {pendingPlain ? <PlainAgentText text={pendingPlain} /> : null}
+        {!stableMarkdown && !pendingPlain ? <PlainAgentText text="" /> : null}
       </div>
     );
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { codex } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { getDraft, setDraft } from "../storage/drafts";
@@ -315,6 +315,27 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   const disabled = Boolean(props.disabled) || sending || images.some((image) => image.status === "uploading");
   const canSend = !disabled && !props.running && !sendBlockedReason && text.trim().length > 0 && !hasPendingImages && !hasPendingFiles;
   const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & { isComposing?: boolean };
+    if (event.nativeEvent.isComposing || nativeEvent.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    if (!(event.metaKey || event.ctrlKey)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!canSend) {
+      return;
+    }
+    void send();
+  }
+
   const selectedSkillKeys = new Set(selectedSkills.map(skillKey));
 
   return (
@@ -341,6 +362,7 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
             ref={textareaRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onKeyDown={onComposerKeyDown}
             placeholder="输入消息"
             rows={1}
             style={textareaStyle}

@@ -733,6 +733,109 @@ class MaterializedHistoryOverlayPeer extends NotificationOverlayPeer {
   }
 }
 
+
+class LiveThreadRecoveryPeer extends NotificationOverlayPeer {
+  readonly calls: Array<{ method: string; params?: unknown }> = [];
+  private live = false;
+  private readonly fullText: string;
+  private readonly settingsError: string;
+  private readonly itemsError: string;
+  private readonly failItemsAfterResume: boolean;
+  private readonly nonMissingSettingsError: string | null;
+
+  constructor(options: {
+    fullText?: string;
+    settingsError?: string;
+    itemsError?: string;
+    failItemsAfterResume?: boolean;
+    nonMissingSettingsError?: string | null;
+  } = {}) {
+    super();
+    this.fullText = options.fullText ?? "完整事件正文🔥".repeat(40_000);
+    this.settingsError = options.settingsError ?? "thread not found: thread-1";
+    this.itemsError = options.itemsError ?? "thread not found: thread-1";
+    this.failItemsAfterResume = options.failItemsAfterResume ?? false;
+    this.nonMissingSettingsError = options.nonMissingSettingsError ?? null;
+  }
+
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    this.calls.push({ method, params });
+    if (method === "thread/settings/update") {
+      if (this.nonMissingSettingsError) {
+        throw new Error(this.nonMissingSettingsError);
+      }
+      if (!this.live) {
+        throw new Error(this.settingsError);
+      }
+      return {};
+    }
+    if (method === "thread/items/list") {
+      if (!this.live || this.failItemsAfterResume) {
+        throw new Error(this.itemsError);
+      }
+      return {
+        data: [
+          {
+            type: "agentMessage",
+            id: "agent-oversize",
+            text: this.fullText,
+            phase: "final",
+            memoryCitation: null
+          }
+        ],
+        nextCursor: null
+      };
+    }
+    if (method === "thread/resume") {
+      this.live = true;
+      return {
+        thread: {
+          id: "thread-1",
+          sessionId: "session-1",
+          forkedFromId: null,
+          parentThreadId: null,
+          preview: "live recovery",
+          ephemeral: false,
+          modelProvider: "openai",
+          createdAt: 1,
+          updatedAt: 2,
+          status: { type: "idle" },
+          path: null,
+          cwd: "/tmp/workspace",
+          cliVersion: "0.141.0",
+          source: "appServer",
+          threadSource: null,
+          agentNickname: null,
+          agentRole: null,
+          gitInfo: null,
+          name: "Live",
+          turns: []
+        },
+        model: "gpt-5-codex",
+        modelProvider: "openai",
+        serviceTier: null,
+        cwd: "/tmp/workspace",
+        runtimeWorkspaceRoots: ["/tmp/workspace"],
+        instructionSources: [],
+        approvalPolicy: null,
+        approvalsReviewer: null,
+        sandbox: { mode: "workspace-write" },
+        activePermissionProfile: null,
+        reasoningEffort: "medium",
+        initialTurnsPage: {
+          data: [],
+          nextCursor: null,
+          backwardsCursor: null
+        }
+      };
+    }
+    if (method === "thread/goal/get") {
+      return { goal: null };
+    }
+    return super.request(method);
+  }
+}
+
 class OversizeItemContentPeer extends NotificationOverlayPeer {
   constructor(public fullText: string) {
     super();
@@ -2261,6 +2364,156 @@ describe("createAppServerGateway", () => {
         })
       ])
     });
+  });
+
+
+  it("settings update 在 missing live thread 时 bare resume 后重试成功", async () => {
+    const peer = new LiveThreadRecoveryPeer();
+    const gateway = new AppServerGateway(peer);
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.updateThreadSettings({
+        threadId: "thread-1",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      })
+    ).resolves.toBeUndefined();
+
+    const settingsCalls = peer.calls.filter((call) => call.method === "thread/settings/update");
+    const resumeCalls = peer.calls.filter((call) => call.method === "thread/resume");
+    expect(settingsCalls).toHaveLength(2);
+    expect(resumeCalls).toHaveLength(1);
+    expect(resumeCalls[0]?.params).toEqual(
+      expect.objectContaining({
+        threadId: "thread-1"
+      })
+    );
+    expect(resumeCalls[0]?.params).not.toEqual(
+      expect.objectContaining({
+        permissions: expect.anything()
+      })
+    );
+    expect(resumeCalls[0]?.params).not.toEqual(
+      expect.objectContaining({
+        approvalPolicy: expect.anything()
+      })
+    );
+    expect(resumeCalls[0]?.params).not.toEqual(
+      expect.objectContaining({
+        approvalsReviewer: expect.anything()
+      })
+    );
+    expect(settingsCalls[1]?.params).toEqual(
+      expect.objectContaining({
+        threadId: "thread-1",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      })
+    );
+  });
+
+  it("full-content 在 missing live thread 时 bare resume 后重读成功", async () => {
+    const fullText = "完整事件正文🔥".repeat(40_000);
+    const peer = new LiveThreadRecoveryPeer({ fullText });
+    const gateway = new AppServerGateway(peer);
+    const events: Array<ReturnType<typeof gateway.listBrowserEventBacklog>["events"][number]> = [];
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: {
+          type: "agentMessage",
+          id: "agent-oversize",
+          text: fullText,
+          phase: "final",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const reference = events[0] as {
+      type: "codex-event";
+      event: { contentRef?: string };
+    };
+    const chunk = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 2 * 1024 * 1024
+    });
+
+    expect(chunk.text).toBe(fullText);
+    expect(chunk.completeness.status).toBe("complete");
+    expect(peer.calls.filter((call) => call.method === "thread/resume")).toHaveLength(1);
+    expect(peer.calls.filter((call) => call.method === "thread/items/list").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("full-content resume 后仍失败时返回 repair-required 且不抛异常", async () => {
+    const fullText = "完整事件正文🔥".repeat(40_000);
+    const peer = new LiveThreadRecoveryPeer({ fullText, failItemsAfterResume: true });
+    const gateway = new AppServerGateway(peer);
+    const events: Array<ReturnType<typeof gateway.listBrowserEventBacklog>["events"][number]> = [];
+    gateway.onBrowserEvent((event) => events.push(event));
+    await gateway.ensureReady();
+
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1234,
+        item: {
+          type: "agentMessage",
+          id: "agent-oversize",
+          text: fullText,
+          phase: "final",
+          memoryCitation: null
+        }
+      }
+    });
+
+    const reference = events[0] as {
+      type: "codex-event";
+      event: { contentRef?: string };
+    };
+    const chunk = await gateway.readTimelineContent({
+      threadId: "thread-1",
+      contentRef: reference.event.contentRef!,
+      maxBytes: 64 * 1024
+    });
+
+    expect(chunk.text).toBe("");
+    expect(chunk.completeness).toEqual(
+      expect.objectContaining({ status: "repair-required", reason: "source-gap" })
+    );
+    expect(peer.calls.filter((call) => call.method === "thread/resume")).toHaveLength(1);
+  });
+
+  it("非 missing-live-thread 错误不会触发 bare resume", async () => {
+    const peer = new LiveThreadRecoveryPeer({
+      nonMissingSettingsError: "permission denied for thread settings"
+    });
+    const gateway = new AppServerGateway(peer);
+    await gateway.ensureReady();
+
+    await expect(
+      gateway.updateThreadSettings({
+        threadId: "thread-1",
+        permissions: ":workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user"
+      })
+    ).rejects.toThrow(/permission denied/i);
+
+    expect(peer.calls.filter((call) => call.method === "thread/resume")).toHaveLength(0);
+    expect(peer.calls.filter((call) => call.method === "thread/settings/update")).toHaveLength(1);
   });
 
   it("oversize item event 注册 app-server contentRef 并从原生 item source 重读", async () => {

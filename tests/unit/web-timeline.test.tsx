@@ -513,8 +513,8 @@ describe("Timeline", () => {
     expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
   });
 
-  it("运行中的当前助手消息先按纯文本渲染，避免反复执行代码高亮", () => {
-    const { container } = render(
+  it("运行中的当前助手消息对已闭合代码块渐进渲染 markdown，未完成尾巴保持纯文本", () => {
+    const { container, rerender } = render(
       <Timeline
         running
         activeTurnId="turn-live"
@@ -525,7 +525,7 @@ describe("Timeline", () => {
             createdAt: 1,
             body: {
               kind: "agent-message",
-              text: "```ts\nconst streaming = true;\n```"
+              text: "```ts\nconst streaming = true;\n"
             }
           }
         ]}
@@ -534,6 +534,28 @@ describe("Timeline", () => {
 
     expect(container.textContent).toContain("```ts");
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+
+    rerender(
+      <Timeline
+        running
+        activeTurnId="turn-live"
+        entries={[
+          {
+            id: "agent-live",
+            turnId: "turn-live",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "说明\n\n```ts\nconst streaming = true;\n```\n\n尾巴还在写"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(container.textContent).toContain("尾巴还在写");
+    expect(container.querySelector(".cw-markdown")?.textContent).not.toContain("尾巴还在写");
   });
 
   it("同名 item 不会把旧 turn 的助手消息误标为 live", () => {
@@ -566,11 +588,12 @@ describe("Timeline", () => {
       />
     );
 
-    expect(container.textContent).toContain("```ts");
-    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(2);
+    expect(container.textContent).toContain("const historical = true;");
+    expect(container.textContent).toContain("const streaming = true;");
   });
 
-  it("运行中但 activeTurnId 尚未到位时，最新助手消息也先按纯文本渲染", () => {
+  it("运行中但 activeTurnId 尚未到位时，最新助手消息也按 live 渐进 markdown 渲染", () => {
     const { container } = render(
       <Timeline
         running
@@ -596,8 +619,9 @@ describe("Timeline", () => {
       />
     );
 
-    expect(container.textContent).toContain("```ts");
-    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(2);
+    expect(container.textContent).toContain("const oldMessage = true;");
+    expect(container.textContent).toContain("const liveMessage = true;");
   });
 
   it("运行中但新回复尚未出现时，不把上一轮助手消息当作 live 消息", () => {

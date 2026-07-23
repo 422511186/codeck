@@ -758,6 +758,19 @@ function shouldExposeOverlayTimelineItem(item: MobileTimelineItem): boolean {
   return item.text.trim().length > 0;
 }
 
+
+function isMissingLiveThreadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/permission denied|invalid params|invalid argument|invalid request/i.test(message)) {
+    return false;
+  }
+  return (
+    /thread not found/i.test(message) ||
+    /not loaded/i.test(message) ||
+    /is not materialized yet/i.test(message)
+  );
+}
+
 function isAlreadyInitializedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /already initialized/i.test(message);
@@ -4972,9 +4985,22 @@ export class AppServerGateway {
     this.runtimePermissionObservationsByThread.delete(threadId);
   }
 
+
+  private async withLiveThreadRetry<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isMissingLiveThreadError(error)) {
+        throw error;
+      }
+      await this.resumeThread(threadId);
+      return operation();
+    }
+  }
+
   async updateThreadSettings(input: UpdateThreadSettingsInput): Promise<void> {
     await this.ensureReady();
-    await this.client.updateThreadSettings(input);
+    await this.withLiveThreadRetry(input.threadId, () => this.client.updateThreadSettings(input));
     const previousIdentity = this.runtimeIdentitiesByThread.get(input.threadId);
     if (previousIdentity) {
       this.recordThreadRuntimeIdentity(input.threadId, {
@@ -5836,12 +5862,22 @@ export class AppServerGateway {
         }
         seenCursors.add(cursor);
       }
-      const page = await this.client.listThreadTurnItems({
-        threadId: source.threadId,
-        turnId: source.turnId,
-        cursor,
-        limit: 100
-      });
+      let page: MobileTimelinePage;
+      try {
+        page = await this.withLiveThreadRetry(source.threadId, () =>
+          this.client.listThreadTurnItems({
+            threadId: source.threadId,
+            turnId: source.turnId,
+            cursor,
+            limit: 100
+          })
+        );
+      } catch (error) {
+        if (isMissingLiveThreadError(error)) {
+          return { reason: "source-gap" };
+        }
+        throw error;
+      }
       scannedBytes += utf8ByteLength(JSON.stringify(page));
       if (scannedBytes > TIMELINE_RESPONSE_BYTE_BUDGET) {
         return { reason: "source-gap" };

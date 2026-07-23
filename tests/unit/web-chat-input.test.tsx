@@ -361,7 +361,67 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
-  it("does not send with Enter from the inline composer in any send state", async () => {
+  
+  it("sends with Cmd+Enter when the composer is ready", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    await user.type(composer, "hello from mac");
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", metaKey: true });
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(
+        "hello from mac", [], [], []
+      )
+    );
+  });
+
+  it("sends with Ctrl+Enter when the composer is ready", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    await user.type(composer, "hello from windows");
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(
+        "hello from windows", [], [], []
+      )
+    );
+  });
+
+  it("does not send with Cmd/Ctrl+Enter while IME is composing", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    fireEvent.change(composer, { target: { value: "组字中" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", metaKey: true, isComposing: true });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true, keyCode: 229 });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("组字中");
+  });
+
+  it("does not send with Cmd/Ctrl+Enter when send is blocked", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { rerender, props } = renderInput({ onSend });
+
+    const blank = screen.getByPlaceholderText("输入消息");
+    fireEvent.keyDown(blank, { key: "Enter", code: "Enter", metaKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.change(blank, { target: { value: "running no send" } });
+    rerender(<ChatInput {...props} running />);
+    const runningComposer = screen.getByPlaceholderText("输入消息");
+    fireEvent.keyDown(runningComposer, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+it("does not send with Enter from the inline composer in any send state", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { container, rerender, props } = renderInput({ onSend });
 
