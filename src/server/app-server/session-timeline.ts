@@ -1179,7 +1179,71 @@ function itemFilePath(item: MobileTimelineItem): string | undefined {
   return item.diffPath ?? item.tool;
 }
 
-function equivalentTool(base: MobileTimelineItem, supplement: MobileTimelineItem): boolean {
+function strongToolIdentityMatch(base: MobileTimelineItem, supplement: MobileTimelineItem): boolean {
+  if (base.role !== "tool" || supplement.role !== "tool" || base.turnId !== supplement.turnId) {
+    return false;
+  }
+  if (base.id && supplement.id && base.id === supplement.id) {
+    return true;
+  }
+  const baseLocator = base.sourceLocator;
+  const supplementLocator = supplement.sourceLocator;
+  if (
+    baseLocator &&
+    supplementLocator &&
+    (baseLocator.sourceKind === "response" || baseLocator.sourceKind === "rollout") &&
+    (supplementLocator.sourceKind === "response" || supplementLocator.sourceKind === "rollout") &&
+    baseLocator.sourceKind === supplementLocator.sourceKind &&
+    baseLocator.sourceId === supplementLocator.sourceId &&
+    baseLocator.absoluteOutputIndex === supplementLocator.absoluteOutputIndex
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function uniqueMessageAnchorToolMatch(
+  baseItems: MobileTimelineItem[],
+  baseIndex: number,
+  records: SessionTimelineRecord[],
+  supplement: MobileTimelineItem,
+  supplementIndex: number,
+  consumedBaseToolIndexes: ReadonlySet<number>
+): boolean {
+  const base = baseItems[baseIndex];
+  if (!base || base.role !== "tool" || base.turnId !== supplement.turnId) {
+    return false;
+  }
+
+  const previousBaseMessage = findNeighborMessage(baseItems, baseIndex, "before");
+  const nextBaseMessage = findNeighborMessage(baseItems, baseIndex, "after");
+  const previousSupplementMessage = findNeighborRecordMessage(records, supplementIndex, "before");
+  const nextSupplementMessage = findNeighborRecordMessage(records, supplementIndex, "after");
+
+  if (!messagesAlign(previousBaseMessage, previousSupplementMessage) || !messagesAlign(nextBaseMessage, nextSupplementMessage)) {
+    return false;
+  }
+
+  // Only accept positional metadata matches when the anchor interval uniquely identifies one base tool.
+  const candidates = baseItems.flatMap((candidate, index) => {
+    if (consumedBaseToolIndexes.has(index) || candidate.role !== "tool" || candidate.turnId !== supplement.turnId) {
+      return [];
+    }
+    if (!messagesAlign(findNeighborMessage(baseItems, index, "before"), previousSupplementMessage)) {
+      return [];
+    }
+    if (!messagesAlign(findNeighborMessage(baseItems, index, "after"), nextSupplementMessage)) {
+      return [];
+    }
+    if (!weakToolMetadataMatch(candidate, supplement)) {
+      return [];
+    }
+    return [index];
+  });
+  return candidates.length === 1 && candidates[0] === baseIndex;
+}
+
+function weakToolMetadataMatch(base: MobileTimelineItem, supplement: MobileTimelineItem): boolean {
   if (base.role === "tool" && supplement.role === "tool" && base.toolKind === "file" && supplement.toolKind === "file") {
     return base.turnId === supplement.turnId && pathEquivalent(itemFilePath(base), itemFilePath(supplement));
   }
@@ -1191,6 +1255,62 @@ function equivalentTool(base: MobileTimelineItem, supplement: MobileTimelineItem
     base.server === supplement.server &&
     base.tool === supplement.tool
   );
+}
+
+function findNeighborMessage(
+  items: MobileTimelineItem[],
+  index: number,
+  direction: "before" | "after"
+): string | null {
+  if (direction === "before") {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const item = items[cursor];
+      if (item?.role === "agent" || item?.role === "user") {
+        return item.text;
+      }
+    }
+    return null;
+  }
+  for (let cursor = index + 1; cursor < items.length; cursor += 1) {
+    const item = items[cursor];
+    if (item?.role === "agent" || item?.role === "user") {
+      return item.text;
+    }
+  }
+  return null;
+}
+
+function findNeighborRecordMessage(
+  records: SessionTimelineRecord[],
+  index: number,
+  direction: "before" | "after"
+): string | null {
+  if (direction === "before") {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const record = records[cursor];
+      if (record?.kind === "message") {
+        return record.text;
+      }
+    }
+    return null;
+  }
+  for (let cursor = index + 1; cursor < records.length; cursor += 1) {
+    const record = records[cursor];
+    if (record?.kind === "message") {
+      return record.text;
+    }
+  }
+  return null;
+}
+
+function messagesAlign(left: string | null, right: string | null): boolean {
+  if (left === null && right === null) {
+    return true;
+  }
+  if (left === null || right === null) {
+    return false;
+  }
+  return textEquivalent(left, right);
 }
 
 function withBaseTurnMeta(item: MobileTimelineItem, baseItems: MobileTimelineItem[]): MobileTimelineItem {
@@ -1238,13 +1358,34 @@ function mergeTurnSessionRecords(
   let cursor = 0;
   let matchedMessage = false;
 
-  const consumeEquivalentBaseTool = (supplement: MobileTimelineItem): boolean => {
-    const index = baseItems.findIndex(
-      (base, baseIndex) => !consumedBaseToolIndexes.has(baseIndex) && equivalentTool(base, supplement)
+  const consumeMatchingBaseTool = (
+    supplement: MobileTimelineItem,
+    supplementIndex: number
+  ): boolean => {
+    const strongIndex = baseItems.findIndex(
+      (base, baseIndex) => !consumedBaseToolIndexes.has(baseIndex) && strongToolIdentityMatch(base, supplement)
     );
-    if (index < 0) return false;
-    consumedBaseToolIndexes.add(index);
-    return true;
+    if (strongIndex >= 0) {
+      consumedBaseToolIndexes.add(strongIndex);
+      return true;
+    }
+
+    const uniqueIndex = baseItems.findIndex((base, baseIndex) =>
+      !consumedBaseToolIndexes.has(baseIndex) &&
+      uniqueMessageAnchorToolMatch(
+        baseItems,
+        baseIndex,
+        records,
+        supplement,
+        supplementIndex,
+        consumedBaseToolIndexes
+      )
+    );
+    if (uniqueIndex >= 0) {
+      consumedBaseToolIndexes.add(uniqueIndex);
+      return true;
+    }
+    return false;
   };
 
   const collectToolRecords = (endExclusive: number): MobileTimelineItem[] => {
@@ -1254,7 +1395,7 @@ function mergeTurnSessionRecords(
       if (!record || record.kind !== "tool") {
         continue;
       }
-      if (usedToolIds.has(record.item.id) || consumeEquivalentBaseTool(record.item)) {
+      if (usedToolIds.has(record.item.id) || consumeMatchingBaseTool(record.item, index)) {
         continue;
       }
       usedToolIds.add(record.item.id);

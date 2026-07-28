@@ -835,29 +835,76 @@ function insertOverlayTimelineItem(timeline: MobileTimelineItem[], item: MobileT
 }
 
 function repairOverlayTurnItems(items: MobileTimelineItem[]): MobileTimelineItem[] {
-  const finalAssistantIndex = findLastAssistantTimelineItemIndex(items);
-  if (finalAssistantIndex < 0 || finalAssistantIndex === items.length - 1) {
+  // Preserve interleaved tool/assistant order. New unmatched overlay activity is
+  // appended by insertOverlayTimelineItem; do not infer a final assistant reply
+  // from role alone and drag trailing activity in front of intermediate text.
+  if (items.length < 2) {
     return items;
   }
 
-  const beforeFinalAssistant = items.slice(0, finalAssistantIndex);
-  const finalAssistant = items[finalAssistantIndex]!;
-  const afterFinalAssistant = items.slice(finalAssistantIndex + 1);
-  const trailingActivity = afterFinalAssistant.filter(isInlineActivityTimelineItem);
-  if (!trailingActivity.length) {
-    return items;
+  const result = [...items];
+  let changed = false;
+
+  for (let index = 0; index < result.length; index += 1) {
+    const item = result[index]!;
+    if (!isInlineActivityTimelineItem(item)) {
+      continue;
+    }
+
+    const targetIndex = resolveOverlayActivityInsertIndex(result, item, index);
+    if (targetIndex === index) {
+      continue;
+    }
+
+    result.splice(index, 1);
+    const adjustedTarget = targetIndex > index ? targetIndex - 1 : targetIndex;
+    result.splice(Math.max(0, Math.min(result.length, adjustedTarget)), 0, item);
+    changed = true;
+    index = -1;
   }
-  const trailingOtherItems = afterFinalAssistant.filter((candidate) => !isInlineActivityTimelineItem(candidate));
-  return [...beforeFinalAssistant, ...trailingActivity, finalAssistant, ...trailingOtherItems];
+
+  return changed ? result : items;
 }
 
-function findLastAssistantTimelineItemIndex(items: MobileTimelineItem[]): number {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (items[index]?.role === "agent") {
-      return index;
+function resolveOverlayActivityInsertIndex(
+  items: MobileTimelineItem[],
+  item: MobileTimelineItem,
+  currentIndex: number
+): number {
+  if (typeof item.streamSequence === "number") {
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === currentIndex) {
+        continue;
+      }
+      const candidate = items[index]!;
+      if (typeof candidate.streamSequence === "number" && item.streamSequence < candidate.streamSequence) {
+        return index;
+      }
     }
   }
-  return -1;
+
+  const locator = item.sourceLocator;
+  if (locator && (locator.sourceKind === "response" || locator.sourceKind === "rollout")) {
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === currentIndex) {
+        continue;
+      }
+      const candidate = items[index]!;
+      const candidateLocator = candidate.sourceLocator;
+      if (
+        candidateLocator &&
+        (candidateLocator.sourceKind === "response" || candidateLocator.sourceKind === "rollout") &&
+        candidateLocator.sourceKind === locator.sourceKind &&
+        candidateLocator.sourceId === locator.sourceId &&
+        locator.absoluteOutputIndex < candidateLocator.absoluteOutputIndex
+      ) {
+        return index;
+      }
+    }
+  }
+
+  // Non-destructive fallback: keep source order and never hop over existing visible assistants.
+  return currentIndex;
 }
 
 function isInlineActivityTimelineItem(item: MobileTimelineItem): boolean {

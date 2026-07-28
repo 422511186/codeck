@@ -2034,7 +2034,12 @@ describe("web store codex events", () => {
 
     const thread = useStore.getState().threads["thread-1"];
     expect(thread?.running).toBe(false);
-    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(thread?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
@@ -2042,6 +2047,71 @@ describe("web store codex events", () => {
         body: { kind: "agent-message", text: "最终回答" }
       })
     ]);
+  });
+
+  it("requests final reconcile for completed turn even when partial command output is already visible", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-partial", turnId: "turn-1", generation: 4 }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-partial",
+        turnId: "turn-1",
+        itemId: "cmd-a",
+        delta: "partial output\n",
+        generation: 4
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "agent_message_delta",
+        threadId: "thread-partial",
+        turnId: "turn-1",
+        itemId: "agent-mid",
+        delta: "中途说明",
+        generation: 4
+      }
+    });
+
+    expect(useStore.getState().threads["thread-partial"]?.entries.some((entry) => entry.id === "cmd-a")).toBe(true);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: "thread-partial",
+        turnId: "turn-1",
+        status: "completed",
+        generation: 4
+      }
+    });
+
+    expect(useStore.getState().threads["thread-partial"]?.repairRequest).toEqual(
+      expect.objectContaining({
+        key: "turn-completed:turn-1:4",
+        reason: "turn-completed",
+        turnId: "turn-1",
+        generation: 4
+      })
+    );
+
+    useStore.getState().requestSnapshotRepair("thread-partial", {
+      reason: "summary-idle",
+      turnId: "turn-1",
+      generation: 4
+    });
+    expect(useStore.getState().threads["thread-partial"]?.repairRequest).toEqual(
+      expect.objectContaining({
+        key: "turn-completed:turn-1:4",
+        reason: "turn-completed",
+        turnId: "turn-1",
+        generation: 4
+      })
+    );
   });
 
   it("requests snapshot repair when a completed active turn has no visible server output", () => {
@@ -2164,7 +2234,46 @@ describe("web store codex events", () => {
     }
   });
 
-  it("does not request repair when the completed active turn already has visible server output", () => {
+  it("terminateFinalReconcile prevents late duplicate completion signals from restarting the same cycle", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1", generation: 5 }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed",
+        generation: 5
+      }
+    });
+    const key = useStore.getState().threads["thread-1"]?.repairRequest?.key;
+    expect(key).toBe("turn-completed:turn-1:5");
+    useStore.getState().terminateFinalReconcile("thread-1", key);
+    useStore.getState().clearSnapshotRepair("thread-1");
+
+    useStore.getState().requestSnapshotRepair("thread-1", {
+      reason: "summary-idle",
+      turnId: "turn-1",
+      generation: 5
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        status: "completed",
+        generation: 5
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toBeNull();
+  });
+
+  it("still requests final reconcile when the completed active turn already has visible server output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -2186,8 +2295,12 @@ describe("web store codex events", () => {
     });
 
     const thread = useStore.getState().threads["thread-1"];
-    expect(thread?.repairRequestedAt).toBeNull();
-    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(thread?.running).toBe(false);
     expect(thread?.activeTurnId).toBeNull();
     expect(thread?.entries).toEqual([
@@ -2199,7 +2312,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("does not request repair when a completed active turn only has tool output", () => {
+  it("still requests final reconcile when a completed active turn only has tool output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -2221,8 +2334,12 @@ describe("web store codex events", () => {
     });
 
     const thread = useStore.getState().threads["thread-1"];
-    expect(thread?.repairRequestedAt).toBeNull();
-    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(thread?.entries).toEqual([
       expect.objectContaining({
         id: "cmd-1",
@@ -2232,7 +2349,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("does not request repair when a completed active turn only has reasoning output", () => {
+  it("still requests final reconcile when a completed active turn only has reasoning output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -2254,8 +2371,12 @@ describe("web store codex events", () => {
     });
 
     const thread = useStore.getState().threads["thread-1"];
-    expect(thread?.repairRequestedAt).toBeNull();
-    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(thread?.entries).toEqual([
       expect.objectContaining({
         id: "reasoning-1",
@@ -2265,7 +2386,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("does not request repair when a completed active turn only has command activity output", () => {
+  it("still requests final reconcile when a completed active turn only has command activity output", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -2289,8 +2410,12 @@ describe("web store codex events", () => {
     });
 
     const thread = useStore.getState().threads["thread-1"];
-    expect(thread?.repairRequestedAt).toBeNull();
-    expect(thread?.repairRequest).toBeNull();
+    expect(thread?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(thread?.entries).toEqual([
       expect.objectContaining({
         id: "activity-1",
@@ -3144,7 +3269,7 @@ describe("web store codex events", () => {
     });
   });
 
-  it("keeps streamed output after turn completion without requesting snapshot repair", () => {
+  it("keeps streamed output after turn completion and still requests final reconcile", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: { kind: "turn_started", threadId: "thread-1", turnId: "turn-1" }
@@ -3165,7 +3290,12 @@ describe("web store codex events", () => {
     });
 
     expect(useStore.getState().threads["thread-1"]?.running).toBe(false);
-    expect(useStore.getState().threads["thread-1"]?.repairRequestedAt).toBeNull();
+    expect(useStore.getState().threads["thread-1"]?.repairRequest).toEqual(
+      expect.objectContaining({
+        reason: "turn-completed",
+        turnId: "turn-1"
+      })
+    );
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
       expect.objectContaining({
         id: "agent-1",
@@ -3981,6 +4111,66 @@ describe("web store codex events", () => {
     expect(thread.timelineEngine.indexes.byEntryId.get("agent-1")).toBe(1);
     expect(thread.entries[1]).toEqual(
       expect.objectContaining({ body: { kind: "agent-message", text: "hello world" } })
+    );
+  });
+
+  it("refresh snapshot preserves cmd-a -> agent-mid -> cmd-b identity order and live metadata", () => {
+    const stamp = { bootId: "boot-a", generation: 3 };
+    const tool = (id: string, result: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      turnId: "turn-1",
+      bootId: stamp.bootId,
+      generation: stamp.generation,
+      historyStamp: stamp,
+      createdAt: Date.now(),
+      ...extra,
+      body: {
+        kind: "tool" as const,
+        toolKind: "command" as const,
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success" as const,
+        result
+      }
+    });
+    const agent = (id: string, textValue: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      turnId: "turn-1",
+      bootId: stamp.bootId,
+      generation: stamp.generation,
+      historyStamp: stamp,
+      createdAt: Date.now(),
+      ...extra,
+      body: { kind: "agent-message" as const, text: textValue }
+    });
+
+    useStore.getState().setThreadEntries("thread-refresh-order", [
+      tool("cmd-a", "first", { streamSequence: 1, source: 1 }),
+      agent("agent-mid", "中途说明", { streamSequence: 2, revision: 1 }),
+      tool("cmd-b", "partial", { streamSequence: 9, revision: 3 })
+    ], null);
+
+    const authoritative = [
+      tool("cmd-a", "first", { baselineWatermark: 5, streamSequence: 1 }),
+      agent("agent-mid", "中途说明", { baselineWatermark: 5, streamSequence: 2 }),
+      tool("cmd-b", "second", { baselineWatermark: 5, streamSequence: 3 })
+    ];
+    const applied = useStore.getState().replaceLatestWindow("thread-refresh-order", authoritative, null, {
+      historyStamp: stamp,
+      pageWatermark: 5,
+      windowStartAnchor: JSON.stringify(["boot-a", 3, "turn-1", "cmd-a"]),
+      windowEndAnchor: JSON.stringify(["boot-a", 3, "turn-1", "cmd-b"])
+    });
+
+    expect(applied).toBe(true);
+    const entries = useStore.getState().threads["thread-refresh-order"]!.entries;
+    expect(entries.map((entry) => entry.id)).toEqual(["cmd-a", "agent-mid", "cmd-b"]);
+    expect(entries[2]).toEqual(
+      expect.objectContaining({
+        id: "cmd-b",
+        streamSequence: 9,
+        revision: 3
+      })
     );
   });
 

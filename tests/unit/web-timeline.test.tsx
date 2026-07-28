@@ -177,6 +177,61 @@ describe("Timeline", () => {
     });
   });
 
+  it("cmd-a -> agent-mid -> cmd-b 产生两个 activity 段并保持 identity 顺序", () => {
+    const blocks = deriveTimelineRenderBlocks([
+      {
+        id: "cmd-a",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "rg timeline src",
+          status: "success",
+          result: "first"
+        }
+      },
+      {
+        id: "agent-mid",
+        turnId: "turn-1",
+        createdAt: 2,
+        body: { kind: "agent-message", text: "中途说明" }
+      },
+      {
+        id: "cmd-b",
+        turnId: "turn-1",
+        createdAt: 3,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "rg timeline src",
+          status: "success",
+          result: "second"
+        }
+      }
+    ]);
+
+    expect(blocks.map((block) => block.kind)).toEqual([
+      "inline-activity-log",
+      "entry",
+      "inline-activity-log"
+    ]);
+    expect(blocks[0]).toMatchObject({
+      kind: "inline-activity-log",
+      entries: [expect.objectContaining({ id: "cmd-a" })]
+    });
+    expect(blocks[1]).toMatchObject({
+      kind: "entry",
+      entry: expect.objectContaining({ id: "agent-mid" })
+    });
+    expect(blocks[2]).toMatchObject({
+      kind: "inline-activity-log",
+      entries: [expect.objectContaining({ id: "cmd-b" })]
+    });
+  });
+
   it("被普通消息分隔的同名 activity block 仍生成唯一身份", () => {
     const blocks = deriveTimelineRenderBlocks([
       {

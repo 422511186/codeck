@@ -781,7 +781,57 @@ describe("app-server session timeline merge", () => {
     ]);
   });
 
-  it("consumes equivalent base tools one-to-one when the same command runs twice", () => {
+  it("partial latest page does not consume an earlier identical-metadata command from whole-turn supplement", () => {
+    const baseItems: MobileTimelineItem[] = [
+      {
+        id: "agent-mid",
+        turnId: "turn-1",
+        role: "agent",
+        text: "中途说明"
+      },
+      {
+        id: "cmd-b",
+        turnId: "turn-1",
+        role: "tool",
+        text: "second",
+        toolKind: "command",
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success"
+      }
+    ];
+    const jsonl = [
+      sessionLine({
+        type: "function_call",
+        id: "cmd-a",
+        call_id: "call-cmd-a",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "中途说明" }]
+      }),
+      sessionLine({
+        type: "function_call",
+        id: "cmd-b",
+        call_id: "call-cmd-b",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(merged.map((item) => item.id)).toEqual(["cmd-a", "agent-mid", "cmd-b"]);
+    expect(merged.filter((item) => item.role === "tool").map((item) => item.id)).toEqual([
+      "cmd-a",
+      "cmd-b"
+    ]);
+  });
+
+  it("keeps metadata-identical tools distinct unless strong identity or unique anchors match", () => {
     const baseItems: MobileTimelineItem[] = [
       { id: "user-1", turnId: "turn-1", role: "user", text: "运行两次" },
       {
@@ -808,6 +858,7 @@ describe("app-server session timeline merge", () => {
 
     expect(merged.filter((item) => item.role === "tool").map((item) => item.id)).toEqual([
       "tool-base",
+      "tool-rollout-1",
       "tool-rollout-2"
     ]);
   });

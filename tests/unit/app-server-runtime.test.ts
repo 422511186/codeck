@@ -592,6 +592,85 @@ class DelayedLatestPageOverlayPeer extends LatestPageOverlayPeer {
   }
 }
 
+
+class SnapshotWithInterleavedAgentOverlayPeer extends NotificationOverlayPeer {
+  override async request(method: string): Promise<unknown> {
+    const turn = {
+      id: "turn-1",
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1,
+      items: [
+        {
+          type: "userMessage",
+          id: "user-1",
+          clientId: "client-user-1",
+          content: [{ type: "text", text: "触发工具", text_elements: [] }]
+        },
+        {
+          type: "commandExecution",
+          id: "cmd-a",
+          command: "rg timeline src",
+          cwd: "/repo",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "match-a\n",
+          exitCode: 0,
+          durationMs: 1
+        },
+        {
+          type: "agentMessage",
+          id: "agent-mid",
+          text: "中途说明",
+          phase: "commentary",
+          memoryCitation: null
+        }
+      ]
+    };
+
+    if (method === "thread/turns/list") {
+      return {
+        data: [turn],
+        nextCursor: null
+      };
+    }
+
+    if (method !== "thread/read") {
+      return super.request(method);
+    }
+
+    return {
+      thread: {
+        id: "thread-1",
+        sessionId: "session-1",
+        forkedFromId: null,
+        parentThreadId: null,
+        preview: "overlay interleaved activity test",
+        ephemeral: false,
+        modelProvider: "openai",
+        createdAt: 1,
+        updatedAt: 2,
+        status: { type: "idle" },
+        path: null,
+        cwd: "/tmp/workspace",
+        cliVersion: "0.141.0",
+        source: "appServer",
+        threadSource: null,
+        agentNickname: null,
+        agentRole: null,
+        gitInfo: null,
+        name: "Overlay",
+        turns: [turn]
+      }
+    };
+  }
+}
+
 class SnapshotWithFinalAgentOverlayPeer extends NotificationOverlayPeer {
   override async request(method: string): Promise<unknown> {
     if (method === "thread/turns/list") {
@@ -2303,7 +2382,7 @@ describe("createAppServerGateway", () => {
     ]));
   });
 
-  it("刷新读取会把未匹配 overlay 活动插入所属 turn 的最终回复之前", async () => {
+  it("刷新读取在缺少顺序 anchor 时保留未匹配 overlay 的来源顺序，不跨过 assistant 前移", async () => {
     const peer = new SnapshotWithFinalAgentOverlayPeer();
     const gateway = new AppServerGateway(peer);
 
@@ -2324,13 +2403,46 @@ describe("createAppServerGateway", () => {
 
     const detail = await gateway.readThread("thread-1");
 
-    expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "cmd-overlay", "agent-final"]);
-    expect(detail.timeline[1]).toMatchObject({
+    expect(detail.timeline.map((item) => item.id)).toEqual(["user-1", "agent-final", "cmd-overlay"]);
+    expect(detail.timeline[2]).toMatchObject({
       id: "cmd-overlay",
       turnId: "turn-1",
       role: "tool",
       status: "success"
     });
+  });
+
+  it("后到 overlay command 不得跨越中途 assistant 文字前移", async () => {
+    const peer = new SnapshotWithInterleavedAgentOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-b",
+        delta: "rg timeline src\n"
+      }
+    });
+    peer.emitNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+
+    expect(detail.timeline.map((item) => item.id)).toEqual([
+      "user-1",
+      "cmd-a",
+      "agent-mid",
+      "cmd-b"
+    ]);
+    expect(detail.timeline.filter((item) => item.role === "tool")).toEqual([
+      expect.objectContaining({ id: "cmd-a", tool: "rg timeline src" }),
+      expect.objectContaining({ id: "cmd-b", tool: "command" })
+    ]);
   });
 
   it("overlay 替换已 materialized item 时保留 turn 元数据", async () => {

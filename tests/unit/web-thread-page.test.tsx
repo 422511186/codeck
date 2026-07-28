@@ -46,6 +46,7 @@ const mockMarkTurnDeleted = vi.fn();
 const mockSetActiveThread = vi.fn();
 const mockRequestSnapshotRepair = vi.fn();
 const mockClearSnapshotRepair = vi.fn();
+const mockTerminateFinalReconcile = vi.fn();
 const mockInvalidateTimelineDelivery = vi.fn();
 const mockInvalidateTimelineEventThread = vi.fn();
 const mockSetPendingRequests = vi.fn();
@@ -98,6 +99,7 @@ function mockStoreState(): unknown {
       setActiveThread: mockSetActiveThread,
       requestSnapshotRepair: mockRequestSnapshotRepair,
       clearSnapshotRepair: mockClearSnapshotRepair,
+      terminateFinalReconcile: mockTerminateFinalReconcile,
       invalidateTimelineDelivery: mockInvalidateTimelineDelivery,
       setPendingRequests: mockSetPendingRequests,
       resolvePendingRequest: mockResolvePendingRequest,
@@ -1302,12 +1304,173 @@ describe("ThreadPage", () => {
     rerender(<ThreadPage />);
 
     await waitFor(() => {
-      expect(mockMergeThreadEntries).toHaveBeenCalledWith(
+      expect(mockReplaceLatestWindow).toHaveBeenCalledWith(
         "thread-1",
         [expect.objectContaining({ id: "repair-1" })],
-        null
+        null,
+        expect.objectContaining({
+          historyStamp: { bootId: "boot-a", generation: 0 },
+          pageWatermark: 20
+        })
       );
     });
+    expect(mockMergeThreadEntries).not.toHaveBeenCalled();
+    expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("should submit a bounded repair page only once through replaceLatestWindow", async () => {
+    const initialDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Initial",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
+      timeline: [
+        { id: "cmd-a", turnId: "turn-1", role: "tool", text: "first", toolKind: "command", tool: "rg timeline src" }
+      ],
+      lastTurnId: "turn-1",
+      nextCursor: null,
+      updatedAt: Date.now()
+    };
+    const repairDetail = {
+      id: "thread-1",
+      cwd: "C:/test",
+      title: "Repaired",
+      modelProvider: "claude-opus-4",
+      status: "idle",
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
+      modelState: {
+        selection: { source: "app-server", model: "gpt-5-codex" },
+        model: "gpt-5-codex",
+        label: "GPT-5 Codex",
+        contextWindow: 200000,
+        inputModalities: ["text"],
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        reasoningEffort: "medium",
+        bindingVersion: null,
+        sourceUpdatedAt: null,
+        blocked: false,
+        operationId: null
+      },
+      contextUsage: {
+        totalTokens: 12,
+        inputTokens: 10,
+        outputTokens: 2,
+        reasoningOutputTokens: 0,
+        modelContextWindow: 200000,
+        updatedAt: Date.now()
+      },
+      timeline: [
+        { id: "cmd-a", turnId: "turn-1", role: "tool", text: "first", toolKind: "command", tool: "rg timeline src" },
+        { id: "agent-mid", turnId: "turn-1", role: "agent", text: "中途说明" },
+        { id: "cmd-b", turnId: "turn-1", role: "tool", text: "second", toolKind: "command", tool: "rg timeline src" }
+      ],
+      lastTurnId: "turn-1",
+      nextCursor: null,
+      updatedAt: Date.now()
+    };
+    mockReadThread.mockResolvedValue(initialDetail);
+    mockListTurnsBefore.mockResolvedValue({
+      items: initialDetail.timeline,
+      nextCursor: null,
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 }
+    });
+    let threadState = {
+      entries: [
+        {
+          id: "cmd-a",
+          turnId: "turn-1",
+          bootId: "boot-a",
+          generation: 0,
+          historyStamp: { bootId: "boot-a", generation: 0 },
+          createdAt: Date.now(),
+          body: {
+            kind: "tool",
+            toolKind: "command",
+            server: "command",
+            tool: "rg timeline src",
+            status: "success",
+            result: "first"
+          }
+        }
+      ],
+      pendingApprovals: [],
+      mode: "build",
+      running: false,
+      activeTurnId: null,
+      repairRequestedAt: null as number | null,
+      plan: [],
+      cursor: null,
+      reachedBeginning: true
+    };
+    mockThreadState.mockImplementation(() => threadState);
+
+    const { rerender } = render(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockSetThreadEntries).toHaveBeenCalled();
+    });
+
+    mockReplaceLatestWindow.mockClear();
+    mockMergeThreadEntries.mockClear();
+    mockSetThreadEntries.mockClear();
+    mockSetModelState.mockClear();
+    mockSetContextUsage.mockClear();
+    mockReadThread.mockResolvedValue(repairDetail);
+    mockListTurnsBefore.mockResolvedValue({
+      items: repairDetail.timeline,
+      nextCursor: null,
+      bootId: "boot-a",
+      generation: 0,
+      historyStamp: { bootId: "boot-a", generation: 0 },
+      pageWatermark: 20,
+      windowStartAnchor: JSON.stringify(["boot-a", 0, "turn-1", "cmd-a"]),
+      windowEndAnchor: JSON.stringify(["boot-a", 0, "turn-1", "cmd-b"])
+    });
+    threadState = {
+      ...threadState,
+      repairRequestedAt: 123,
+      repairRequest: {
+        key: "turn-completed:turn-1:0",
+        reason: "turn-completed",
+        turnId: "turn-1",
+        generation: 0,
+        requestedAt: 123
+      }
+    };
+    rerender(<ThreadPage />);
+
+    await waitFor(() => {
+      expect(mockReplaceLatestWindow).toHaveBeenCalledTimes(1);
+    });
+    expect(mockReplaceLatestWindow).toHaveBeenCalledWith(
+      "thread-1",
+      [
+        expect.objectContaining({ id: "cmd-a" }),
+        expect.objectContaining({ id: "agent-mid" }),
+        expect.objectContaining({ id: "cmd-b" })
+      ],
+      null,
+      expect.objectContaining({
+        historyStamp: { bootId: "boot-a", generation: 0 },
+        pageWatermark: 20
+      })
+    );
+    expect(mockMergeThreadEntries).not.toHaveBeenCalled();
+    expect(mockSetThreadEntries).not.toHaveBeenCalled();
+    expect(mockSetModelState).toHaveBeenCalledWith("thread-1", expect.objectContaining({ model: "gpt-5-codex" }));
+    expect(mockSetContextUsage).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({ totalTokens: 12 })
+    );
     expect(mockClearSnapshotRepair).toHaveBeenCalledWith("thread-1");
   });
 

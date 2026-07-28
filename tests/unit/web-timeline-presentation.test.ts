@@ -168,6 +168,51 @@ describe("timeline presentation", () => {
       "已调用 plugin · inspect"
     ]);
   });
+
+  it("keeps identical-metadata commands split by a visible assistant message as two activity groups", () => {
+    const entries: TimelineEntry[] = [
+      {
+        id: "cmd-a",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "npm test",
+          status: "success",
+          result: "first"
+        }
+      },
+      {
+        id: "agent-mid",
+        turnId: "turn-1",
+        createdAt: 2,
+        body: { kind: "agent-message", text: "中途说明" }
+      },
+      {
+        id: "cmd-b",
+        turnId: "turn-1",
+        createdAt: 3,
+        body: {
+          kind: "tool",
+          toolKind: "command",
+          server: "/repo",
+          tool: "npm test",
+          status: "success",
+          result: "second"
+        }
+      }
+    ];
+
+    const first = createActivityPresentation([entries[0]!]);
+    const second = createActivityPresentation([entries[2]!]);
+
+    expect(first.items.map((item) => item.key)).toEqual(["cmd-a"]);
+    expect(second.items.map((item) => item.key)).toEqual(["cmd-b"]);
+    expect(first.items[0]?.label).toBe("已运行 npm test");
+    expect(second.items[0]?.label).toBe("已运行 npm test");
+  });
 });
 
 function toolEntry(

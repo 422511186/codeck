@@ -126,6 +126,7 @@ export default function ThreadPage(): JSX.Element {
   const setActiveThread = useStore((s) => s.setActiveThread);
   const requestSnapshotRepair = useStore((s) => s.requestSnapshotRepair);
   const clearSnapshotRepair = useStore((s) => s.clearSnapshotRepair);
+  const terminateFinalReconcile = useStore((s) => s.terminateFinalReconcile);
   const setPendingRequests = useStore((s) => s.setPendingRequests);
   const resolvePendingRequest = useStore((s) => s.resolvePendingRequest);
   const threadRunning = useStore((s) => s.threads[threadId]?.running ?? false);
@@ -390,7 +391,7 @@ export default function ThreadPage(): JSX.Element {
   const applyThreadDetail = useCallback(
     (
       td: ThreadDetail,
-      mode: "replace" | "merge" = "replace",
+      mode: "replace" | "merge" | "metadata" = "replace",
       targetThreadId = threadId,
       entriesOverride?: TimelineEntry[],
       detailEntries: TimelineEntry[] = []
@@ -399,17 +400,21 @@ export default function ThreadPage(): JSX.Element {
         setDetail(td);
       }
       const rawEntries: TimelineEntry[] =
-        entriesOverride ??
-        threadDetailEntries(td);
+        mode === "metadata"
+          ? []
+          : entriesOverride ??
+            threadDetailEntries(td);
       const extractedEntries = extractLegacyWarningNotices(rawEntries);
-      const extractedDetailEntries = extractLegacyWarningNotices(detailEntries);
+      const extractedDetailEntries = extractLegacyWarningNotices(mode === "metadata" ? [] : detailEntries);
       for (const notice of [...extractedEntries.notices, ...extractedDetailEntries.notices]) {
         upsertThreadNotice(targetThreadId, notice);
       }
       const entries = extractedEntries.entries;
       const cleanedDetailEntries = extractedDetailEntries.entries;
       const nextCursor = td.nextCursor ?? null;
-      if (mode === "merge") {
+      if (mode === "metadata") {
+        // Timeline already committed via replaceLatestWindow or another ingress path.
+      } else if (mode === "merge") {
         mergeThreadEntries(targetThreadId, entries, nextCursor);
       } else {
         if (cleanedDetailEntries.length) {
@@ -662,9 +667,10 @@ export default function ThreadPage(): JSX.Element {
           generation: page.generation ?? td.generation,
           historyStamp: page.historyStamp ?? td.historyStamp,
           turnManifest: page.turnManifest ?? td.turnManifest,
+          // Keep detail timeline for UI state, but do not re-ingress page.items.
           timeline: page.items,
           nextCursor: page.nextCursor ?? null
-        }, "merge");
+        }, repairWindow ? "metadata" : "merge");
         const completionRetry = completionRepairRetryInput(repairRequest);
         if (completionRetry && !timelinePageHasVisibleTurnOutput(page.items, completionRetry.turnId)) {
           const attemptKey = `${completionRetry.turnId}:${completionRetry.generation ?? "legacy"}`;
@@ -676,10 +682,18 @@ export default function ThreadPage(): JSX.Element {
             return;
           }
           completionRepairAttemptsRef.current.delete(attemptKey);
+          if (repairRequest?.key) {
+            terminateFinalReconcile(threadId, repairRequest.key);
+          }
         } else if (completionRetry) {
           completionRepairAttemptsRef.current.delete(
             `${completionRetry.turnId}:${completionRetry.generation ?? "legacy"}`
           );
+          if (repairRequest?.key) {
+            terminateFinalReconcile(threadId, repairRequest.key);
+          }
+        } else if (repairRequest?.key && (repairRequest.reason === "turn-completed" || repairRequest.reason === "summary-idle")) {
+          terminateFinalReconcile(threadId, repairRequest.key);
         }
         clearRepairRetryTimer();
         if (activeRepairTokenRef.current === repairToken) clearSnapshotRepair(threadId);
@@ -700,6 +714,7 @@ export default function ThreadPage(): JSX.Element {
     applyThreadDetail,
     requestSnapshotRepair,
     clearSnapshotRepair,
+    terminateFinalReconcile,
     clearRepairRetryTimer,
     scheduleSnapshotRepairRetry,
     invalidateTimelineDelivery,

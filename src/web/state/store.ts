@@ -146,6 +146,7 @@ export type ThreadState = {
   localUserMessageIdsByTurn: Map<string, string>;
   repairRequest: SnapshotRepairRequest | null;
   repairRequestedAt: number | null;
+  terminatedFinalReconcileKeys: Set<string>;
   status: string;
   running: boolean;
   cursor: string | null;
@@ -235,6 +236,7 @@ type Actions = {
   markTurnDeleted: (threadId: string, turnId: string) => void;
   requestSnapshotRepair: (threadId: string, input?: SnapshotRepairRequestInput) => void;
   clearSnapshotRepair: (threadId: string) => void;
+  terminateFinalReconcile: (threadId: string, key?: string | null) => void;
   setMode: (threadId: string, mode: ChatMode) => void;
   setModel: (threadId: string, model: string | null, effort?: string | null) => void;
   setModelState: (threadId: string, modelState: ThreadModelStateView) => void;
@@ -294,6 +296,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     localUserMessageIdsByTurn: new Map<string, string>(),
     repairRequest: null,
     repairRequestedAt: null,
+    terminatedFinalReconcileKeys: new Set<string>(),
     status: "idle",
     running: false,
     cursor: null,
@@ -371,6 +374,10 @@ function threadWithModelState(
     modelSwitchOperationId: modelState.operationId,
     modelSwitchTarget: null
   };
+}
+
+function isFinalReconcileRepairReason(reason: SnapshotRepairReason): boolean {
+  return reason === "turn-completed" || reason === "summary-idle";
 }
 
 function snapshotRepairKey(input: {
@@ -914,6 +921,12 @@ export const useStore = create<State & Actions>((set, get) => ({
       if (prev.repairRequest?.key === request.key) {
         return state;
       }
+      if (
+        isFinalReconcileRepairReason(request.reason) &&
+        prev.terminatedFinalReconcileKeys.has(request.key)
+      ) {
+        return state;
+      }
       return {
         threads: {
           ...state.threads,
@@ -931,6 +944,30 @@ export const useStore = create<State & Actions>((set, get) => ({
         threads: {
           ...state.threads,
           [threadId]: { ...prev, repairRequest: null, repairRequestedAt: null }
+        }
+      };
+    }),
+  terminateFinalReconcile: (threadId, key) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      const resolvedKey =
+        typeof key === "string" && key
+          ? key
+          : prev.repairRequest && isFinalReconcileRepairReason(prev.repairRequest.reason)
+            ? prev.repairRequest.key
+            : null;
+      if (!resolvedKey) {
+        return state;
+      }
+      if (prev.terminatedFinalReconcileKeys.has(resolvedKey)) {
+        return state;
+      }
+      const terminatedFinalReconcileKeys = new Set(prev.terminatedFinalReconcileKeys);
+      terminatedFinalReconcileKeys.add(resolvedKey);
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: { ...prev, terminatedFinalReconcileKeys }
         }
       };
     }),
@@ -1264,7 +1301,6 @@ export const useStore = create<State & Actions>((set, get) => ({
             isCompleted &&
             (!currentActiveTurnId || currentActiveTurnId === eventTurnId)
           );
-          const hasVisibleOutput = threadHasVisibleOutput(threadBeforeCompletion, eventTurnId);
           if (!eventTurnId || !currentActiveTurnId || eventTurnId === currentActiveTurnId) {
             if (eventTurnId) {
               get().finishLiveTurnEntries(threadId, eventTurnId, typeof ev.status === "string" ? ev.status : ev.kind);
@@ -1272,7 +1308,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             get().setRunning(threadId, false);
           }
           get().removeEmptyPendingReasoningEntry(threadId, eventTurnId);
-          if (completedActiveTurn && !hasVisibleOutput) {
+          if (completedActiveTurn) {
             get().requestSnapshotRepair(threadId, {
               reason: "turn-completed",
               turnId: eventTurnId,
