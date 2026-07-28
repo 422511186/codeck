@@ -51,4 +51,12 @@ describe("createTextUserInput", () => {
     expect(() => createSkillUserInput({ name: " ", path: "C:/skill/SKILL.md" })).toThrow("Skill 引用不能为空");
     expect(() => createSkillUserInput({ name: "openai-docs", path: " " })).toThrow("Skill 引用不能为空");
   });
+
+  it("普通文件只进入受控文本包装", () => {
+    const result = createTurnUserInput("hello", [], [], [{ id: "abc", name: "notes.txt", path: "C:/uploads/abc.txt", mimeType: "text/plain", size: 12 }]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: "text" });
+    expect((result[0] as { text: string }).text).toContain("# Files mentioned by the user:");
+    expect(result.some((item) => (item as { type: string }).type === "localFile")).toBe(false);
+  });
 });

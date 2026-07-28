@@ -11,6 +11,7 @@ import {
 } from "../../src/server/custom-models/lifecycle-service";
 import type { MobileModelOption, MobileThreadDetail, MobileThreadSummary } from "../../src/shared/codex";
 import type { ThreadModelBindingInput } from "../../src/shared/custom-models";
+import type { ThreadRuntimeOverrides } from "../../src/server/app-server/client";
 
 const temporaryDirectories: string[] = [];
 
@@ -92,7 +93,7 @@ class FakeLifecycleGateway {
 
   async resumeThread(
     threadId: string,
-    overrides: { model?: string; modelProvider?: string; reasoningEffort?: string | null } = {}
+    overrides: ThreadRuntimeOverrides = {}
   ): Promise<MobileThreadDetail> {
     this.resumeCalls.push([threadId, structuredClone(overrides)]);
     return detail(this.resumeIdOverride ?? threadId, overrides);
@@ -303,6 +304,30 @@ describe("ThreadModelLifecycleService start/resume", () => {
     await fixture.service.resumeThread("thread-old");
     expect(fixture.gateway.resumeCalls[1]).toEqual(["thread-old", {}]);
     await expect(fixture.bindingStore.getBinding("thread-old")).resolves.toBeNull();
+  });
+
+  it("resume 把 configured 权限与自定义模型 runtime override 一起传给 gateway", async () => {
+    const fixture = await createFixture();
+    await fixture.bindingStore.putBinding("thread-custom", bindingInput());
+
+    await fixture.service.resumeThread("thread-custom", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    expect(fixture.gateway.resumeCalls[0]).toEqual([
+      "thread-custom",
+      {
+        model: "mimo-v2.5-pro",
+        modelProvider: "provider-current",
+        modelContextWindow: 200_000,
+        reasoningEffort: "xhigh",
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      }
+    ]);
   });
 
   it("pending operation 自动恢复失败时阻止正常 resume", async () => {

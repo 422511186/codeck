@@ -50,6 +50,39 @@ describe("web thread endpoints", () => {
     });
   });
 
+  it("恢复会话时把完整 configured 权限显式传给 resume endpoint", async () => {
+    mockApi.mockResolvedValue({
+      ok: true,
+      thread: {
+        id: "thread-1",
+        title: "会话",
+        preview: "",
+        cwd: "C:\\repo",
+        modelProvider: "custom",
+        status: "idle",
+        updatedAt: 1,
+        lastTurnId: null,
+        timeline: []
+      }
+    });
+    const { codex } = await import("../../src/web/api/endpoints");
+
+    await codex.resumeThread("thread-1", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+
+    expect(mockApi).toHaveBeenCalledWith("/api/codex/threads/thread-1/resume", {
+      method: "POST",
+      body: {
+        permissions: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      }
+    });
+  });
+
   it("读取会话详情时保留首屏历史分页 cursor", async () => {
     mockApi.mockResolvedValue({
       ok: true,

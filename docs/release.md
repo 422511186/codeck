@@ -1,6 +1,6 @@
 # 宿主机部署（release tarball）
 
-本文档说明如何用 Codex Web 的 release tarball 在宿主机上完成自托管部署。
+本文档说明如何用 codeck 的 release tarball 在宿主机上完成自托管部署。
 
 只讲部署。如何构建、验证和打包 release 见仓库的开发文档，不在本文范围内。
 容器化部署见 `docs/docker-deployment.md`。
@@ -9,16 +9,16 @@
 
 release tarball 面向个人自托管场景：
 
-- 在宿主机上直接运行 Codex Web 生产产物。
+- 在宿主机上直接运行 codeck 生产产物。
 - 宿主机已安装 Node.js 22 或更高版本。
 - 宿主机已安装并配置 Codex CLI，或已单独启动 Codex app-server。
-- 手机浏览器通过局域网或受控反向代理访问 Codex Web。
+- 手机浏览器通过局域网或受控反向代理访问 codeck。
 
 tarball 内已包含 `.next/`、`dist/server/` 等构建产物，解压后无需再执行任何构建步骤，只需安装生产依赖并配置环境变量即可启动。
 
 ## 安全边界
 
-Codex Web 当前是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。公网访问前必须额外配置：
+codeck 当前是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。公网访问前必须额外配置：
 
 - HTTPS / TLS。
 - 反向代理访问控制。
@@ -81,7 +81,7 @@ npm run start
 
 ```ini
 [Unit]
-Description=Codex Web
+Description=codeck
 After=network.target
 
 [Service]
@@ -122,7 +122,7 @@ http://<宿主机局域网 IP>:3000
 
 登录 token 使用 `CODEX_WEB_ACCESS_TOKEN`。如果未配置该变量，服务会在启动时生成临时 token 并打印到控制台；生产部署建议显式配置固定 token。
 
-`CODEX_WEB_WORKSPACE_ROOTS` 只应配置你愿意让 Codex Web 操作的目录。多个目录用英文分号分隔。
+`CODEX_WEB_WORKSPACE_ROOTS` 只应配置你愿意让 codeck 操作的目录。多个目录用英文分号分隔。
 
 ## app-server 模式
 

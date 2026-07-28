@@ -18,6 +18,7 @@ import type {
   CollaborationModePreset,
   ModelOption,
   PendingServerRequest,
+  PermissionSelection,
   SkillError,
   SkillOption,
   SkillReference,
@@ -27,7 +28,9 @@ import type {
   ThreadSummary,
   TimelinePage,
   TimelineContentChunk,
-  UploadedImage
+  UploadedImage,
+  UploadedFile,
+  FileReference
 } from "./types";
 
 export type AuthSession = { authenticated: boolean };
@@ -301,10 +304,16 @@ export async function readThreadSummary(threadId: string): Promise<ThreadSummary
   return data.thread;
 }
 
-export async function resumeThread(threadId: string): Promise<ThreadDetail> {
+export async function resumeThread(
+  threadId: string,
+  permissionSelection?: PermissionSelection
+): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/resume`,
-    { method: "POST" }
+    {
+      method: "POST",
+      ...(permissionSelection ? { body: permissionSelection } : {})
+    }
   );
   return data.thread;
 }
@@ -380,7 +389,10 @@ export type StartTurnInput = {
   text: string;
   imagePaths?: string[];
   skillReferences?: SkillReference[];
+  fileReferences?: FileReference[];
   clientUserMessageId?: string;
+  startBootId?: string;
+  retryAmbiguousStart?: boolean;
   model?: string;
   reasoningEffort?: string;
   reasoningSummary?: string;
@@ -399,6 +411,15 @@ export async function startTurn(input: StartTurnInput): Promise<StartTurnResult>
     body: input
   });
   return { turnId: data.turnId };
+}
+
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const data = await api<{ file: UploadedFile }>("/api/codex/uploads/files", {
+    method: "POST",
+    formData: (() => { const form = new FormData(); form.set("file", file); return form; })(),
+    timeoutMs: 120_000
+  });
+  return data.file;
 }
 
 export async function interruptTurn(threadId: string, turnId?: string): Promise<void> {
@@ -446,10 +467,15 @@ export async function renameThread(threadId: string, name: string): Promise<Thre
   return data.thread;
 }
 
-export async function forkThread(threadId: string): Promise<ThreadDetail> {
+export type ForkThreadInput = {
+  operationId?: string;
+  retryAmbiguousFork?: boolean;
+};
+
+export async function forkThread(threadId: string, input: ForkThreadInput = {}): Promise<ThreadDetail> {
   const data = await api<{ thread: ThreadDetail }>(
     `/api/codex/threads/${encodeURIComponent(threadId)}/fork`,
-    { method: "POST" }
+    { method: "POST", body: input }
   );
   return data.thread;
 }
@@ -504,7 +530,7 @@ export async function listPendingRequests(): Promise<PendingServerRequest[]> {
 
 export async function resolveRequest(
   requestId: string,
-  input: { value: string } | { response: unknown }
+  input: { value: string }
 ): Promise<void> {
   await api(`/api/codex/requests/${encodeURIComponent(requestId)}/resolve`, {
     method: "POST",
@@ -637,6 +663,7 @@ export const codex = {
   listPendingRequests,
   resolveRequest,
   uploadImage,
+  uploadFile,
   authStatus: getAccountAuthStatus,
   tokenUsage: getTokenUsage,
   probeWorkspacePath

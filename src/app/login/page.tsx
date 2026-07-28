@@ -90,7 +90,7 @@ function LoginForm(): JSX.Element {
             margin: 0
           }}
         >
-          Codex Web
+          codeck
         </h1>
         <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 13, color: "var(--cw-fg-muted)" }}>登录 Token</span>

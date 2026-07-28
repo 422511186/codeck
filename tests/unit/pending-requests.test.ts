@@ -31,10 +31,130 @@ describe("normalizePendingServerRequest", () => {
       title: "命令审批",
       description: "npm install",
       options: [
-        { value: "accept", label: "允许" },
+        { value: "accept", label: "允许一次" },
         { value: "decline", label: "拒绝" }
       ]
     });
+  });
+
+  it("preserves session and structured command approval decisions", () => {
+    const execPolicyDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["npm", "test"]
+      }
+    };
+    const networkDecision = {
+      applyNetworkPolicyAmendment: {
+        network_policy_amendment: { host: "registry.npmjs.org", action: "allow" }
+      }
+    };
+    const request = normalizePendingServerRequest({
+      id: 17,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        availableDecisions: ["accept", "acceptForSession", execPolicyDecision, networkDecision, "decline"]
+      }
+    });
+
+    expect(request.options).toEqual([
+      { value: "accept", label: "允许一次" },
+      { value: "acceptForSession", label: "本次会话允许" },
+      { value: "decision:2", label: "允许并应用命令规则", description: "npm test" },
+      { value: "decision:3", label: "应用网络规则", description: "允许 registry.npmjs.org" },
+      { value: "decline", label: "拒绝" }
+    ]);
+    expect(buildPendingServerRequestResponse(request, "acceptForSession")).toEqual({
+      decision: "acceptForSession"
+    });
+    expect(buildPendingServerRequestResponse(request, "decision:2")).toEqual({
+      decision: execPolicyDecision
+    });
+    expect(buildPendingServerRequestResponse(request, "decision:3")).toEqual({
+      decision: networkDecision
+    });
+  });
+
+  it("rejects unknown command approval option values", () => {
+    const request = normalizePendingServerRequest({
+      id: 18,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        availableDecisions: ["accept", "decline"]
+      }
+    });
+
+    expect(() => buildPendingServerRequestResponse(request, "acceptForSession")).toThrow(
+      "审批选项无效或已过期"
+    );
+    expect(() => buildPendingServerRequestResponse(request, "decision:0")).toThrow(
+      "审批选项无效或已过期"
+    );
+  });
+
+  it("marks unsupported structured command decisions as non-submittable", () => {
+    const request = normalizePendingServerRequest({
+      id: 19,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        availableDecisions: [{ unsupportedDecision: { value: true } }, "decline"]
+      }
+    });
+
+    expect(request.options).toEqual([
+      {
+        value: "decision:0",
+        label: "不支持的审批选项",
+        description: "当前客户端无法安全表达该审批选项",
+        disabled: true
+      },
+      { value: "decline", label: "拒绝" }
+    ]);
+    expect(() => buildPendingServerRequestResponse(request, "decision:0")).toThrow(
+      "审批选项无效或已过期"
+    );
+  });
+
+  it("marks network amendments with unsupported actions as non-submittable", () => {
+    const request = normalizePendingServerRequest({
+      id: 20,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "npm test",
+        availableDecisions: [
+          {
+            applyNetworkPolicyAmendment: {
+              network_policy_amendment: { host: "registry.npmjs.org", action: "delete" }
+            }
+          },
+          "decline"
+        ]
+      }
+    });
+
+    expect(request.options[0]).toEqual({
+      value: "decision:0",
+      label: "不支持的审批选项",
+      description: "当前客户端无法安全表达该审批选项",
+      disabled: true
+    });
+    expect(() => buildPendingServerRequestResponse(request, "decision:0")).toThrow(
+      "审批选项无效或已过期"
+    );
   });
 
   it("把文件变更审批 request 转成移动端 pending 视图", () => {
@@ -57,7 +177,7 @@ describe("normalizePendingServerRequest", () => {
       title: "文件变更审批",
       description: "需要写入文件",
       options: [
-        { value: "accept", label: "允许" },
+        { value: "accept", label: "允许一次" },
         { value: "decline", label: "拒绝" }
       ]
     });
@@ -273,5 +393,41 @@ describe("normalizePendingServerRequest", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "用户在移动端标记动态工具调用失败" }]
     });
+  });
+
+  it("rejects values outside the current fixed-choice request options", () => {
+    const permissions = normalizePendingServerRequest({
+      id: 20,
+      method: "item/permissions/requestApproval",
+      params: {
+        threadId: "thread-1",
+        permissions: { network: { mode: "allowAll" } }
+      }
+    });
+    const question = normalizePendingServerRequest({
+      id: 21,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        questions: [
+          {
+            id: "mode",
+            question: "请选择",
+            options: [{ id: "safe", label: "稳妥" }]
+          }
+        ]
+      }
+    });
+    const mcp = normalizePendingServerRequest({
+      id: 22,
+      method: "mcpServer/elicitation/request",
+      params: { threadId: "thread-1", message: "确认" }
+    });
+
+    for (const request of [permissions, question, mcp]) {
+      expect(() => buildPendingServerRequestResponse(request, "from-another-request")).toThrow(
+        "审批选项无效或已过期"
+      );
+    }
   });
 });

@@ -1,5 +1,7 @@
 import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "./timeline-protocol";
 import type { ThreadModelStateView } from "./custom-models";
+import type { FileReference } from "./file-attachments";
+export type { FileReference } from "./file-attachments";
 
 export type AppServerStatusView = {
   state: "disabled" | "idle" | "starting" | "connecting" | "ready" | "error";
@@ -30,6 +32,7 @@ export type MobileThreadSummary = {
   activePermissionProfile?: MobileActivePermissionProfile | null;
   approvalPolicy?: MobileApprovalPolicy | null;
   approvalsReviewer?: MobileApprovalsReviewer | null;
+  runtimePermissionObservation?: MobileRuntimePermissionObservation;
   modelState?: ThreadModelStateView;
 };
 
@@ -66,6 +69,12 @@ export type MobilePermissionSelection = {
   permissions: string | null;
   approvalPolicy: MobileApprovalPolicy | null;
   approvalsReviewer: MobileApprovalsReviewer | null;
+};
+
+export type MobileRuntimePermissionObservation = {
+  permissions: string | null;
+  approvalPolicy: string | null;
+  approvalsReviewer: string | null;
 };
 
 export type MobileAccountView = {
@@ -650,6 +659,7 @@ export type MobileTimelineItem = {
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: MobileSkillReference[];
+  fileReferences?: FileReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";

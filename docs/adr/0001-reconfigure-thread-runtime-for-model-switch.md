@@ -1,6 +1,6 @@
 # 模型切换统一重配会话运行时
 
-模型切换统一由一个 Codex Web 后端命令通过重新载入同一个 thread 来重配运行时，同时保留 thread ID 与完整历史。没有采用仅更新 thread settings、只对自定义模型重配或由浏览器串联底层请求的方案，因为模型切换还必须同步当前 `model_provider`、上下文窗口、能力约束和会话模型绑定，并在 unsubscribe 或 resume 失败时恢复到确定状态；统一流程可以避免从自定义模型切回 app-server 模型时残留旧配置，并允许核验 app-server 实际采用的模型。
+模型切换统一由一个 codeck 后端命令通过重新载入同一个 thread 来重配运行时，同时保留 thread ID 与完整历史。没有采用仅更新 thread settings、只对自定义模型重配或由浏览器串联底层请求的方案，因为模型切换还必须同步当前 `model_provider`、上下文窗口、能力约束和会话模型绑定，并在 unsubscribe 或 resume 失败时恢复到确定状态；统一流程可以避免从自定义模型切回 app-server 模型时残留旧配置，并允许核验 app-server 实际采用的模型。
 
 ## Consequences
 

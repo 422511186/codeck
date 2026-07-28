@@ -158,7 +158,7 @@ export default function SettingsPage(): JSX.Element {
   }
 
   return (
-    <main style={{ padding: "var(--cw-space-4)", paddingBottom: 40 }}>
+    <main style={{ padding: "var(--cw-space-4)", paddingBottom: "calc(40px + var(--safe-bottom))" }}>
       <header style={{ display: "flex", alignItems: "center", gap: 10, padding: "var(--cw-space-2) 0" }}>
         <Link href="/projects" aria-label="返回" style={{ fontSize: 22, textDecoration: "none" }}>
           ‹

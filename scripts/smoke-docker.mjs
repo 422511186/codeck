@@ -58,6 +58,10 @@ async function main() {
 
   try {
     await waitForHealth(`http://${host}:${hostPort}/api/health`, timeoutMs);
+    const uploadRoute = await fetch(`http://${host}:${hostPort}/api/codex/uploads/files`, { method: "POST" });
+    if (uploadRoute.status !== 401) {
+      throw new Error(`普通文件上传路由 smoke 失败: ${uploadRoute.status}`);
+    }
     console.log(`Docker smoke test passed on http://${host}:${hostPort}`);
   } catch (error) {
     const logs = await run("docker", ["logs", containerName], { allowFailure: true, quiet: true });

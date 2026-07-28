@@ -45,7 +45,7 @@
 项目 SHALL 保证 release 构建、打包和运行态验证不会影响当前正在 `23000` 端口服务手机会话的实例。
 
 #### Scenario: Smoke test uses a non-current port
-- **WHEN** release smoke test 需要启动 Codex Web 服务
+- **WHEN** release smoke test 需要启动 codeck 服务
 - **THEN** 验证流程 MUST 显式配置 `CODEX_WEB_BIND_PORT` 为非 `23000` 端口
 - **AND** 验证流程 MUST NOT 绑定、复用或抢占 `23000` 端口
 
@@ -63,7 +63,7 @@
 - **AND** 文档 MUST 说明 `spawn` 和 `external` app-server 模式的适用场景
 
 #### Scenario: User exposes service to a phone browser
-- **WHEN** 用户希望从手机浏览器访问 Codex Web
+- **WHEN** 用户希望从手机浏览器访问 codeck
 - **THEN** 文档 MUST 说明 `CODEX_WEB_BIND_HOST`、`CODEX_WEB_BIND_PORT`、访问 token、workspace allowlist、上传目录和审计日志路径的配置方式
 - **AND** 文档 MUST 提醒公网访问前需要 TLS、反向代理访问控制、IP allowlist 或更强认证
 

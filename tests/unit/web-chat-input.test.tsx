@@ -7,6 +7,7 @@ import { useStore } from "../../src/web/state/store";
 vi.setConfig({ testTimeout: 15_000 });
 
 const mockUploadImage = vi.fn();
+const mockUploadFile = vi.fn();
 const mockListSkills = vi.fn();
 
 const sampleGoal = {
@@ -23,6 +24,7 @@ const sampleGoal = {
 vi.mock("../../src/web/api/endpoints", () => ({
   codex: {
     uploadImage: (...args: unknown[]) => mockUploadImage(...args),
+    uploadFile: (...args: unknown[]) => mockUploadFile(...args),
     skills: (...args: unknown[]) => mockListSkills(...args)
   }
 }));
@@ -66,8 +68,16 @@ describe("ChatInput", () => {
       skillsCacheVersion: 0
     });
     mockUploadImage.mockReset();
+    mockUploadFile.mockReset();
     mockListSkills.mockReset();
     mockUploadImage.mockResolvedValue({ path: "uploads/image.png" });
+    mockUploadFile.mockImplementation(async (file: File) => ({
+      id: `id-${file.name}`,
+      name: file.name,
+      path: `uploads/${file.name}`,
+      mimeType: file.type || "application/octet-stream",
+      size: file.size
+    }));
     mockListSkills.mockResolvedValue({
       skills: [
         {
@@ -112,6 +122,32 @@ describe("ChatInput", () => {
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("thread one draft");
   });
 
+  it("only applies restored file drafts to the matching thread", async () => {
+    const fileReference = {
+      id: "file-restored",
+      name: "fork-note.txt",
+      path: "C:/uploads/fork-note.txt",
+      mimeType: "text/plain",
+      size: 9
+    };
+    const draftOverride = {
+      threadId: "thread-2",
+      text: "continue with file",
+      version: 1,
+      fileReferences: [fileReference]
+    };
+    const { rerender, props } = renderInput({ threadId: "thread-1", draftOverride });
+
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("");
+    expect(screen.queryByText("fork-note.txt")).not.toBeInTheDocument();
+
+    rerender(<ChatInput {...props} threadId="thread-2" draftOverride={draftOverride} />);
+
+    await waitFor(() => expect(screen.getByText("fork-note.txt")).toBeInTheDocument());
+    expect(screen.getByPlaceholderText("输入消息")).toHaveValue("continue with file");
+    expect(mockUploadFile).not.toHaveBeenCalled();
+  });
+
   it("disables send for blank text and image-only messages", async () => {
     const { container } = renderInput();
 
@@ -142,7 +178,7 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByLabelText("发送")).toBeEnabled());
     await user.click(screen.getByLabelText("发送"));
 
-    expect(onSend).toHaveBeenCalledWith("look at this", ["uploads/image.png"], []);
+    expect(onSend).toHaveBeenCalledWith("look at this", ["uploads/image.png"], [], []);
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
@@ -211,7 +247,7 @@ describe("ChatInput", () => {
       "uploads/one.png",
       "uploads/two.png",
       "uploads/three.png"
-    ], []);
+    ], [], []);
     await waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(0));
   });
 
@@ -270,7 +306,7 @@ describe("ChatInput", () => {
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("next prompt");
     await user.click(screen.getByLabelText("发送"));
 
-    expect(onSend).toHaveBeenCalledWith("next prompt", [], []);
+    expect(onSend).toHaveBeenCalledWith("next prompt", [], [], []);
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
@@ -325,7 +361,67 @@ describe("ChatInput", () => {
     await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveValue(""));
   });
 
-  it("does not send with Enter from the inline composer in any send state", async () => {
+  
+  it("sends with Cmd+Enter when the composer is ready", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    await user.type(composer, "hello from mac");
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", metaKey: true });
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(
+        "hello from mac", [], [], []
+      )
+    );
+  });
+
+  it("sends with Ctrl+Enter when the composer is ready", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    await user.type(composer, "hello from windows");
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(
+        "hello from windows", [], [], []
+      )
+    );
+  });
+
+  it("does not send with Cmd/Ctrl+Enter while IME is composing", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+
+    const composer = screen.getByPlaceholderText("输入消息");
+    fireEvent.change(composer, { target: { value: "组字中" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", metaKey: true, isComposing: true });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true, keyCode: 229 });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("组字中");
+  });
+
+  it("does not send with Cmd/Ctrl+Enter when send is blocked", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { rerender, props } = renderInput({ onSend });
+
+    const blank = screen.getByPlaceholderText("输入消息");
+    fireEvent.keyDown(blank, { key: "Enter", code: "Enter", metaKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.change(blank, { target: { value: "running no send" } });
+    rerender(<ChatInput {...props} running />);
+    const runningComposer = screen.getByPlaceholderText("输入消息");
+    fireEvent.keyDown(runningComposer, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+it("does not send with Enter from the inline composer in any send state", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const { container, rerender, props } = renderInput({ onSend });
 
@@ -401,10 +497,68 @@ describe("ChatInput", () => {
     expect(within(panel).getByText("添加内容")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "完成" })).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: /图片/ })).toHaveTextContent("上传图片到本轮消息");
+    expect(within(panel).getByRole("button", { name: /文件/ })).toHaveTextContent("上传普通文件到本轮消息");
     expect(within(panel).getByRole("button", { name: /引用 Skill/ })).toHaveTextContent("管理本次消息引用的 Skill");
     expect(within(panel).getByRole("button", { name: /设定目标/ })).toHaveTextContent("设置当前会话目标");
-    expect(within(panel).queryByText("文件")).not.toBeInTheDocument();
     expect(within(panel).queryByText("插件")).not.toBeInTheDocument();
+  });
+
+  it("追加多选普通文件并发送结构化引用", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const { container } = renderInput({ onSend });
+    const inputs = container.querySelectorAll('input[type="file"]');
+    const ordinaryInput = inputs[1] as HTMLInputElement;
+    expect(ordinaryInput).toHaveAttribute("multiple");
+
+    fireEvent.change(ordinaryInput, { target: { files: [
+      new File(["one"], "one.txt", { type: "text/plain" }),
+      new File(["two"], "two.json", { type: "application/json" })
+    ] } });
+    fireEvent.change(ordinaryInput, { target: { files: [new File(["three"], "three.zip", { type: "application/zip" })] } });
+
+    await waitFor(() => expect(mockUploadFile).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.getByText("three.zip")).toBeInTheDocument());
+    expect(screen.getByLabelText("已选上下文")).toHaveStyle({
+      flexWrap: "wrap"
+    });
+    expect(screen.getByLabelText("已选上下文")).not.toHaveStyle({
+      overflowX: "auto"
+    });
+    await user.type(screen.getByPlaceholderText("输入消息"), "检查文件");
+    await user.click(screen.getByLabelText("发送"));
+
+    expect(onSend).toHaveBeenCalledWith("检查文件", [], [], [
+      expect.objectContaining({ name: "one.txt", path: "uploads/one.txt" }),
+      expect.objectContaining({ name: "two.json", path: "uploads/two.json" }),
+      expect.objectContaining({ name: "three.zip", path: "uploads/three.zip" })
+    ]);
+  });
+
+  it("文件入口选到图片时分流到图片上传", async () => {
+    const { container } = renderInput();
+    const ordinaryInput = container.querySelectorAll('input[type="file"]')[1] as HTMLInputElement;
+    fireEvent.change(ordinaryInput, { target: { files: [
+      new File(["image"], "shot.png", { type: "image/png" }),
+      new File(["text"], "note.txt", { type: "text/plain" })
+    ] } });
+    await waitFor(() => expect(mockUploadImage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockUploadFile).toHaveBeenCalledTimes(1));
+  });
+
+  it("普通文件失败后可重试并可移除", async () => {
+    const user = userEvent.setup();
+    mockUploadFile.mockRejectedValueOnce(new Error("上传失败")).mockResolvedValueOnce({
+      id: "retry", name: "retry.txt", path: "uploads/retry.txt", mimeType: "text/plain", size: 5
+    });
+    const { container } = renderInput();
+    const ordinaryInput = container.querySelectorAll('input[type="file"]')[1] as HTMLInputElement;
+    fireEvent.change(ordinaryInput, { target: { files: [new File(["retry"], "retry.txt", { type: "text/plain" })] } });
+    await waitFor(() => expect(screen.getByText("失败")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(mockUploadFile).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "移除文件 retry.txt" }));
+    expect(screen.queryByText("retry.txt")).not.toBeInTheDocument();
   });
 
   it("shows selected skill count and existing goal status in the add panel", async () => {
@@ -459,7 +613,7 @@ describe("ChatInput", () => {
 
     expect(onSend).toHaveBeenCalledWith("查一下文档", [], [
       { name: "openai-docs", path: "/home/hzy/.codex/skills/openai-docs/SKILL.md" }
-    ]);
+    ], []);
     await waitFor(() => expect(screen.queryByLabelText("移除 Skill openai-docs")).not.toBeInTheDocument());
     expect(mockListSkills).toHaveBeenCalledTimes(1);
   });

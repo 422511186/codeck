@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { codex } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { getDraft, setDraft } from "../storage/drafts";
-import type { SkillOption, SkillReference, ThreadGoal } from "../api/types";
+import type { FileReference, SkillOption, SkillReference, ThreadGoal } from "../api/types";
+import { MAX_FILE_BYTES, MAX_FILE_COUNT, MAX_FILE_SIZE } from "../../shared/file-attachments";
 import { useStore } from "../state/store";
 
 export type ChatInputProps = {
@@ -14,7 +15,7 @@ export type ChatInputProps = {
   disabled?: boolean;
   imageInputSupported?: boolean;
   sendBlockedReason?: string;
-  draftOverride?: { text: string; version: number };
+  draftOverride?: { threadId: string; text: string; version: number; fileReferences?: FileReference[] };
   permissionLabel?: string;
   permissionDescription?: string;
   permissionPending?: boolean;
@@ -26,7 +27,7 @@ export type ChatInputProps = {
   onOpenReasoningPicker?: () => void;
   onOpenGoalEditor?: () => void;
   onHeightChange?: (height: number) => void;
-  onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[]) => Promise<void>;
+  onSend: (text: string, imagePaths: string[], skillReferences: SkillReference[], fileReferences: FileReference[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
 };
 
@@ -37,6 +38,8 @@ type ImageState = {
   serverPath?: string;
   status: "uploading" | "ready" | "failed";
 };
+
+type FileState = { id: string; file: File; reference?: FileReference; status: "queued" | "uploading" | "ready" | "failed"; error?: string };
 
 type ChatInputDiagnostics = {
   mounts: number;
@@ -57,6 +60,8 @@ export function __resetChatInputDiagnostics(): void {
 function ChatInputImpl(props: ChatInputProps): JSX.Element {
   const [text, setText] = useState<string>(() => (typeof window === "undefined" ? "" : getDraft(props.threadId)));
   const [images, setImages] = useState<ImageState[]>([]);
+  const [files, setFiles] = useState<FileState[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillOptions, setSkillOptions] = useState<SkillOption[]>([]);
@@ -66,10 +71,13 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const nextImageIdRef = useRef(0);
+  const nextFileIdRef = useRef(0);
+  const activeFileUploadsRef = useRef(0);
   const loadedSkillKeyRef = useRef<string | null>(null);
   const skillLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const ordinaryFileInput = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillsCacheVersion = useStore((s) => s.skillsCacheVersion);
 
@@ -80,6 +88,8 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   useEffect(() => {
     setText(getDraft(props.threadId));
     setImages([]);
+    setFiles([]);
+    setFileError(null);
     setAddPanelOpen(false);
     setSelectedSkills([]);
     setSkillPickerOpen(false);
@@ -101,11 +111,17 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   }, [props.cwd]);
 
   useEffect(() => {
-    if (!props.draftOverride) {
+    if (!props.draftOverride || props.draftOverride.threadId !== props.threadId) {
       return;
     }
     setText(props.draftOverride.text);
-  }, [props.draftOverride?.version]);
+    setFiles((props.draftOverride.fileReferences ?? []).map((reference) => ({
+      id: `restored-${reference.id}`,
+      file: new File([], reference.name, { type: reference.mimeType }),
+      reference,
+      status: "ready"
+    })));
+  }, [props.draftOverride?.version, props.threadId]);
 
   useEffect(() => {
     setSkillOptions([]);
@@ -152,6 +168,39 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   function pickImage(): void {
     setAddPanelOpen(false);
     fileInput.current?.click();
+  }
+
+  function pickFile(): void { setAddPanelOpen(false); ordinaryFileInput.current?.click(); }
+
+  function addFiles(selected: File[]): void {
+    const imageFiles = selected.filter(isSupportedImageFile);
+    imageFiles.forEach(addImage);
+    const ordinary = selected.filter((file) => !isSupportedImageFile(file));
+    const currentBytes = files.reduce((sum, item) => sum + (item.reference?.size ?? item.file.size), 0);
+    if (files.length + ordinary.length > MAX_FILE_COUNT) { setFileError(`普通文件最多 ${MAX_FILE_COUNT} 个`); return; }
+    if (ordinary.some((file) => file.size <= 0 || file.size > MAX_FILE_SIZE)) { setFileError("单个文件必须非空且不超过 20 MiB"); return; }
+    if (currentBytes + ordinary.reduce((sum, file) => sum + file.size, 0) > MAX_FILE_BYTES) { setFileError("普通文件总大小不能超过 50 MiB"); return; }
+    setFileError(null);
+    setFiles((items) => [...items, ...ordinary.map((file) => ({ id: `file-${Date.now()}-${nextFileIdRef.current++}`, file, status: "queued" as const }))]);
+  }
+
+  useEffect(() => {
+    const queued = files.filter((file) => file.status === "queued").slice(0, Math.max(0, 3 - activeFileUploadsRef.current));
+    queued.forEach((item) => { void uploadOrdinaryFile(item.id, item.file); });
+  }, [files]);
+
+  async function uploadOrdinaryFile(id: string, file: File): Promise<void> {
+    activeFileUploadsRef.current += 1;
+    setFiles((items) => items.map((item) => item.id === id ? { ...item, status: "uploading", error: undefined } : item));
+    try {
+      const reference = await codex.uploadFile(file);
+      setFiles((items) => items.map((item) => item.id === id ? { ...item, status: "ready", reference } : item));
+    } catch (error) {
+      setFiles((items) => items.map((item) => item.id === id ? { ...item, status: "failed", error: error instanceof Error ? error.message : "上传失败" } : item));
+    } finally {
+      activeFileUploadsRef.current -= 1;
+      setFiles((items) => [...items]);
+    }
   }
 
   function addImage(file: File): void {
@@ -239,9 +288,10 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
     setSending(true);
     try {
       const paths = images.map((image) => image.serverPath).filter((path): path is string => Boolean(path));
-      await props.onSend(trimmed, paths, selectedSkills);
+      await props.onSend(trimmed, paths, selectedSkills, files.map((file) => file.reference).filter((file): file is FileReference => Boolean(file)));
       setText("");
       setImages([]);
+      setFiles([]);
       setSelectedSkills([]);
       setDraft(props.threadId, "");
       setAddPanelOpen(false);
@@ -257,13 +307,35 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
   }
 
   const hasPendingImages = images.some((image) => image.status !== "ready");
+  const hasPendingFiles = files.some((file) => file.status !== "ready");
   const imageCompatibilityError = images.length > 0 && props.imageInputSupported === false
     ? "当前模型不支持图片，请移除草稿图片或切换模型"
     : null;
   const sendBlockedReason = props.sendBlockedReason ?? imageCompatibilityError;
   const disabled = Boolean(props.disabled) || sending || images.some((image) => image.status === "uploading");
-  const canSend = !disabled && !props.running && !sendBlockedReason && text.trim().length > 0 && !hasPendingImages;
+  const canSend = !disabled && !props.running && !sendBlockedReason && text.trim().length > 0 && !hasPendingImages && !hasPendingFiles;
   const sendButtonStyle = canSend ? sendBtnReady : sendBtnDisabled;
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent & { isComposing?: boolean };
+    if (event.nativeEvent.isComposing || nativeEvent.isComposing || event.keyCode === 229) {
+      return;
+    }
+
+    if (!(event.metaKey || event.ctrlKey)) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!canSend) {
+      return;
+    }
+    void send();
+  }
+
   const selectedSkillKeys = new Set(selectedSkills.map(skillKey));
 
   return (
@@ -278,6 +350,7 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
               showGoal={Boolean(props.onOpenGoalEditor)}
               onClose={() => setAddPanelOpen(false)}
               onPickImage={pickImage}
+              onPickFile={pickFile}
               onOpenSkillPicker={openSkillPicker}
               onOpenGoalEditor={openGoalEditor}
             />
@@ -289,13 +362,14 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
             ref={textareaRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onKeyDown={onComposerKeyDown}
             placeholder="输入消息"
             rows={1}
             style={textareaStyle}
             disabled={disabled}
           />
 
-          {images.length || selectedSkills.length ? (
+          {images.length || files.length || selectedSkills.length ? (
             <div aria-label="已选上下文" style={selectedContextStyle}>
               {images.map((image) => (
                 <ImageThumb
@@ -304,6 +378,14 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
                   onRemove={() => removeImage(image.id)}
                   onRetry={() => void retryImage(image)}
                 />
+              ))}
+              {files.map((item) => (
+                <span key={item.id} style={fileChipStyle} title={item.error || item.file.name}>
+                  <span style={skillChipLabelStyle}>{item.file.name}</span>
+                  <span style={fileStatusStyle}>{item.status === "ready" ? formatFileSize(item.reference?.size ?? item.file.size) : item.status === "failed" ? "失败" : "上传中"}</span>
+                  {item.status === "failed" ? <button type="button" style={fileActionStyle} onClick={() => setFiles((items) => items.map((file) => file.id === item.id ? { ...file, status: "queued" } : file))}>重试</button> : null}
+                  <button type="button" aria-label={`移除文件 ${item.file.name}`} style={fileActionStyle} onClick={() => setFiles((items) => items.filter((file) => file.id !== item.id))}>×</button>
+                </span>
               ))}
               {selectedSkills.length ? (
                 <div style={skillChipRowStyle}>
@@ -329,6 +411,7 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
           {sendBlockedReason ? (
             <div role="status" style={compatibilityErrorStyle}>{sendBlockedReason}</div>
           ) : null}
+          {fileError ? <div role="status" style={compatibilityErrorStyle}>{fileError}</div> : null}
 
           <div style={composerToolbarStyle}>
             <button
@@ -404,6 +487,7 @@ function ChatInputImpl(props: ChatInputProps): JSX.Element {
               e.target.value = "";
             }}
           />
+          <input ref={ordinaryFileInput} type="file" multiple style={{ display: "none" }} onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
         </div>
       </div>
 
@@ -445,6 +529,7 @@ function AddPanel({
   showGoal,
   onClose,
   onPickImage,
+  onPickFile,
   onOpenSkillPicker,
   onOpenGoalEditor
 }: {
@@ -453,6 +538,7 @@ function AddPanel({
   showGoal: boolean;
   onClose: () => void;
   onPickImage: () => void;
+  onPickFile: () => void;
   onOpenSkillPicker: () => void;
   onOpenGoalEditor: () => void;
 }): JSX.Element {
@@ -471,6 +557,7 @@ function AddPanel({
           icon={<ImageIcon />}
           onClick={onPickImage}
         />
+        <AddPanelAction label="文件" description="上传普通文件到本轮消息" icon={<FileIcon />} onClick={onPickFile} />
         <AddPanelAction
           label="引用 Skill"
           description="管理本次消息引用的 Skill"
@@ -1036,9 +1123,10 @@ const effortChipStyle: React.CSSProperties = {
 
 const selectedContextStyle: React.CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: 8,
-  overflowX: "auto",
+  minWidth: 0,
   padding: "0 2px"
 };
 
@@ -1051,8 +1139,9 @@ const compatibilityErrorStyle: React.CSSProperties = {
 
 const skillChipRowStyle: React.CSSProperties = {
   display: "flex",
+  flexWrap: "wrap",
   gap: 6,
-  overflowX: "auto",
+  minWidth: 0,
   padding: "0 2px 2px"
 };
 
@@ -1092,6 +1181,22 @@ const skillChipRemoveStyle: React.CSSProperties = {
   fontSize: 14,
   lineHeight: 1
 };
+
+const fileChipStyle: React.CSSProperties = { ...skillChipStyle, maxWidth: "100%", height: 32 };
+const fileStatusStyle: React.CSSProperties = { flex: "0 0 auto", color: "var(--cw-fg-muted)", fontSize: 11 };
+const fileActionStyle: React.CSSProperties = { border: "none", background: "transparent", color: "var(--cw-accent)", padding: "2px 3px", fontSize: 12 };
+
+function formatFileSize(size: number): string {
+  return size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function isSupportedImageFile(file: File): boolean {
+  const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+  return (file.type === "image/png" && extension === ".png") ||
+    (file.type === "image/jpeg" && (extension === ".jpg" || extension === ".jpeg")) ||
+    (file.type === "image/webp" && extension === ".webp") ||
+    (file.type === "image/gif" && extension === ".gif");
+}
 
 const sendBtnBase: React.CSSProperties = {
   width: 38,
@@ -1174,6 +1279,15 @@ function ImageIcon(): JSX.Element {
       <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" />
       <circle cx="9" cy="10" r="1.6" fill="currentColor" />
       <path d="M7 17l4.2-4.2 2.8 2.8 1.4-1.4L19 17" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FileIcon(): JSX.Element {
+  return (
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M7 3.5h6l4 4V20H7z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M13 3.5V8h4" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
     </svg>
   );
 }

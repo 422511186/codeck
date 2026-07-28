@@ -82,6 +82,50 @@ describe("timeline engine", () => {
     ]);
   });
 
+  it("多页 pagination ordinal 重置时保持同 turn activity 的页间顺序", () => {
+    const paginatedTool = (id: string, ordinal: number, createdAt: number): TimelineEntry => ({
+      ...toolEntry(id, "turn-shared", id, createdAt),
+      sourceOrder: { sourceKind: "pagination", ordinal }
+    });
+    let state = createTimelineEngineState({
+      entries: [agentEntry("agent-current", "turn-shared", "当前稳定正文", 50)],
+      cursor: "page-2"
+    });
+
+    state = applyTimelineInput(state, {
+      kind: "pagination-page",
+      entries: [
+        paginatedTool("page-2-activity-0", 0, 30),
+        paginatedTool("page-2-activity-1", 1, 40),
+        {
+          ...agentEntry("agent-current", "turn-shared", "历史重叠正文不得覆盖", 50),
+          sourceOrder: { sourceKind: "pagination", ordinal: 2 }
+        }
+      ],
+      cursor: "page-1"
+    });
+    state = applyTimelineInput(state, {
+      kind: "pagination-page",
+      entries: [
+        paginatedTool("page-1-activity-0", 0, 10),
+        paginatedTool("page-1-activity-1", 1, 20)
+      ],
+      cursor: null
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual([
+      "page-1-activity-0",
+      "page-1-activity-1",
+      "page-2-activity-0",
+      "page-2-activity-1",
+      "agent-current"
+    ]);
+    expect(selectTimelineEntries(state).at(-1)?.body).toEqual({
+      kind: "agent-message",
+      text: "当前稳定正文"
+    });
+  });
+
   it("accepts every timeline input source through one reducer", () => {
     const inputs: TimelineInput[] = [
       { kind: "snapshot-window", entries: [userEntry("snapshot-user", "turn-1", "hi", 1)], cursor: "older" },
@@ -107,6 +151,18 @@ describe("timeline engine", () => {
 
     expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["after-rollback"]);
     expect(state.generation).toBe(1);
+  });
+
+  it("removes one local entry by id without changing adjacent timeline entries", () => {
+    const state = applyTimelineInput(createTimelineEngineState({
+      entries: [
+        userEntry("user-1", "turn-1", "prompt", 1),
+        { id: "local-error", createdAt: 2, body: { kind: "error", text: "结果未确认" } },
+        agentEntry("agent-1", "turn-1", "reply", 3)
+      ]
+    }), { kind: "remove-entry", entryId: "local-error" });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["user-1", "agent-1"]);
   });
 
   it("keeps multi-source batch merging within a bounded normalization budget", () => {
@@ -392,6 +448,7 @@ describe("timeline engine", () => {
           text: "same prompt",
           imagePaths: ["/tmp/a.png"],
           skillReferences: [{ name: "skill-a", path: "/skills/a/SKILL.md" }],
+          fileReferences: [{ id: "file-a", name: "a.txt", path: "/uploads/a.txt", mimeType: "application/octet-stream", size: 0 }],
           status: "sending"
         }
       }
@@ -420,6 +477,7 @@ describe("timeline engine", () => {
         kind: "user-message",
         imagePaths: ["/tmp/a.png"],
         skillReferences: [{ name: "skill-a", path: "/skills/a/SKILL.md" }],
+        fileReferences: [{ id: "file-a", name: "a.txt", path: "/uploads/a.txt", mimeType: "application/octet-stream", size: 0 }],
         status: "sent"
       }
     });

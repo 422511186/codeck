@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Timeline,
   __getTimelineDerivationDiagnostics,
@@ -511,8 +513,8 @@ describe("Timeline", () => {
     expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
   });
 
-  it("运行中的当前助手消息先按纯文本渲染，避免反复执行代码高亮", () => {
-    const { container } = render(
+  it("运行中的当前助手消息对已闭合代码块渐进渲染 markdown，未完成尾巴保持纯文本", () => {
+    const { container, rerender } = render(
       <Timeline
         running
         activeTurnId="turn-live"
@@ -523,7 +525,7 @@ describe("Timeline", () => {
             createdAt: 1,
             body: {
               kind: "agent-message",
-              text: "```ts\nconst streaming = true;\n```"
+              text: "```ts\nconst streaming = true;\n"
             }
           }
         ]}
@@ -532,6 +534,28 @@ describe("Timeline", () => {
 
     expect(container.textContent).toContain("```ts");
     expect(screen.queryByRole("button", { name: "复制代码" })).not.toBeInTheDocument();
+
+    rerender(
+      <Timeline
+        running
+        activeTurnId="turn-live"
+        entries={[
+          {
+            id: "agent-live",
+            turnId: "turn-live",
+            createdAt: 1,
+            body: {
+              kind: "agent-message",
+              text: "说明\n\n```ts\nconst streaming = true;\n```\n\n尾巴还在写"
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(container.textContent).toContain("尾巴还在写");
+    expect(container.querySelector(".cw-markdown")?.textContent).not.toContain("尾巴还在写");
   });
 
   it("同名 item 不会把旧 turn 的助手消息误标为 live", () => {
@@ -564,11 +588,12 @@ describe("Timeline", () => {
       />
     );
 
-    expect(container.textContent).toContain("```ts");
-    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(2);
+    expect(container.textContent).toContain("const historical = true;");
+    expect(container.textContent).toContain("const streaming = true;");
   });
 
-  it("运行中但 activeTurnId 尚未到位时，最新助手消息也先按纯文本渲染", () => {
+  it("运行中但 activeTurnId 尚未到位时，最新助手消息也按 live 渐进 markdown 渲染", () => {
     const { container } = render(
       <Timeline
         running
@@ -594,8 +619,9 @@ describe("Timeline", () => {
       />
     );
 
-    expect(container.textContent).toContain("```ts");
-    expect(screen.getByRole("button", { name: "复制代码" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "复制代码" })).toHaveLength(2);
+    expect(container.textContent).toContain("const oldMessage = true;");
+    expect(container.textContent).toContain("const liveMessage = true;");
   });
 
   it("运行中但新回复尚未出现时，不把上一轮助手消息当作 live 消息", () => {
@@ -652,6 +678,19 @@ describe("Timeline", () => {
 
   it("truncated 消息按 cursor 读取完整内容并替换 preview", async () => {
     const user = userEvent.setup();
+    const entry = {
+      id: "agent-truncated",
+      turnId: "turn-1",
+      createdAt: 1,
+      completeness: {
+        status: "truncated" as const,
+        reason: "item-budget",
+        originalBytes: 33,
+        includedBytes: 6,
+        contentRef: "tlc-agent"
+      },
+      body: { kind: "agent-message" as const, text: "预览" }
+    };
     const readContent = vi.spyOn(codex, "readTimelineContent")
       .mockResolvedValueOnce({
         text: "完整内容第一段",
@@ -670,24 +709,12 @@ describe("Timeline", () => {
         completeness: { status: "complete", nextCursor: null }
       });
 
+    useStore.getState().setThreadEntries("thread-1", [entry], null);
+
     render(
       <Timeline
         threadId="thread-1"
-        entries={[
-          {
-            id: "agent-truncated",
-            turnId: "turn-1",
-            createdAt: 1,
-            completeness: {
-              status: "truncated",
-              reason: "item-budget",
-              originalBytes: 33,
-              includedBytes: 6,
-              contentRef: "tlc-agent"
-            },
-            body: { kind: "agent-message", text: "预览" }
-          }
-        ]}
+        entries={[entry]}
       />
     );
 
@@ -705,6 +732,128 @@ describe("Timeline", () => {
       })
     ]);
     readContent.mockRestore();
+  });
+
+  it("truncated user-message 按 cursor 读取完整内容后会替换 preview", async () => {
+    const user = userEvent.setup();
+    const entry = {
+      id: "user-truncated",
+      turnId: "turn-1",
+      createdAt: 1,
+      completeness: {
+        status: "truncated" as const,
+        reason: "item-budget",
+        originalBytes: 33,
+        includedBytes: 6,
+        contentRef: "tlc-user"
+      },
+      body: { kind: "user-message" as const, text: "预览", status: "sent" as const }
+    };
+    const readContent = vi.spyOn(codex, "readTimelineContent")
+      .mockResolvedValueOnce({
+        text: "完整内容第一段",
+        startOffset: 0,
+        endOffset: 21,
+        nextCursor: "cursor-2",
+        includedBytes: 21,
+        completeness: { status: "partial", nextCursor: "cursor-2" }
+      })
+      .mockResolvedValueOnce({
+        text: "，第二段",
+        startOffset: 21,
+        endOffset: 33,
+        nextCursor: null,
+        includedBytes: 12,
+        completeness: { status: "complete", nextCursor: null }
+      });
+
+    useStore.getState().setThreadEntries("thread-1", [entry], null);
+
+    render(<Timeline threadId="thread-1" entries={[entry]} />);
+
+    expect(screen.getByText("内容已截断")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "读取完整内容" }));
+
+    expect(await screen.findByText("完整内容第一段，第二段")).toBeInTheDocument();
+    expect(screen.queryByText("预览")).not.toBeInTheDocument();
+    expect(readContent).toHaveBeenNthCalledWith(1, "thread-1", "tlc-user", null);
+    expect(readContent).toHaveBeenNthCalledWith(2, "thread-1", "tlc-user", "cursor-2");
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "user-truncated",
+        turnId: "turn-1",
+        completeness: expect.objectContaining({ status: "complete" }),
+        body: { kind: "user-message", text: "完整内容第一段，第二段", status: "sent" }
+      })
+    ]);
+    readContent.mockRestore();
+  });
+
+  it("full-content 请求期间 contentRef 变更时丢弃旧响应且不写回 store", async () => {
+    const user = userEvent.setup();
+    const oldEntry = {
+      id: "agent-truncated",
+      turnId: "turn-1",
+      createdAt: 1,
+      completeness: {
+        status: "truncated" as const,
+        reason: "item-budget",
+        originalBytes: 18,
+        includedBytes: 6,
+        contentRef: "old-ref"
+      },
+      body: { kind: "agent-message" as const, text: "旧预览" }
+    };
+    const newEntry = {
+      ...oldEntry,
+      completeness: {
+        ...oldEntry.completeness,
+        contentRef: "new-ref"
+      },
+      body: { kind: "agent-message" as const, text: "新预览" }
+    };
+    let resolveContent: ((value: Awaited<ReturnType<typeof codex.readTimelineContent>>) => void) | null = null;
+    const contentPromise = new Promise<Awaited<ReturnType<typeof codex.readTimelineContent>>>((resolve) => {
+      resolveContent = resolve;
+    });
+    const readContent = vi.spyOn(codex, "readTimelineContent").mockReturnValueOnce(contentPromise);
+    const replaceOrAddEntry = vi.spyOn(useStore.getState(), "replaceOrAddEntry");
+
+    useStore.getState().setThreadEntries("thread-1", [oldEntry], null);
+    const { rerender } = render(<Timeline threadId="thread-1" entries={[oldEntry]} />);
+
+    await user.click(screen.getByRole("button", { name: "读取完整内容" }));
+    expect(readContent).toHaveBeenCalledWith("thread-1", "old-ref", null);
+
+    useStore.getState().setThreadEntries("thread-1", [newEntry], null);
+    rerender(<Timeline threadId="thread-1" entries={[newEntry]} />);
+
+    expect(screen.getByText("新预览")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveContent?.({
+        text: "旧完整内容",
+        startOffset: 0,
+        endOffset: 18,
+        nextCursor: null,
+        includedBytes: 18,
+        completeness: { status: "complete", nextCursor: null }
+      });
+      await contentPromise;
+    });
+
+    expect(screen.getByText("新预览")).toBeInTheDocument();
+    expect(screen.queryByText("旧完整内容")).not.toBeInTheDocument();
+    expect(replaceOrAddEntry).not.toHaveBeenCalled();
+    expect(useStore.getState().threads["thread-1"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "agent-truncated",
+        completeness: expect.objectContaining({ contentRef: "new-ref" }),
+        body: { kind: "agent-message", text: "新预览" }
+      })
+    ]);
+    readContent.mockRestore();
+    replaceOrAddEntry.mockRestore();
   });
 
   it("长文本 preview 使用有界扫描而不是 split 完整文本", () => {
@@ -1163,6 +1312,18 @@ describe("Timeline", () => {
 
     expect(scroller.scrollTop).toBe(11_070);
     expect(screen.getByText("历史回复 125")).toBeInTheDocument();
+  });
+
+  it("prepend 的虚拟窗口修正在 layout phase 完成", async () => {
+    const source = await readFile(join(process.cwd(), "src/web/components/Timeline.tsx"), "utf8");
+    const reconciliationMarker = "const previous = previousBlocksRef.current;";
+    const markerIndex = source.indexOf(reconciliationMarker);
+    const restorationIndex = source.indexOf("const restoredOffset = timelineScrollOffsetForAnchor(");
+    const effectStart = source.lastIndexOf("\n  use", markerIndex);
+
+    expect(markerIndex).toBeGreaterThan(0);
+    expect(source.slice(effectStart, markerIndex)).toContain("useLayoutEffect(() => {");
+    expect(markerIndex).toBeLessThan(restorationIndex);
   });
 
   it("短列表 prepend 与高度变化均不与页面 DOM 锚点争抢 scrollTop", () => {
@@ -1953,7 +2114,6 @@ describe("Timeline", () => {
   });
 
   it("用户消息把 Skill 引用显示在同一气泡顶部，复制时只复制正文", () => {
-    vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -1991,11 +2151,7 @@ describe("Timeline", () => {
     expect(bubble?.firstElementChild).toHaveAttribute("data-skill-reference-group", "true");
     expect(screen.queryByText("[skill]")).not.toBeInTheDocument();
 
-    fireEvent.pointerDown(screen.getByText("自建 agent 的意义是什么？"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("自建 agent 的意义是什么？"));
 
     fireEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(writeText).toHaveBeenCalledWith("自建 agent 的意义是什么？");
@@ -2040,6 +2196,26 @@ describe("Timeline", () => {
     });
     expect(bubble?.querySelector("[data-user-message-text='true']")).toBeNull();
     expect(container.innerHTML).not.toContain("/Users/huangzy");
+  });
+
+  it("普通文件 chip 与正文同气泡且不显示绝对路径", () => {
+    const { container } = render(
+      <Timeline entries={[{
+        id: "user-file",
+        createdAt: 1,
+        body: {
+          kind: "user-message",
+          text: "检查附件",
+          fileReferences: [{ id: "a", name: "very-long-notes.txt", path: "C:/secret/uploads/a.txt", mimeType: "text/plain", size: 10 }],
+          status: "sent"
+        }
+      }]} />
+    );
+    const chip = container.querySelector("[data-file-reference-chip='true']");
+    const bubble = container.querySelector("[data-user-message-bubble='true']");
+    expect(chip).toHaveTextContent("very-long-notes.txt");
+    expect(bubble).toContainElement(chip as HTMLElement);
+    expect(container).not.toHaveTextContent("C:/secret/uploads/a.txt");
   });
 
   it("将同一 turn 内连续活动渲染为两级内联日志而不是 Activity 卡片", async () => {
@@ -2944,8 +3120,7 @@ describe("Timeline", () => {
     expect(screen.getByText(/--- a\/src\/app.ts/)).toBeInTheDocument();
   });
 
-  it("长按用户消息显示复制、回滚和 Fork 操作", async () => {
-    vi.useFakeTimers();
+  it("轻点用户消息显示复制、回滚和 Fork 操作", async () => {
     const onRewindToMessage = vi.fn();
     const onForkFromMessage = vi.fn();
 
@@ -2965,11 +3140,7 @@ describe("Timeline", () => {
       />
     );
 
-    fireEvent.pointerDown(screen.getByText("历史消息"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("历史消息"));
 
     expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "回滚到这里" })).toBeInTheDocument();
@@ -2982,8 +3153,7 @@ describe("Timeline", () => {
     );
   });
 
-  it("运行中长按用户消息只显示复制和取消", async () => {
-    vi.useFakeTimers();
+  it("运行中轻点用户消息只显示复制和取消", async () => {
     render(
       <Timeline
         running
@@ -2998,11 +3168,7 @@ describe("Timeline", () => {
       />
     );
 
-    fireEvent.pointerDown(screen.getByText("运行中消息"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    fireEvent.click(screen.getByText("运行中消息"));
 
     expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "回滚到这里" })).not.toBeInTheDocument();

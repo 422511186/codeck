@@ -232,23 +232,51 @@ Agent 消息中的 Markdown fenced code block SHALL 使用应用主题 token 渲
 - **AND** 代码文字、边框和行内高亮 MUST 保持可读，不得出现固定浅色背景覆盖整个代码区域
 
 ### Requirement: Markdown code copy button remains visible
-Markdown 代码块的复制按钮 SHALL 在明亮主题和暗黑主题下都清晰可见、可点击，并使用当前主题 token 表达默认状态和复制成功状态。
+Markdown 代码块的复制按钮 SHALL 在明亮主题和暗黑主题下都清晰可见、可点击，并使用当前主题 token 表达默认状态、复制成功状态和复制失败状态。复制按钮 MUST 与代码正文分区布局，不得依赖覆盖在代码右上角的 absolute 浮层作为唯一布局。
 
-#### Scenario: Copy button in light theme
+#### Scenario: Light theme code copy button
 - **WHEN** 用户在明亮主题下查看代码块
 - **THEN** 复制按钮 MUST 与代码块背景有足够视觉区分
-- **AND** 按钮文字 MUST 可读
 
-#### Scenario: Copy button in dark theme
+#### Scenario: Dark theme code copy button
 - **WHEN** 用户在暗黑主题下查看代码块
 - **THEN** 复制按钮 MUST 与代码块背景有足够视觉区分
-- **AND** 按钮文字 MUST 可读
 
-#### Scenario: Copy button success state
+#### Scenario: Copy success state
 - **WHEN** 用户点击代码块复制按钮且复制成功
 - **THEN** 按钮 MUST 显示复制成功状态
-- **AND** 成功状态 MUST 在当前主题下保持可读
 
+#### Scenario: Copy failure state
+- **WHEN** 用户点击代码块复制按钮且复制失败
+- **THEN** 按钮 MUST 显示复制失败状态
+
+### Requirement: Code block copy works outside secure contexts
+Markdown 代码块复制 SHALL 在 secure context 与非 secure context（如局域网 HTTP）下都可用。系统 MUST 优先使用 Clipboard API，并在其不可用或失败时回退到兼容复制路径；无论成功或失败，复制按钮 MUST 给出可见反馈，MUST NOT 静默失败。
+
+#### Scenario: Clipboard API unavailable on LAN HTTP
+- **WHEN** 页面运行在非 secure context 且 `navigator.clipboard.writeText` 不可用
+- **AND** 用户点击代码块复制按钮
+- **THEN** 系统 MUST 通过兼容回退路径尝试复制完整代码原文
+- **AND** 成功时按钮 MUST 显示复制成功状态
+
+#### Scenario: Copy failure is visible
+- **WHEN** 用户点击代码块复制按钮
+- **AND** Clipboard API 与兼容回退路径都失败
+- **THEN** 按钮 MUST 显示复制失败状态
+- **AND** MUST NOT 假装复制成功
+
+### Requirement: Code block copy control does not cover code text
+Markdown 代码块的复制控件 SHALL 以独立工具栏或同等非覆盖布局呈现，MUST NOT 以浮层方式遮挡代码正文。用户在默认窄屏宽度下阅读代码时，首行与后续正文 MUST 保持完整可见。
+
+#### Scenario: Copy button stays outside code content
+- **WHEN** agent 消息渲染包含 fenced code block
+- **THEN** 复制按钮 MUST 位于代码正文之外的独立区域
+- **AND** 代码正文区域 MUST NOT 被复制按钮覆盖
+
+#### Scenario: Narrow mobile width keeps first line readable
+- **WHEN** 用户在移动端宽度查看较短代码块
+- **THEN** 代码首行文本 MUST 完整可读
+- **AND** MUST NOT 因为复制按钮占位而被裁切或遮挡
 ### Requirement: Timeline execution events are never silently dropped
 Web timeline SHALL render every app-server execution-related historical item and realtime notification that represents user-visible agent work, including shell commands, command/process output, file changes, MCP/dynamic tools, collaboration or exploration tool calls, sub-agent activity, web search, image operations, skill loading activity, and raw response items that have no later normalized `ThreadItem`.
 
@@ -499,11 +527,12 @@ Agent 输出中需要大量主线程工作的内容 SHALL 按可见性和用户�
 - **AND** MUST NOT 直接在主 timeline 中挂载完整长文本 `<pre>`
 
 ### Requirement: Agent Markdown 分阶段完成
-Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文本或轻量结构展示，进入可见窗口后再解析 Markdown，代码高亮和 Mermaid 在 Markdown 基础上继续延迟到对应 block 可见或用户展开。
+Agent Markdown SHALL 分阶段渲染：离屏历史先以纯文本或轻量结构展示，进入可见窗口后再解析 Markdown；代码高亮和 Mermaid 在 Markdown 基础上可继续延迟到对应 block 可见或用户展开。流式 live agent 消息 SHALL 渐进渲染已稳定完成的块，未完成尾巴保持轻量文本；系统 MUST NOT 对每个 delta 重新执行完整 Markdown 解析或代码高亮。
 
 #### Scenario: Streaming agent text
 - **WHEN** agent message 正在持续收到 `agent_message_delta`
-- **THEN** 当前 live 消息 MUST 使用轻量文本渲染路径
+- **THEN** 当前 live 消息的未完成尾巴 MUST 使用轻量文本渲染路径
+- **AND** 已稳定完成的段落或闭合代码块 MAY 使用 Markdown 渲染
 - **AND** MUST NOT 对每个 delta 重新执行完整 Markdown 解析或代码高亮
 
 #### Scenario: Idle visible message
@@ -511,6 +540,10 @@ Agent Markdown SHALL 分阶段渲染：流式输出和离屏历史先以纯文�
 - **THEN** 系统 MUST 在空闲时调度 Markdown 渲染
 - **AND** 渲染完成后 MUST 保持复制代码、表格、列表和链接等既有能力
 
+#### Scenario: Incomplete fenced code stays plain while streaming
+- **WHEN** live agent 消息包含尚未闭合的 fenced code block
+- **THEN** 该未闭合代码块 MUST 保留在轻量文本尾巴中
+- **AND** MUST NOT 提前渲染为可复制代码块控件
 ### Requirement: 完整内容访问不依赖首屏 DOM
 长输出的完整内容 SHALL 可通过用户明确操作访问，例如展开更多、复制完整内容、打开详情视图或按需加载完整文本。系统 MUST NOT 把“默认截断”解释为数据丢失。
 
@@ -939,17 +972,28 @@ agent message、tool output、command output 和 diff 的正文不完整时，�
 - **AND** MUST NOT 抛错、吞掉 activity 或改变底层 entry
 
 ### Requirement: User messages hide trusted injected context
-Web SHALL 从 app-server user item 中识别 Codex 明确注入的完整包装，并只显示其中的用户数据。已知 ambient/附件包装只有同时满足 `<in-app-browser-context source="ambient-ui-state">...</in-app-browser-context>` 或 `# Files mentioned by the user:` 包装，以及 `## My request for Codex:` 边界时，系统 MAY 提取 request 段；完整 `<codex_internal_context source="goal">...</codex_internal_context>` 包装只有包含唯一完整 `<objective>...</objective>` 时，系统 MAY 提取 objective。图片、Skill 引用、`clientUserMessageId`、turn/item identity 和发送状态 MUST 保留。普通 XML、Markdown、代码块、不完整标签和用户主动输入的相似文本 MUST 原样显示。
+Web SHALL 从 app-server user item 中识别 Codex 明确注入的完整包装，并只显示其中的用户数据。已知 ambient/附件包装只有同时满足 `<in-app-browser-context source="ambient-ui-state">...</in-app-browser-context>` 或 `# Files mentioned by the user:` 包装，以及 `## My request for Codex:` 边界时，系统 MAY 提取 request 段；完整 `<codex_internal_context source="goal">...</codex_internal_context>` 包装只有包含唯一完整 `<objective>...</objective>` 时，系统 MAY 提取 objective。图片、普通文件、Skill 引用、`clientUserMessageId`、turn/item identity 和发送状态 MUST 保留。普通 XML、Markdown、代码块、不完整标签和用户主动输入的相似文本 MUST 原样显示。
 
 #### Scenario: Ambient browser context is hidden
 - **WHEN** server user text 包含完整 ambient browser context 和 `## My request for Codex:`
 - **THEN** user bubble 与复制文本 MUST 只包含 marker 后的真实请求
 - **AND** MUST 不显示注入说明、当前 URL 或包装标签
 
-#### Scenario: Attachment metadata wrapper is hidden but image remains
-- **WHEN** server user text 同时包含 `# Files mentioned by the user:`、ambient context、request marker 和 imagePaths
-- **THEN** user bubble MUST 只显示真实请求并继续渲染图片附件
+#### Scenario: Attachment metadata wrapper is hidden and attachments remain
+- **WHEN** server user text 同时包含 `# Files mentioned by the user:`、request marker 和合法附件行
+- **THEN** user bubble MUST 只显示真实请求
+- **AND** 图片、Skill 与可恢复的普通文件附件 MUST 继续渲染
 - **AND** MUST 不把临时文件路径作为用户正文显示
+
+#### Scenario: Uploaded ordinary file metadata is recovered
+- **WHEN** Files-mentioned 包装包含 uploadDir 内符合服务端上传命名规则的普通文件路径
+- **THEN** Web MUST 恢复普通文件名称与稳定引用
+- **AND** MUST NOT 把普通文件映射为图片或工具 mention
+
+#### Scenario: Untrusted attachment row does not create a file chip
+- **WHEN** 包装中的候选普通文件路径不符合受控上传路径规则
+- **THEN** Web MUST NOT 为该行创建普通文件附件 chip
+- **AND** MUST NOT 暴露该候选路径到可见正文、复制文本或无障碍标签
 
 #### Scenario: Goal continuation displays its objective
 - **WHEN** server user text 完整匹配 `source="goal"` 的 internal context，且只包含一个完整 objective
@@ -965,7 +1009,6 @@ Web SHALL 从 app-server user item 中识别 Codex 明确注入的完整包装�
 - **WHEN** 用户正文包含普通 XML/Markdown，或只有相似 marker 但不构成完整已知包装
 - **THEN** Web MUST 原样显示与复制该文本
 - **AND** MUST NOT 使用宽泛正则删除用户内容
-
 ### Requirement: Timeline omits per-entry timestamps
 会话 timeline SHALL 不渲染 user、assistant、system 或 activity 的逐条相对时间。`createdAt` MAY 继续用于排序、虚拟列表锚点和诊断，但 MUST NOT 在默认或展开视图占据可见行。
 

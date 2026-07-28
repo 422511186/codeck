@@ -3286,7 +3286,7 @@ describe("web store codex events", () => {
     ]);
   });
 
-  it("syncs thread mode, model, reasoning effort, and permission profile from settings update events", () => {
+  it("syncs thread mode and model while keeping permission settings as runtime observation", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",
       event: {
@@ -3306,9 +3306,38 @@ describe("web store codex events", () => {
         mode: "plan",
         model: "gpt-5-codex",
         modelEffort: "high",
-        permissionProfileId: ":workspace",
+        runtimePermissionProfileId: ":workspace",
+        runtimeApprovalPolicy: "on-request",
+        runtimeApprovalsReviewer: "auto_review"
+      })
+    );
+  });
+
+  it("keeps configured full access when a runtime settings event reports workspace approval", () => {
+    useStore.getState().setPermissionProfile("thread-1", ":danger-full-access", "never", null);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "thread_settings_updated",
+        threadId: "thread-1",
+        model: null,
+        reasoningEffort: null,
         approvalPolicy: "on-request",
-        approvalsReviewer: "auto_review"
+        activePermissionProfile: { id: ":workspace", extends: null },
+        approvalsReviewer: "user",
+        collaborationMode: null
+      }
+    });
+
+    expect(useStore.getState().threads["thread-1"]).toEqual(
+      expect.objectContaining({
+        permissionProfileId: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null,
+        runtimePermissionProfileId: ":workspace",
+        runtimeApprovalPolicy: "on-request",
+        runtimeApprovalsReviewer: "user"
       })
     );
   });
@@ -3415,6 +3444,102 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
     expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
       expect.objectContaining({ kind: "warning", source: "app-server" })
+    ]);
+  });
+
+  it("migrates known warning errors from paginated history into notices", () => {
+    const warning = "Model metadata for `mimo-v2.5-pro` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+    useStore.getState().setThreadEntries("thread-1", [
+      { id: "agent-recent", turnId: "turn-recent", createdAt: 20, body: { kind: "agent-message", text: "当前回复" } }
+    ], "older-cursor");
+
+    useStore.getState().prependEntries("thread-1", [
+      { id: "history-warning", turnId: "turn-old", createdAt: 10, body: { kind: "error", text: warning } }
+    ], null, true);
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.entries.map((entry) => entry.id)).toEqual(["agent-recent"]);
+    expect(thread?.notices).toEqual([
+      expect.objectContaining({
+        id: "app-server-warning:model-metadata:mimo-v2.5-pro",
+        text: warning
+      })
+    ]);
+  });
+
+  it.each(["setThreadEntries", "mergeThreadEntries", "appendEntries"] as const)(
+    "migrates known warning errors at the %s store ingress",
+    (ingress) => {
+      const warning = "Model metadata for `gpt-5.6-terra` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+      const entry = {
+        id: `${ingress}-warning`,
+        turnId: "turn-warning",
+        createdAt: 20,
+        body: { kind: "error" as const, text: warning }
+      };
+
+      if (ingress === "setThreadEntries") {
+        useStore.getState().setThreadEntries("thread-1", [entry], null);
+      } else if (ingress === "mergeThreadEntries") {
+        useStore.getState().mergeThreadEntries("thread-1", [entry], null);
+      } else {
+        useStore.getState().appendEntries("thread-1", [entry]);
+      }
+
+      const thread = useStore.getState().threads["thread-1"];
+      expect(thread?.entries).toEqual([]);
+      expect(thread?.notices).toEqual([
+        expect.objectContaining({ id: "app-server-warning:model-metadata:gpt-5.6-terra" })
+      ]);
+    }
+  );
+
+  it("migrates known warning errors from live items without failing the turn", () => {
+    const warning = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
+    useStore.getState().setThreadStatus("thread-1", "active", "turn-live");
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item.appended",
+        threadId: "thread-1",
+        turnId: "turn-live",
+        entry: {
+          id: "live-warning",
+          turnId: "turn-live",
+          createdAt: 30,
+          body: { kind: "error", text: warning }
+        }
+      }
+    });
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.entries).toEqual([]);
+    expect(thread?.notices).toEqual([
+      expect.objectContaining({ id: "app-server-warning:long-thread", text: warning })
+    ]);
+    expect(thread?.running).toBe(true);
+    expect(thread?.activeTurnId).toBe("turn-live");
+  });
+
+  it("keeps only the latest model resume warning direction", () => {
+    const first = "This session was recorded with model `model-a` but is resuming with `model-b`. Consider switching back to `model-a` as it may affect Codex performance.";
+    const latest = "This session was recorded with model `model-b` but is resuming with `model-a`. Consider switching back to `model-b` as it may affect Codex performance.";
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: first }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: { kind: "warning", threadId: "thread-1", message: latest }
+    });
+
+    expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
+      expect.objectContaining({
+        id: "app-server-warning:model-resume",
+        text: latest
+      })
     ]);
   });
 
@@ -3716,6 +3841,45 @@ describe("web store codex events", () => {
         }
       })
     ]);
+  });
+
+  it("keeps command approvals fail closed and deduplicates full-access mismatch notices", () => {
+    useStore.getState().setPermissionProfile("thread-1", ":danger-full-access", "never", null);
+
+    for (const requestId of ["req-command-1", "req-command-2"]) {
+      useStore.getState().dispatchEvent({
+        type: "server-request",
+        request: {
+          requestId,
+          threadId: "thread-1",
+          turnId: "turn-1",
+          kind: "command_approval",
+          title: "命令审批",
+          description: "npm test",
+          options: [
+            { value: "accept", label: "允许一次" },
+            { value: "decline", label: "拒绝" }
+          ]
+        }
+      });
+    }
+
+    const thread = useStore.getState().threads["thread-1"];
+    expect(thread?.pendingApprovals).toHaveLength(2);
+    expect(thread?.notices).toEqual([
+      expect.objectContaining({
+        kind: "warning",
+        source: "permission-configuration",
+        text: expect.stringContaining("权限配置未生效")
+      })
+    ]);
+    expect(thread).toEqual(
+      expect.objectContaining({
+        permissionProfileId: ":danger-full-access",
+        approvalPolicy: "never",
+        approvalsReviewer: null
+      })
+    );
   });
 
   it("keeps long-thread timeline updates within a linear complexity budget", () => {

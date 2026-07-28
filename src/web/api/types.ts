@@ -1,5 +1,7 @@
 import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
 import type { ThreadModelStateView } from "../../shared/custom-models";
+import type { FileReference } from "../../shared/file-attachments";
+export type { FileReference } from "../../shared/file-attachments";
 
 export type ApiOk<T> = { ok: true } & T;
 export type ApiErr = { ok: false; error?: string };
@@ -24,6 +26,7 @@ export type ThreadSummary = {
   activePermissionProfile?: ActivePermissionProfile | null;
   approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  runtimePermissionObservation?: RuntimePermissionObservation;
 };
 
 export type ThreadPage = {
@@ -53,6 +56,7 @@ export type TimelineItem = {
   done?: boolean;
   imagePaths?: string[];
   skillReferences?: SkillReference[];
+  fileReferences?: FileReference[];
   toolKind?: "command" | "mcp" | "dynamic" | "file" | "web" | "image" | "system";
   systemKind?: "context-compaction" | "warning";
   actionKind?: "read" | "list" | "search" | "command";
@@ -164,11 +168,19 @@ export type PermissionSelection = {
   approvalsReviewer: ApprovalsReviewer | null;
 };
 
+export type RuntimePermissionObservation = {
+  permissions: string | null;
+  approvalPolicy: string | null;
+  approvalsReviewer: string | null;
+};
+
 export type UploadedImage = {
   path: string;
   mimeType: string;
   size: number;
 };
+
+export type UploadedFile = FileReference;
 
 export type SkillReference = {
   name: string;
@@ -202,11 +214,14 @@ export type PendingServerRequestOption = {
   value: string;
   label: string;
   description?: string;
+  disabled?: boolean;
 };
 
 export type PendingServerRequest = {
   requestId: string;
   threadId?: string;
+  turnId?: string;
+  itemId?: string;
   kind: ServerRequestKind;
   title?: string;
   description?: string;

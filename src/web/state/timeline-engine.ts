@@ -50,6 +50,10 @@ export type TimelineInput =
       pendingId: string;
     }
   | {
+      kind: "remove-entry";
+      entryId: string;
+    }
+  | {
       kind: "finish-turn";
       turnId: string;
       status: string;
@@ -339,6 +343,10 @@ export function applyTimelineInput(state: TimelineEngineState, input: TimelineIn
       return applyLiveDeltaInput(state, input);
     case "remove-empty-reasoning":
       return removeEmptyReasoning(state, input.turnId, input.pendingId);
+    case "remove-entry": {
+      const entries = state.entries.filter((entry) => entry.id !== input.entryId);
+      return entries.length === state.entries.length ? state : withEntries(state, entries);
+    }
     case "finish-turn":
       return pruneAgentAliasState(finishTurnEntries(state, input.turnId, input.status), new Set([input.turnId]));
     case "bind-user-turn":
@@ -1464,6 +1472,31 @@ function upsertEntryByIdentity(
   return insertEntryBySourceOrder(entries, entry);
 }
 
+function mergeFileReferences(
+  primary: Extract<TimelineEntry["body"], { kind: "user-message" }>["fileReferences"],
+  secondary: Extract<TimelineEntry["body"], { kind: "user-message" }>["fileReferences"]
+): Extract<TimelineEntry["body"], { kind: "user-message" }>["fileReferences"] {
+  if (!primary?.length) return secondary;
+  if (!secondary?.length) return primary;
+  const merged = primary.map((file) => ({ ...file }));
+  for (const file of secondary) {
+    const index = merged.findIndex((candidate) => candidate.id === file.id || candidate.path === file.path);
+    if (index < 0) {
+      merged.push({ ...file });
+      continue;
+    }
+    const current = merged[index]!;
+    merged[index] = {
+      id: current.id || file.id,
+      name: current.name || file.name,
+      path: current.path || file.path,
+      mimeType: current.mimeType && current.mimeType !== "application/octet-stream" ? current.mimeType : file.mimeType,
+      size: current.size > 0 ? current.size : file.size
+    };
+  }
+  return merged;
+}
+
 function mergeEntry(current: TimelineEntry, next: TimelineEntry, authoritative = false): TimelineEntry {
   const currentCandidate = contentCandidateForEntry(current, 1);
   const nextCandidate = contentCandidateForEntry(next, authoritative ? 2 : 1);
@@ -1500,6 +1533,7 @@ function mergeEntry(current: TimelineEntry, next: TimelineEntry, authoritative =
         text: keepCurrentContent ? current.body.text : next.body.text || current.body.text,
         imagePaths: baseBody.imagePaths ?? otherBody.imagePaths,
         skillReferences: baseBody.skillReferences ?? otherBody.skillReferences,
+        fileReferences: mergeFileReferences(baseBody.fileReferences, otherBody.fileReferences),
         status: baseBody.status ?? otherBody.status ?? "sent"
       }
     };
@@ -2082,6 +2116,7 @@ function orderEntries(entries: TimelineEntry[]): TimelineEntry[] {
           leftOrder &&
           rightOrder &&
           leftOrder.sourceKind === rightOrder.sourceKind &&
+          leftOrder.sourceKind !== "pagination" &&
           leftOrder.ordinal !== rightOrder.ordinal
         ) {
           return leftOrder.ordinal - rightOrder.ordinal;

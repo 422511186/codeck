@@ -103,6 +103,30 @@ describe("binding-aware thread lifecycle routes", () => {
     expect(body.thread.modelState).toMatchObject({ bindingVersion: "binding-1" });
   });
 
+  it("resume route 校验并转发完整 configured 权限 override", async () => {
+    mockResumeThread.mockResolvedValue({ id: "thread-1", timeline: [] });
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/resume/route");
+    const response = await POST(
+      new Request("http://localhost/resume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          permissions: ":danger-full-access",
+          approvalPolicy: "never",
+          approvalsReviewer: null
+        })
+      }),
+      { params: Promise.resolve({ threadId: "thread-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResumeThread).toHaveBeenCalledWith("thread-1", {
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: null
+    });
+  });
+
   it("thread GET 通过生命周期服务返回来源状态", async () => {
     mockReadThreadMetadata.mockResolvedValue({
       id: "thread-1",
@@ -232,5 +256,110 @@ describe("binding-aware thread lifecycle routes", () => {
     expect(mockForkThread).toHaveBeenCalledWith("thread-1");
     expect(mockDeleteThread).toHaveBeenCalledWith("thread-1");
     expect(mockUnarchiveThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("相同 fork operationId 的并发请求只执行一次并复用结果", async () => {
+    let release: ((value: { id: string }) => void) | undefined;
+    mockForkThread.mockReturnValueOnce(new Promise((resolve) => {
+      release = resolve;
+    }));
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const context = { params: Promise.resolve({ threadId: "thread-1" }) };
+    const request = () => POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationId: "fork-operation-1" })
+    }), context);
+
+    const first = request();
+    await vi.waitFor(() => expect(mockForkThread).toHaveBeenCalledTimes(1));
+    const second = request();
+    release?.({ id: "thread-fork-1" });
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(mockForkThread).toHaveBeenCalledTimes(1);
+    await expect(firstResponse.json()).resolves.toMatchObject({ thread: { id: "thread-fork-1" } });
+    await expect(secondResponse.json()).resolves.toMatchObject({ thread: { id: "thread-fork-1" } });
+  });
+
+  it("resolved fork operation 的重复请求直接复用同一 thread", async () => {
+    mockForkThread.mockResolvedValue({ id: "thread-fork-resolved" });
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const context = { params: Promise.resolve({ threadId: "thread-1" }) };
+    const request = () => POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationId: "fork-operation-resolved" })
+    }), context);
+
+    expect((await request()).status).toBe(200);
+    expect((await request()).status).toBe(200);
+    expect(mockForkThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("cache miss 的 ambiguous fork retry 失败关闭且不再次 fork", async () => {
+    mockForkThread.mockResolvedValue({ id: "must-not-create" });
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const response = await POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationId: "fork-operation-lost", retryAmbiguousFork: true })
+    }), { params: Promise.resolve({ threadId: "thread-1" }) });
+
+    expect(response.status).toBe(409);
+    expect(mockForkThread).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({ ok: false, code: "FORK_UNRESOLVED" });
+  });
+
+  it("ambiguous fork retry 缺少 operationId 时返回 400", async () => {
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const response = await POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ retryAmbiguousFork: true })
+    }), { params: Promise.resolve({ threadId: "thread-1" }) });
+
+    expect(response.status).toBe(400);
+    expect(mockForkThread).not.toHaveBeenCalled();
+  });
+
+  it("fork 结果未知后同 operation 的重试失败关闭且不重复执行", async () => {
+    mockForkThread.mockRejectedValueOnce(new Error("connection lost"));
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const context = { params: Promise.resolve({ threadId: "thread-1" }) };
+    const request = (retryAmbiguousFork = false) => POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationId: "fork-operation-ambiguous", ...(retryAmbiguousFork ? { retryAmbiguousFork: true } : {}) })
+    }), context);
+
+    expect((await request()).status).toBe(502);
+    expect((await request(true)).status).toBe(409);
+    expect(mockForkThread).toHaveBeenCalledTimes(1);
+    await expect((await request(true)).json()).resolves.toMatchObject({ code: "FORK_UNRESOLVED" });
+    expect(mockForkThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("明确 fork 前拒绝清理 operation，条件恢复后可重新执行", async () => {
+    mockAudit.mockRejectedValueOnce(new Error("audit unavailable"));
+    mockForkThread.mockResolvedValue({ id: "thread-fork-after-retry" });
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/fork/route");
+    const context = { params: Promise.resolve({ threadId: "thread-1" }) };
+    const request = () => POST(new Request("http://localhost/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ operationId: "fork-operation-rejected" })
+    }), context);
+
+    const rejected = await request();
+    expect(rejected.status).toBe(502);
+    await expect(rejected.json()).resolves.toMatchObject({ ok: false, code: "FORK_REJECTED" });
+    expect(mockForkThread).not.toHaveBeenCalled();
+
+    const retried = await request();
+    expect(retried.status).toBe(200);
+    expect(mockForkThread).toHaveBeenCalledTimes(1);
   });
 });

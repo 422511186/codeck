@@ -108,7 +108,44 @@ describe("codex rollback route", () => {
     }));
   });
 
+  it("conflict 二次审计失败时仍保留结构化 409", async () => {
+    mockAudit
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("audit unavailable"));
+    mockRollbackThread.mockRejectedValue(
+      Object.assign(new Error("会话尾部已变化，请刷新后重试"), {
+        code: "ROLLBACK_CONFLICT",
+        httpStatus: 409,
+        actualTailTurnIds: ["turn-3"]
+      })
+    );
+    const { POST } = await import("../../src/app/api/codex/threads/[threadId]/rollback/route");
+    const response = await POST(
+      new Request("http://localhost/api/codex/threads/thread-1/rollback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          operationId: "rollback-op-conflict-audit",
+          targetTurnId: "turn-2",
+          historyStamp: { bootId: "boot-1", generation: 3 },
+          expectedTailTurnIds: ["turn-2"]
+        })
+      }),
+      { params: Promise.resolve({ threadId: "thread-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "ROLLBACK_CONFLICT",
+      actualTailTurnIds: ["turn-3"]
+    });
+  });
+
   it("以结构化 409 返回 repair exhausted 的权威 response", async () => {
+    mockAudit
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("audit unavailable"));
     const authoritativeThread = {
       id: "thread-1",
       title: "会话",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Markdown, markdownUrlTransform } from "../../src/web/components/Markdown";
+import * as clipboard from "../../src/web/clipboard";
 
 describe("Markdown", () => {
   beforeEach(() => {
@@ -31,12 +32,13 @@ describe("Markdown", () => {
   it("keeps highlighted block code background controlled by the theme wrapper", () => {
     const { container } = render(<Markdown text={"```ts\nconst cwd = 'C:/Users/huang';\n```"} />);
 
+    const shell = container.querySelector("[data-code-block='true']");
     const pre = container.querySelector("pre");
     const code = container.querySelector("pre code");
 
-    expect(pre?.getAttribute("style")).toContain("background: var(--cw-code-bg)");
+    expect(shell?.getAttribute("style")).toContain("background: var(--cw-code-bg)");
+    expect(shell?.getAttribute("style")).toContain("border: 1px solid var(--cw-code-border)");
     expect(pre?.getAttribute("style")).toContain("color: var(--cw-code-fg)");
-    expect(pre?.getAttribute("style")).toContain("border: 1px solid var(--cw-code-border)");
     expect(code?.getAttribute("style")).toContain("background: transparent");
     expect(code?.getAttribute("style")).toContain("color: inherit");
   });
@@ -48,10 +50,15 @@ describe("Markdown", () => {
       value: { writeText },
       configurable: true
     });
-    render(<Markdown text={"```bash\nssh e3.vm\n```"} />);
+    const { container } = render(<Markdown text={"```bash\nssh e3.vm\n```"} />);
 
     const button = screen.getByRole("button", { name: "复制代码" });
+    const toolbar = container.querySelector("[data-code-block-toolbar='true']");
+    const pre = container.querySelector("pre");
 
+    expect(toolbar).not.toBeNull();
+    expect(button.parentElement).toBe(toolbar);
+    expect(pre?.contains(button)).toBe(false);
     expect(button.getAttribute("style")).toContain("background: var(--cw-bg-overlay)");
     expect(button.getAttribute("style")).toContain("color: var(--cw-fg)");
     expect(button.getAttribute("style")).toContain("border: 1px solid var(--cw-border-strong)");
@@ -61,6 +68,17 @@ describe("Markdown", () => {
 
     expect(writeText).toHaveBeenCalledWith("ssh e3.vm");
     await waitFor(() => expect(button).toHaveTextContent("已复制"));
+  });
+
+  it("shows copy failure state when clipboard helper cannot copy", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(clipboard, "copyText").mockResolvedValue({ ok: false });
+    render(<Markdown text={"```bash\necho fail\n```"} />);
+
+    const button = screen.getByRole("button", { name: "复制代码" });
+    await user.click(button);
+
+    await waitFor(() => expect(button).toHaveTextContent("复制失败"));
   });
 
   it("defines the overlay theme token used by the code copy button", () => {

@@ -2,6 +2,8 @@ import type { StartTurnInput } from "../../../../../server/app-server/client";
 import { NextResponse } from "next/server";
 import { getThreadModelLifecycleService } from "../../../../../server/custom-models/runtime";
 import type { MobileSkillReference } from "../../../../../shared/codex";
+import { validateFileReferences } from "../../../../../shared/file-attachments";
+import { inspectCanonicalRegularFile } from "../../../../../server/uploads";
 import { getRuntimeConfig } from "../../../../../server/runtime";
 import {
   assertAllowedPath,
@@ -10,6 +12,7 @@ import {
   isRecord,
   ok,
   optionalApprovalPolicy,
+  optionalStrictBoolean,
   optionalStrictNonEmptyString,
   optionalStrictNullableString,
   optionalStrictString,
@@ -24,6 +27,14 @@ import {
 type StartTurnRouteResult = {
   turnId: string;
 };
+
+class StartRejectedError extends Error {
+  readonly code = "START_REJECTED" as const;
+  constructor(readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : "发送前置条件不满足");
+    this.name = "StartRejectedError";
+  }
+}
 
 const START_TURN_CACHE_TTL_MS = 10 * 60_000;
 type StartTurnOperation = {
@@ -47,17 +58,28 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonRecord(request);
     const threadId = requireNonEmptyString(body.threadId, "threadId");
     const text = requireNonEmptyString(body.text, "消息");
-    await getThreadModelLifecycleService().ensureThreadReady(threadId);
 
     const config = getRuntimeConfig();
     const imagePaths = optionalStrictStringArray(body.imagePaths, "imagePaths")?.map((imagePath) =>
       assertAllowedPath(imagePath, "imagePath", [config.uploadDir])
     );
     const skillReferences = normalizeSkillReferences(body.skillReferences);
-    if (skillReferences.length) {
-      await assertSkillReferencesAllowed(threadId, skillReferences);
+    let fileReferences;
+    try {
+      fileReferences = validateFileReferences(body.fileReferences, { allowUnknownSize: true });
+    } catch (error) {
+      throw new RouteValidationError(error instanceof Error ? error.message : "fileReferences 无效");
+    }
+    const fileBytes = fileReferences.reduce((sum, file) => sum + file.size, 0);
+    if (fileBytes > 50 * 1024 * 1024) {
+      throw new RouteValidationError("普通文件总大小超过限制");
     }
     const clientUserMessageId = optionalStrictNonEmptyString(body.clientUserMessageId, "clientUserMessageId");
+    const startBootId = optionalStrictNonEmptyString(body.startBootId, "startBootId");
+    const retryAmbiguousStart = optionalStrictBoolean(body.retryAmbiguousStart, "retryAmbiguousStart") ?? false;
+    if (retryAmbiguousStart && !clientUserMessageId) {
+      throw new RouteValidationError("retryAmbiguousStart 需要 clientUserMessageId");
+    }
     const model = optionalStrictNonEmptyString(body.model, "model");
     const reasoningEffort = optionalStrictNonEmptyString(body.reasoningEffort, "reasoningEffort");
     const reasoningSummary = normalizeReasoningSummary(body.reasoningSummary);
@@ -66,10 +88,12 @@ export async function POST(request: Request): Promise<Response> {
     const approvalsReviewer = readApprovalsReviewer(body.approvalsReviewer);
     const additionalContext = readAdditionalContext(body.additionalContext);
     const collaborationMode = readCollaborationMode(body.collaborationMode);
-    await audit("turn.start", {
+    const auditDetail = {
       threadId,
       textLength: text.length,
       imageCount: imagePaths?.length || 0,
+      fileCount: fileReferences.length,
+      fileBytes,
       skillCount: skillReferences.length,
       clientUserMessageId,
       model,
@@ -80,12 +104,13 @@ export async function POST(request: Request): Promise<Response> {
       approvalsReviewer,
       additionalContext,
       collaborationMode
-    });
-    const startInput: StartTurnInput = {
+    };
+    const normalizedStartInput: StartTurnInput = {
       threadId,
       text,
       imagePaths,
       skillReferences,
+      fileReferences,
       clientUserMessageId,
       model,
       reasoningEffort,
@@ -96,23 +121,57 @@ export async function POST(request: Request): Promise<Response> {
       additionalContext,
       collaborationMode
     };
-    const start = () => startTurnOnly(startInput);
+    const start = async () => {
+      let preparedFileReferences: NonNullable<StartTurnInput["fileReferences"]>;
+      try {
+        await audit("turn.start", auditDetail);
+        await getThreadModelLifecycleService().ensureThreadReady(threadId);
+        preparedFileReferences = await prepareFileReferences(fileReferences, config.uploadDir);
+        if (skillReferences.length) {
+          await assertSkillReferencesAllowed(threadId, skillReferences);
+        }
+      } catch (error) {
+        throw new StartRejectedError(error);
+      }
+      return startTurnOnly({
+        ...normalizedStartInput,
+        fileReferences: preparedFileReferences
+      });
+    };
     const cacheKey = startTurnCacheKey(threadId, clientUserMessageId);
     const gateway = getAppServerGateway();
     const bootId = typeof gateway.getTimelineBootId === "function" ? gateway.getTimelineBootId() : "legacy-gateway";
-    const payloadFingerprint = startTurnPayloadFingerprint(startInput);
+    const payloadFingerprint = startTurnPayloadFingerprint(normalizedStartInput);
     const { turnId } = cacheKey
       ? await cachedStartTurn(
           cacheKey,
           bootId,
           payloadFingerprint,
           start,
-          () => findTurnByClientUserMessageId(threadId, clientUserMessageId!)
+          () => findTurnByClientUserMessageId(threadId, clientUserMessageId!),
+          { retryAmbiguousStart, startBootId }
         )
       : await start();
 
     return ok({ turnId });
   } catch (error) {
+    if (error instanceof StartRejectedError) {
+      const cause = typeof error.cause === "object" && error.cause !== null
+        ? error.cause as { code?: unknown; httpStatus?: unknown; result?: Record<string, unknown> }
+        : null;
+      const isSwitchRecoveryFailure = cause?.code === "SWITCH_RECOVERY_FAILED" && cause.httpStatus === 500;
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "START_REJECTED",
+          error: error.message,
+          ...(isSwitchRecoveryFailure
+            ? { recoveryCode: cause.code, ...(cause.result ?? {}) }
+            : {})
+        },
+        { status: isSwitchRecoveryFailure ? 500 : 502 }
+      );
+    }
     const structured = typeof error === "object" && error !== null
       ? error as { code?: unknown; httpStatus?: unknown; result?: Record<string, unknown> }
       : null;
@@ -132,18 +191,39 @@ async function startTurnOnly(input: StartTurnInput): Promise<StartTurnRouteResul
   return { turnId: result.turnId };
 }
 
+async function prepareFileReferences(
+  fileReferences: NonNullable<StartTurnInput["fileReferences"]>,
+  uploadDir: string
+): Promise<NonNullable<StartTurnInput["fileReferences"]>> {
+  return Promise.all(fileReferences.map(async (file) => {
+    try {
+      const inspected = await inspectCanonicalRegularFile(file.path, uploadDir);
+      if (file.size > 0 && inspected.size !== file.size) {
+        throw new Error("附件大小不一致");
+      }
+      return { ...file, path: inspected.path, size: inspected.size };
+    } catch {
+      throw new RouteValidationError("附件已过期或不可访问，请重新上传");
+    }
+  }));
+}
+
 async function cachedStartTurn(
   cacheKey: string,
   bootId: string,
   payloadFingerprint: string,
   start: () => Promise<StartTurnRouteResult>,
-  recover: () => Promise<StartTurnRouteResult | null>
+  recover: () => Promise<StartTurnRouteResult | null>,
+  options: { retryAmbiguousStart: boolean; startBootId?: string }
 ): Promise<StartTurnRouteResult> {
   purgeExpiredStartTurns();
   const existing = startTurnCache.get(cacheKey);
   if (existing) {
     if (existing.payloadFingerprint !== payloadFingerprint) {
       throw new Error("clientUserMessageId payload 不一致");
+    }
+    if (existing.bootId !== bootId) {
+      return recoverAmbiguousStart(existing, bootId, recover);
     }
     if (existing.result) {
       return existing.result;
@@ -154,6 +234,18 @@ async function cachedStartTurn(
     return recoverAmbiguousStart(existing, bootId, recover);
   }
 
+  if (options.retryAmbiguousStart) {
+    const operation: StartTurnOperation = {
+      expiresAt: Date.now() + START_TURN_CACHE_TTL_MS,
+      bootId: options.startBootId ?? bootId,
+      payloadFingerprint,
+      state: "ambiguous",
+      inFlight: null
+    };
+    startTurnCache.set(cacheKey, operation);
+    return recoverAmbiguousStart(operation, bootId, recover);
+  }
+
   const operation: StartTurnOperation = {
     expiresAt: Number.POSITIVE_INFINITY,
     bootId,
@@ -161,23 +253,49 @@ async function cachedStartTurn(
     state: "pending",
     inFlight: null
   };
-  const promise = start()
+  let promise: Promise<StartTurnRouteResult>;
+  promise = start()
     .then((result) => {
-      operation.state = "resolved";
-      operation.result = result;
-      operation.inFlight = null;
-      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
-      return result;
+      if (operation.inFlight === promise) {
+        operation.state = "resolved";
+        operation.result = result;
+        operation.inFlight = null;
+        operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+        return result;
+      }
+      return currentStartTurnResult(operation, promise);
     })
     .catch((error) => {
-      operation.state = "ambiguous";
-      operation.inFlight = null;
-      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
-      throw error;
+      if (operation.inFlight === promise) {
+        if (error instanceof StartRejectedError) {
+          startTurnCache.delete(cacheKey);
+          operation.inFlight = null;
+          operation.expiresAt = 0;
+          throw error;
+        }
+        operation.state = "ambiguous";
+        operation.inFlight = null;
+        operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+        throw error;
+      }
+      return currentStartTurnResult(operation, promise);
     });
   operation.inFlight = promise;
   startTurnCache.set(cacheKey, operation);
   return promise;
+}
+
+function currentStartTurnResult(
+  operation: StartTurnOperation,
+  stalePromise: Promise<StartTurnRouteResult>
+): Promise<StartTurnRouteResult> | StartTurnRouteResult {
+  if (operation.result) {
+    return operation.result;
+  }
+  if (operation.inFlight && operation.inFlight !== stalePromise) {
+    return operation.inFlight;
+  }
+  throw new Error("ambiguous-start-unresolved：原发送动作已被新的恢复流程取代，但尚无可确认结果");
 }
 
 function recoverAmbiguousStart(
@@ -185,24 +303,34 @@ function recoverAmbiguousStart(
   currentBootId: string,
   recover: () => Promise<StartTurnRouteResult | null>
 ): Promise<StartTurnRouteResult> {
+  const previousBootId = operation.bootId;
+  operation.bootId = currentBootId;
+  operation.result = undefined;
+  operation.state = "ambiguous";
   let recoveryPromise: Promise<StartTurnRouteResult>;
   recoveryPromise = recover()
     .then((result) => {
       if (!result) {
-        const reason = operation.bootId === currentBootId
+        const reason = previousBootId === currentBootId
           ? "尚无法确认原发送动作是否已创建 turn"
           : "服务已重启，无法确认原发送动作是否已创建 turn";
         throw new Error(`ambiguous-start-unresolved：${reason}`);
       }
-      operation.state = "resolved";
-      operation.result = result;
-      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
-      return result;
+      if (operation.inFlight === recoveryPromise) {
+        operation.state = "resolved";
+        operation.result = result;
+        operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+        return result;
+      }
+      return currentStartTurnResult(operation, recoveryPromise);
     })
     .catch((error) => {
-      operation.state = "ambiguous";
-      operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
-      throw error;
+      if (operation.inFlight === recoveryPromise) {
+        operation.state = "ambiguous";
+        operation.expiresAt = Date.now() + START_TURN_CACHE_TTL_MS;
+        throw error;
+      }
+      return currentStartTurnResult(operation, recoveryPromise);
     })
     .finally(() => {
       if (operation.inFlight === recoveryPromise) {
@@ -242,6 +370,8 @@ function startTurnPayloadFingerprint(input: StartTurnInput): string {
     text: input.text,
     imagePaths: input.imagePaths ?? [],
     skillReferences: input.skillReferences ?? [],
+    fileReferences: [...(input.fileReferences ?? [])]
+      .sort((left, right) => `${left.id}\u0000${left.path}`.localeCompare(`${right.id}\u0000${right.path}`)),
     model: input.model ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
     reasoningSummary: input.reasoningSummary ?? null,

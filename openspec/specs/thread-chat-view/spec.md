@@ -286,7 +286,7 @@ Agent 消息 SHALL 渲染为通栏块，不带左侧色条；不显示头像和�
 - **AND** MUST 不渲染头像或模型名
 
 ### Requirement: Agent 回复全量渲染 markdown
-Agent 回复 SHALL 最终按 GitHub-flavored markdown 全量渲染，包含列表、加粗、表格、链接、内联代码块。为了保证移动端首屏性能，系统 MAY 在消息离屏、尚未进入渲染窗口、浏览器尚未空闲或 agent 仍在流式输出时先展示轻量纯文本占位；当消息进入可见窗口且调度条件满足后，系统 MUST 完成 Markdown 渲染。
+Agent 回复 SHALL 最终按 GitHub-flavored markdown 全量渲染，包含列表、加粗、表格、链接、内联代码块。为了保证移动端首屏性能，系统 MAY 在消息离屏、尚未进入渲染窗口、浏览器尚未空闲时先展示轻量纯文本占位；当消息进入可见窗口且调度条件满足后，系统 MUST 完成 Markdown 渲染。对于仍在流式输出的 live agent 消息，系统 SHALL 对已稳定完成的 markdown 块尽早渲染，未完成尾巴 MAY 继续轻量纯文本展示。
 
 #### Scenario: 渲染 markdown 元素
 - **WHEN** agent 消息包含 markdown 语法
@@ -309,6 +309,11 @@ Agent 回复 SHALL 最终按 GitHub-flavored markdown 全量渲染，包含列�
 - **THEN** 系统 MAY 暂时不执行 Markdown 解析、代码高亮或 Mermaid 渲染
 - **AND** 该消息进入窗口后 MUST 仍能完成完整 Markdown 渲染
 
+#### Scenario: Live message renders completed blocks progressively
+- **WHEN** live agent 消息正在流式输出
+- **AND** 文本中已出现完整段落或已闭合 fenced code block
+- **THEN** 这些已完成块 MUST 可按 Markdown 渲染
+- **AND** 尚未完成的尾巴 MAY 继续以轻量纯文本展示
 ### Requirement: 代码块满宽横向滑动并提供复制按钮
 markdown 中的代码块 SHALL 占满 timeline 宽度，超长行通过横向滑动查看，右上角提供「复制」按钮。
 
@@ -560,7 +565,7 @@ timeline 背景 SHALL 使用纯背景色，消息块 SHALL 通过浅底色或边
 - **AND** 页面 MUST 使用 G2 的 metadata/latest page 或事件流建立当前基线
 
 ### Requirement: Repair replace is serialized with local mutations
-snapshot repair、rollback replace、fork initialization、本地 send mutation 和 SSE/live 提交 SHALL 通过 thread-local mutation/delivery epoch、`HistoryStamp` 与 request token 串行化。旧请求完成后 MUST NOT 回退较新的本地或实时 timeline 状态；旧 generation 请求的清理 MUST NOT 清除新 generation 的 repair 标记。
+snapshot repair、rollback replace、fork initialization、本地 send mutation 和 SSE/live 提交 SHALL 通过 thread-local mutation/delivery epoch、`HistoryStamp` 与 request token 串行化。旧请求完成后 MUST NOT 回退较新的本地或实时 timeline 状态；旧 generation 请求的清理 MUST NOT 清除新 generation 的 repair 标记。已取消、已卸载或 route/thread 已切换的 repair attempt MUST NOT 安排 completion retry、清理当前 thread repair 标记或把旧 thread 的 repair 需求转移到新 thread。
 
 #### Scenario: Repair finishes after a new send
 - **WHEN** 客户端因 gap 发起 snapshot repair
@@ -575,6 +580,13 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** repair 响应没有通过同 generation overlay 或 watermark 覆盖该更新
 - **THEN** 客户端 MUST NOT 用该响应删除或回退已提交 live entry
 - **AND** repair 需求 MUST 保留或以当前 barrier 重新排队
+
+#### Scenario: Cancelled repair failure does not retry
+- **WHEN** 会话页为 thread A 发起 latest-page repair
+- **AND** repair pending 期间页面卸载，或路由切换到 thread B
+- **AND** thread A 的旧 repair 请求随后以非 abort 错误失败
+- **THEN** 客户端 MUST 将该 repair attempt 视为已取消，并且 MUST NOT 为 thread A 或 thread B 安排 completion retry
+- **AND** 该旧 attempt MUST NOT 清理或覆盖当前 thread 的 repair 标记
 
 ### Requirement: Confirmed snapshot repair is not lost across local mutations
 会话页 SHALL 使用 thread-local epoch 或等价机制阻止旧 snapshot repair 覆盖较新的 send/rewind/fork 本地状态；但由确认缺口触发的 snapshot repair MUST NOT 因本地 mutation 发生而被静默清除。旧 repair 返回且不能应用时，系统 MUST 保留或重新排队 repair，直到某次 repair 成功应用或被新的权威 snapshot 明确替代。
@@ -711,7 +723,7 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** 会话标题、模型按钮和菜单状态 MUST NOT 因每条文本 delta 重建可见状态
 
 ### Requirement: 分页 timeline 顺序跨页面稳定
-历史分页和首屏窗口返回的 turns SHALL 在前端合并后保持全局时间顺序和稳定 turn 身份。每个页面和 opaque cursor MUST 绑定同一 `HistoryStamp`；分页适配层 MUST NOT 使用仅在单页内有效的 `turnIndex` 破坏跨页排序、rewind 或 fork 计算。旧 generation 的 page、cursor 或请求完成回调 MUST NOT 修改当前窗口。
+历史分页和首屏窗口返回的 turns SHALL 在前端合并后保持全局时间顺序和稳定 turn 身份。每个页面和 opaque cursor MUST 绑定同一 `HistoryStamp`；分页适配层 MUST NOT 使用仅在单页内有效的 `turnIndex` 或 `sourceOrder.ordinal` 破坏跨页排序、rewind 或 fork 计算。旧 generation 的 page、cursor 或请求完成回调 MUST NOT 修改当前窗口。分页候选与当前窗口 identity 重叠时，历史页 MUST 只去重，MUST NOT 用历史候选改写当前可见 entry。
 
 #### Scenario: 多页历史合并
 - **WHEN** 首屏已加载最近 turns
@@ -721,8 +733,8 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 
 #### Scenario: 页面内 turnIndex 重复
 - **WHEN** 不同分页返回的 entries 存在重复或页内重置的 `turnIndex`
-- **THEN** 前端 MUST 使用更可靠的 turn order 或插入顺序合并
-- **AND** MUST NOT 因 `turnIndex` 重复把新旧 turns 排错
+- **THEN** 前端 MUST 使用服务端页内正序、稳定 identity 和现有窗口相对顺序合并
+- **AND** MUST NOT 因 `turnIndex` 或 page-local ordinal 重复把新旧 turns 排错
 
 #### Scenario: Rollback invalidates an in-flight older page
 - **WHEN** generation G1 的历史页请求仍在进行
@@ -747,6 +759,11 @@ snapshot repair、rollback replace、fork initialization、本地 send mutation 
 - **AND** 历史页候选正文比当前可见正文更长、更新或完整度不同
 - **THEN** pagination merge MUST 只去重该重叠项，不得改写当前窗口中的正文、详情展开状态或显示高度
 - **AND** 正文完整性提升 MUST 仅由 live、detail 或权威 repair 路径提交
+
+#### Scenario: Page boundary keeps existing relative order
+- **WHEN** 历史页末尾与当前窗口开头属于同一 turn 或同一 activity group
+- **THEN** 当前窗口已有 entries 的相对顺序 MUST 保持不变
+- **AND** 新历史 entries MUST 只插入到其权威前置位置
 
 ### Requirement: 会话聊天性能指标可观测
 会话聊天页 SHALL 在开发和测试环境中提供可验证的性能指标或测试钩子，覆盖首屏 entries 数量、timeline store 提交次数、engine fast-path 次数、结构性 normalization 次数、index rebuild entries、可见 row 数量、delta 批处理 flush 次数和昂贵输出派生次数。
@@ -1008,7 +1025,7 @@ Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分�
 - **THEN** 客户端 MUST 在写入 TimelineEntry 前转换为毫秒
 
 ### Requirement: Prepending history preserves visible reading progress
-加载上一页后，加载前顶部可见消息 SHALL 保持相同 identity 和 viewport 像素偏移。新加载消息 MUST 只出现在当前内容上方，由用户继续上滑查看。
+加载上一页后，加载前顶部可见消息 SHALL 保持相同 identity 和 viewport 像素偏移。新加载消息 MUST 只出现在当前内容上方，由用户继续上滑查看。一次 prepend MUST 只有一个滚动锚点所有者；虚拟 Timeline 已接管锚点时，页面层 MUST NOT 再次恢复 DOM anchor。可见窗口索引 MUST 在浏览器绘制前完成修正。
 
 #### Scenario: User loads an older page at the top
 - **WHEN** 用户滚动到顶部触发历史分页
@@ -1020,6 +1037,17 @@ Timeline SHALL 使用 estimated/measured block heights 的累计索引和二分�
 - **WHEN** prepend 的 Markdown、activity 或图片在初次 commit 后继续改变高度
 - **THEN** Timeline SHALL 按原消息 identity 持续恢复锚点
 - **AND** 可见文字 MUST NOT 因延迟测量发生跳页或抖动
+
+#### Scenario: Virtual timeline owns the anchor
+- **WHEN** 长 timeline 已启用虚拟 block/layout 锚点
+- **AND** 页面加载并 prepend 更早历史
+- **THEN** 只有 Timeline MUST 写入锚点恢复后的 `scrollTop`
+- **AND** 页面 requestAnimationFrame MUST NOT 再执行第二次 DOM anchor 校正
+
+#### Scenario: Window changes before paint
+- **WHEN** prepend 使虚拟 blocks 的索引整体后移
+- **THEN** 可见 window range MUST 在浏览器绘制前同步移动到原 blocks
+- **AND** 用户 MUST NOT 短暂看到另一批历史消息后再恢复
 
 ### Requirement: Mutation responses preserve the progressive timeline window
 会话发送、resume、rename、steer、interrupt、review、fork 和 unarchive 等 mutation SHALL 只更新操作结果或 thread metadata，MUST NOT 通过响应中的完整 timeline 扩展或替换当前分页窗口。rollback 如需刷新可见消息，MUST 返回受控最新页和 cursor。
@@ -1095,8 +1123,7 @@ legacy app-server 不支持 thread-wide items 接口时，服务端 SHALL 跨多
 - **AND** MUST NOT 将未知错误伪装为空会话
 
 ### Requirement: Notices do not affect message ordering
-
-会话 notice MUST 不参与 timeline 排序、虚拟列表索引、底部自动滚动或新消息位置计算。
+会话 notice MUST 不参与 timeline 排序、虚拟列表索引、底部自动滚动或新消息位置计算。已知 app-server 模型、metadata 和长线程 warning SHALL 在 snapshot、pagination、live item、turn error 和直接 store timeline ingress 中统一迁移为 notice，MUST NOT 渲染为 `ErrorCard`。同类模型恢复 warning MUST 由最新状态覆盖旧状态。
 
 #### Scenario: Warning arrives after refresh
 - **WHEN** 页面刷新后异步收到历史 warning，随后用户发送新消息
@@ -1105,6 +1132,21 @@ legacy app-server 不支持 thread-wide items 接口时，服务端 SHALL 跨多
 #### Scenario: Notice is dismissed
 - **WHEN** 用户关闭头部 notice
 - **THEN** 仅 notice 区域更新，现有消息滚动位置和 timeline 顺序保持不变
+
+#### Scenario: Warning appears in an older page
+- **WHEN** 用户加载的历史分页包含已知模型 warning error item
+- **THEN** store MUST 在 pagination commit 中把它迁移为 thread notice
+- **AND** timeline MUST NOT 增加红色“操作失败”row 或改变滚动锚点
+
+#### Scenario: Warning arrives as a live item
+- **WHEN** `item.appended`、`item.updated` 或 completed item 携带已知 warning error entry
+- **THEN** store MUST 迁移该 entry 并保持真实 turn 状态不变
+- **AND** MUST NOT 把 warning 当作最终 turn failure
+
+#### Scenario: Latest model resume warning supersedes stale direction
+- **WHEN** 会话先收到模型 A 恢复为 B 的 warning，随后又收到模型 B 恢复为 A 的 warning
+- **THEN** notice 区域 MUST 只保留最新恢复方向
+- **AND** MUST NOT 同时展示互相矛盾的历史恢复提示
 
 ### Requirement: Cross-device running thread state converges
 会话页 SHALL 让后加入、重新加载或从后台恢复的设备收敛到同一 gateway 的当前 running turn。metadata / summary MUST 提供当前 `activeTurnId` 或等价稳定 identity；页面不得只依赖本设备之前收到的 `turn_started` event。
@@ -1147,3 +1189,76 @@ initial metadata/latest-page 响应因 live delivery、mutation epoch、HistoryS
 - **THEN** 重试 MUST 继续只读取 metadata 与 bounded latest page
 - **AND** MUST 按当前 `HistoryStamp` 去重并遵守最大重试预算
 
+### Requirement: Initial timeline read errors are retryable in place
+
+Thread 页面首屏 metadata 或 bounded timeline page 因未知连接、权限或 app-server 错误失败时，页面 SHALL 保留错误反馈并提供页内 retry。retry MUST 重新执行当前 thread 的首屏读取，不得把未知错误伪装为空会话，也不得依赖用户离开页面或浏览器刷新。
+
+#### Scenario: Retry initial page after transient failure
+
+- **WHEN** 首屏 timeline page 第一次读取失败且当前没有可见 detail
+- **THEN** 页面 MUST 显示错误反馈和 `重试` 操作
+- **AND** 点击 `重试` MUST 重新请求当前 thread 的 metadata 与 bounded latest page
+- **AND** 成功后 MUST 显示正常 empty/timeline 页面
+
+#### Scenario: Retry failure remains visible
+
+- **WHEN** 用户点击 `重试` 后请求再次失败
+- **THEN** 页面 MUST 显示最新错误反馈
+- **AND** MUST 保留 `重试` 操作
+- **AND** MUST NOT 清空或伪造 timeline detail
+
+### Requirement: 用户消息展示普通文件附件
+会话 timeline SHALL 将普通文件作为用户消息气泡内的结构化附件 chip 展示。文件 chip MUST 显示可读文件名和文件语义图标，MUST NOT 显示绝对路径，也 MUST NOT 在首版提供通用预览或下载操作。
+
+#### Scenario: 普通文件与正文属于同一消息气泡
+- **WHEN** timeline 渲染一条包含 `fileReferences` 的用户消息
+- **THEN** Skill、图片、普通文件与正文 MUST 位于同一个用户消息气泡内
+- **AND** 展示顺序 MUST 为 Skill、图片、普通文件、正文
+- **AND** timeline MUST NOT 为普通文件创建独立消息行或第二个气泡
+
+#### Scenario: 文件名适配手机宽度
+- **WHEN** 一条消息包含多个普通文件或超长文件名
+- **THEN** 文件 chip MUST 在完整 chip 之间自动换行
+- **AND** 单个文件名 MUST 省略溢出内容
+- **AND** 气泡 MUST 不产生横向滚动
+
+#### Scenario: 路径不进入可见内容
+- **WHEN** 普通文件引用包含服务端绝对路径
+- **THEN** user bubble、复制文本、无障碍名称和 tooltip MUST NOT 暴露绝对路径
+- **AND** 复制用户消息 MUST 只复制用户正文
+
+#### Scenario: 首版文件 chip 不可打开
+- **WHEN** 用户点击或长按普通文件 chip
+- **THEN** 系统 MUST NOT 导航到本地路径
+- **AND** MUST NOT 发起通用预览或下载请求
+
+### Requirement: 普通文件附件可从历史恢复
+Web SHALL 从可信 Files-mentioned 包装或结构化 timeline 元数据恢复普通文件附件。乐观消息、实时确认、snapshot repair、历史分页和页面刷新 MUST 对同一用户消息呈现一致的文件 chip。
+
+#### Scenario: 乐观消息立即显示文件
+- **WHEN** 用户发送带普通文件的消息
+- **THEN** 本地乐观消息 MUST 立即显示所有文件 chip
+- **AND** 文件顺序 MUST 与发送顺序一致
+
+#### Scenario: 服务端历史恢复文件
+- **WHEN** app-server user item 包含合法 Files-mentioned 包装
+- **THEN** Web MUST 恢复对应 `fileReferences`
+- **AND** MUST 只显示 marker 后的用户原始正文
+
+#### Scenario: 过期文件仍显示历史 chip
+- **WHEN** 历史包装中的文件本体已经被 24 小时清理器删除
+- **THEN** timeline MUST 继续显示文件名 chip
+- **AND** MUST NOT 因文件不存在而删除、隐藏或拆分该用户消息
+
+### Requirement: Timeline 更新不得重置普通文件草稿
+timeline 的 delta、repair、分页、窗口化重排和状态收敛 SHALL 与 composer 普通文件状态隔离。除非 thread 被用户切换，timeline 更新 MUST NOT 清空、重建或重复上传待发送普通文件。
+
+#### Scenario: 高频 delta 到达
+- **WHEN** 当前 turn 高频产生 agent delta
+- **AND** composer 包含待发送普通文件
+- **THEN** 普通文件队列、状态、选择顺序和文本草稿 MUST 保持不变
+
+#### Scenario: Snapshot repair replace timeline
+- **WHEN** snapshot repair 替换当前可见 timeline 窗口
+- **THEN** composer 普通文件 MUST 保持不变
+- **AND** repair MUST NOT 触发附件重新上传

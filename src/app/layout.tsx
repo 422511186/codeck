@@ -4,8 +4,8 @@ import "../web/theme/tokens.css";
 import { AppProviders } from "../web/components/AppProviders";
 
 export const metadata: Metadata = {
-  title: "Codex Web",
-  description: "移动端 Codex Web 前端"
+  title: "codeck",
+  description: "移动端 codeck 前端"
 };
 
 export const viewport: Viewport = {

@@ -192,6 +192,13 @@ export type BrowserCodexEvent =
       collaborationMode: "plan" | "default" | null;
     }
   | {
+      kind: "thread_permission_configured";
+      threadId: string;
+      permissions: string | null;
+      approvalPolicy: string | null;
+      approvalsReviewer: string | null;
+    }
+  | {
       kind: "thread_goal_updated";
       threadId: string;
       goal: BrowserThreadGoal;

@@ -65,7 +65,7 @@ export async function POST(
       structured.httpStatus === 409
     ) {
       if (rollbackAudit) {
-        await audit("thread.rollback.conflict", {
+        await auditRollbackTerminal("thread.rollback.conflict", {
           ...rollbackAudit,
           code: structured.code,
           ...(structured.code === "ROLLBACK_CONFLICT"
@@ -87,7 +87,7 @@ export async function POST(
     }
     if (structured?.code === "REPAIR_EXHAUSTED") {
       if (rollbackAudit) {
-        await audit("thread.rollback.repair_exhausted", rollbackAudit);
+        await auditRollbackTerminal("thread.rollback.repair_exhausted", rollbackAudit);
       }
       return NextResponse.json(
         {
@@ -102,5 +102,13 @@ export async function POST(
       );
     }
     return serverError(error, "无法 rollback 会话");
+  }
+}
+
+async function auditRollbackTerminal(action: string, detail: unknown): Promise<void> {
+  try {
+    await audit(action, detail);
+  } catch {
+    // The mutation already has a structured terminal result; preserve it for recovery.
   }
 }

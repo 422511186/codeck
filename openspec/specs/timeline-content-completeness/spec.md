@@ -153,3 +153,85 @@ timeline engine SHALL 按强 identity 合并正文和 completeness，并对 agen
 - **AND** MUST 保留已有正文、contentRef 与内容 completeness
 - **AND** agent、user、reasoning、diff 或 error 的空正文 MUST NOT 被视为 content complete 证据
 
+### Requirement: Full-content read results are identity-scoped
+读取完整内容的客户端 SHALL 将每次 full-content 请求绑定到发起时的 `threadId`、entry identity、`turnId` 和 `contentRef`。只有当响应返回时这些标识仍与当前可见 entry 完全匹配时，客户端 MUST 将 full-content 结果应用到本地 row/state 和 store。若任一标识已变化、entry 已被替换、thread 已切换或内容已被更高权威 snapshot/repair 取代，客户端 MUST 丢弃该响应并 MUST NOT 用过期正文覆盖当前 preview、continuation 或 completeness。
+
+#### Scenario: Content ref changes while loading
+- **WHEN** 用户开始读取某条 truncated entry 的完整内容
+- **AND** 请求返回前同一 row 被 snapshot/repair 更新为新的 `contentRef`
+- **THEN** 客户端 MUST 丢弃旧响应
+- **AND** MUST NOT 用旧正文覆盖新 preview 或 continuation
+
+#### Scenario: Thread changes while loading
+- **WHEN** 用户在 thread A 中读取完整内容
+- **AND** 响应返回前页面已切换到 thread B
+- **THEN** 客户端 MUST 丢弃 thread A 的响应
+- **AND** MUST NOT 将 thread A 的正文写回 thread B 的 store
+
+#### Scenario: Matching identity allows update
+- **WHEN** full-content 响应返回时 threadId、entry identity、turnId 和 contentRef 仍与发起时一致
+- **THEN** 客户端 MUST 原位更新该 entry 的正文和 completeness
+- **AND** MUST 保持该 entry 的可见顺序不变
+
+### Requirement: Full-content user messages update visible body
+客户端 SHALL 在 full-content 读取成功并通过 identity 校验后，将完整正文应用到所有支持文本正文的可见 timeline entry，包括 `user-message`。用户消息的可见气泡、复制内容以及后续基于该条消息的重试、rewind 和 fork 操作 MUST 使用已加载的完整正文，MUST NOT 只更新 footer 或 store 而继续显示旧 preview。
+
+#### Scenario: Truncated user message expands in place
+- **WHEN** timeline 渲染一条带 `contentRef` 的 truncated `user-message`
+- **AND** 用户点击「读取完整内容」且响应与当前 entry identity 匹配
+- **THEN** 用户消息气泡 MUST 原位显示完整正文
+- **AND** 该 entry 的 completeness MUST 变为 complete
+- **AND** timeline MUST NOT 继续显示旧 preview 作为用户消息正文
+
+#### Scenario: User message actions use loaded full text
+- **WHEN** truncated `user-message` 的完整正文已成功加载
+- **AND** 用户随后对该消息执行重发、rewind 或 fork
+- **THEN** 操作载荷 MUST 使用完整正文
+- **AND** MUST 保留原 entry 的 turn identity、图片、Skill 与普通文件附件元数据
+
+### Requirement: App-server full-content chunks use one source revision
+app-server item 的 `contentRef` SHALL 绑定可验证的正文 revision。服务端 MUST 在返回首次 chunk、相同 cursor 重试和每个 continuation chunk 前确认当前解析正文仍属于该 revision；一旦正文 revision 改变，MUST 返回 scoped `repair-required/source-revision`，MUST NOT 返回新 revision 的正文 bytes。完整 item/page source 的 revision MUST 从创建 `contentRef` 时锁定；无法在注册时取得完整正文的 source MUST 最迟在第一次成功读取时锁定，并对所有后续读取保持不变。
+
+#### Scenario: Item changes between chunks
+- **WHEN** 用户读取 app-server item 的第一段 full-content 后，同 generation 的 item 正文在下一段请求前改变
+- **THEN** continuation 请求 MUST 返回 `repair-required` 且 reason 为 `source-revision`
+- **AND** MUST NOT 返回改变后正文在旧 byte offset 处的 chunk
+
+#### Scenario: Item changes before first read
+- **WHEN** snapshot/page 或完整 item event 已创建绑定正文 revision 的 `contentRef`，且 item 在第一次请求前发生变化
+- **THEN** 第一次读取 MUST 返回 `repair-required/source-revision`
+- **AND** MUST NOT 把新正文作为旧 reference 的完整内容
+
+#### Scenario: Same cursor retry remains idempotent
+- **WHEN** source revision 未改变且客户端用相同 `contentRef` 和 cursor 重试
+- **THEN** 服务端 MUST 返回相同 byte range、正文和 next cursor
+
+### Requirement: Full-content reference caches are bounded
+服务端 SHALL 对 session 与 app-server full-content source 使用同一过期清理和数量上限，并 SHALL 对 cursor 与位置反向索引设置硬上限。淘汰 source 时 MUST 同步移除所有关联 cursor 和反向索引；淘汰后的 `contentRef` 或 cursor MUST 返回 scoped `repair-required/invalid-content-ref`，MUST NOT 回退到无界缓存或未绑定 revision 的读取。
+
+#### Scenario: Source or cursor reaches the cap
+- **WHEN** 持续的截断 item 注册 source 或 continuation 创建 cursor 超过保留上限
+- **THEN** 服务端 MUST 淘汰最旧或已过期记录并保持 source/cursor 数量有界
+- **AND** 被淘汰 source 的所有 cursor 及位置反向索引 MUST 同步删除
+
+#### Scenario: Read races with source eviction
+- **WHEN** full-content 读取已开始等待 app-server source，且并发注册淘汰了该 `contentRef`
+- **THEN** 原读取 MUST 返回 `repair-required/invalid-content-ref`
+- **AND** MUST NOT 为已淘汰 source 创建新的 cursor
+
+﻿### Requirement: Full-content rehydrate recovers missing live thread
+对 app-server content source 的 full-content 读取 SHALL 在 live thread 缺失时先 bare resume 再 rehydrate。content API MUST 在可恢复路径成功后返回正文 chunk；若 resume 后仍无法恢复 source，MUST 返回 scoped `repair-required`，MUST NOT 因 missing live thread 直接返回 502。
+
+#### Scenario: Truncated content load after cold session
+- **WHEN** 用户点击带有效 contentRef 的“读取完整内容”
+- **AND** 对应 thread 尚未 live，首次 `thread/items/list` 失败为 missing-live-thread
+- **THEN** gateway MUST bare resume thread
+- **AND** MUST 重试 rehydrate
+- **AND** 客户端 MUST 能拿到完整或后续 partial chunk
+
+#### Scenario: Missing live thread does not surface as opaque 502
+- **WHEN** content rehydrate 因 missing live thread 开始失败
+- **AND** bare resume 后仍无法恢复
+- **THEN** content API MUST 返回 200 且 chunk completeness 为 `repair-required`
+- **OR** 返回明确可诊断错误
+- **AND** MUST NOT 仅返回无上下文的 502 Bad Gateway

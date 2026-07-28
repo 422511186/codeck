@@ -1,6 +1,6 @@
 # 测试与人工验收
 
-本文档记录 Codex Web 的自动化验证、手机页面视觉检查和真实 Codex app-server 人工验收流程。
+本文档记录 codeck 的自动化验证、手机页面视觉检查和真实 Codex app-server 人工验收流程。
 
 ## 自动化验证
 

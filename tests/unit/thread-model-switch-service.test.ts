@@ -409,10 +409,7 @@ describe("ThreadModelSwitchService 成功路径", () => {
       threadId: "thread-1",
       model: "gpt-5.6-sol",
       modelProvider: "provider-current",
-      reasoningEffort: "medium",
-      permissions: null,
-      approvalPolicy: null,
-      approvalsReviewer: null
+      reasoningEffort: "medium"
     });
     await expect(fixture.bindingStore.getBinding("thread-1")).resolves.toBeNull();
   });

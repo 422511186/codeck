@@ -1,6 +1,6 @@
 # Docker 和 Docker Compose 部署
 
-本文档说明如何用预构建的 Codex Web 镜像通过 Docker 或 Docker Compose 完成自托管部署。
+本文档说明如何用预构建的 codeck 镜像通过 Docker 或 Docker Compose 完成自托管部署。
 
 只讲部署。如何构建镜像、验证和 smoke test 见仓库的开发文档，不在本文范围内。
 宿主机 tarball 部署见 `docs/release.md`。
@@ -21,12 +21,12 @@ docker pull registry.cn-shanghai.aliyuncs.com/huangzhenyu_2532/codex-web:0.1.0
 
 ## 适用范围
 
-Docker 部署推荐只把 Codex Web 放进容器：
+Docker 部署推荐只把 codeck 放进容器：
 
 - Web 容器运行 Next.js 生产产物和已编译 server。
 - Codex app-server 推荐运行在宿主机或独立进程中。
 - Web 容器通过 `CODEX_WEB_APP_SERVER_MODE=external` 连接 app-server。
-- 手机浏览器通过宿主机局域网 IP 和映射端口访问 Codex Web。
+- 手机浏览器通过宿主机局域网 IP 和映射端口访问 codeck。
 
 不建议在容器内默认 `spawn` Codex CLI。那会把 Codex 登录态、shell 环境、宿主工作区和执行权限都放入容器，需要额外镜像和权限设计。
 
@@ -37,18 +37,18 @@ Docker 部署推荐只把 Codex Web 放进容器：
 - Docker Engine 或 Docker Desktop。
 - Docker Compose v2。
 - 已安装并配置 Codex CLI，或已单独启动 Codex app-server。
-- 一个只包含你愿意让 Codex Web 操作内容的 workspace 目录。
+- 一个只包含你愿意让 codeck 操作内容的 workspace 目录。
 
 ## 安全边界
 
-Codex Web 当前是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。公网访问前必须额外配置：
+codeck 当前是个人自用模式，不包含多用户隔离、数据库权限模型或公网账号系统。公网访问前必须额外配置：
 
 - HTTPS / TLS。
 - 反向代理访问控制。
 - IP allowlist 或 VPN。
 - 更强认证策略。
 
-不要把未加保护的容器服务直接暴露到公网。`CODEX_WEB_WORKSPACE_ROOTS` 只应配置你愿意让 Codex Web 操作的目录。
+不要把未加保护的容器服务直接暴露到公网。`CODEX_WEB_WORKSPACE_ROOTS` 只应配置你愿意让 codeck 操作的目录。
 
 ## 准备环境文件
 
@@ -64,6 +64,7 @@ cp .env.docker.example .env.docker
 CODEX_WEB_ACCESS_TOKEN=替换成你的登录token
 CODEX_WEB_WORKSPACE_ROOTS=/home/你的用户名/workspace
 CODEX_WEB_UPLOAD_DIR=/var/lib/codex-web/uploads
+# 图片和普通文件附件暂存目录，应用会清理超过 24 小时的上传。
 CODEX_WEB_AUDIT_LOG_PATH=/var/log/codex-web/audit.jsonl
 CODEX_WEB_DATA_DIR=/var/lib/codex-web/data
 CODEX_WEB_BIND_HOST=0.0.0.0
@@ -227,7 +228,7 @@ docker run --rm \
 
 ## 大窗口模型前置条件
 
-自定义模型窗口默认 `200000`，可配置到 `1000000`。当窗口大于 `272000` 时，保存目录仍然允许，但新建会话、已有会话切换和重新应用配置前，模型标识必须精确存在于 app-server `model/list` 权威目录。部署侧需要在 Codex 配置中维护该目录；Codex Web 不会写入或热重载 `model_catalog_json`。
+自定义模型窗口默认 `200000`，可配置到 `1000000`。当窗口大于 `272000` 时，保存目录仍然允许，但新建会话、已有会话切换和重新应用配置前，模型标识必须精确存在于 app-server `model/list` 权威目录。部署侧需要在 Codex 配置中维护该目录；codeck 不会写入或热重载 `model_catalog_json`。
 
 ## 升级
 

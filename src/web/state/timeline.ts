@@ -1,4 +1,4 @@
-import type { SkillReference, TimelineItem, TimelineRole } from "../api/types";
+import type { FileReference, SkillReference, TimelineItem, TimelineRole } from "../api/types";
 import type { TimelineCompleteness } from "../../shared/timeline-content";
 import type { AuthoritativeTurnManifest, CanonicalSourceLocator, HistoryStamp } from "../../shared/timeline-protocol";
 import {
@@ -6,6 +6,7 @@ import {
   selectRollbackMetadataForEntry,
   selectTurnHasVisibleOutput
 } from "./timeline-engine";
+import { decodeFilesMentioned } from "../../shared/file-attachments";
 
 export type TimelineEntryKind =
   | "user-message"
@@ -74,6 +75,7 @@ export type UserMessageEntry = {
   text: string;
   imagePaths?: string[];
   skillReferences?: SkillReference[];
+  fileReferences?: FileReference[];
   status?: "sending" | "sent" | "failed";
 };
 
@@ -164,14 +166,15 @@ function normalizeUserTextAndImages(
   text: string,
   imagePaths?: string[],
   skillReferences?: SkillReference[]
-): { text: string; imagePaths?: string[]; skillReferences?: SkillReference[] } {
+): { text: string; imagePaths?: string[]; skillReferences?: SkillReference[]; fileReferences?: import("../../shared/file-attachments").FileReference[] } {
   const images = [...(imagePaths ?? [])];
   let nextText = text.replace(localImagePattern, (match) => {
     images.push(match);
     return "";
   });
 
-  nextText = visibleUserMessageText(nextText);
+  const decodedFiles = decodeFilesMentioned(nextText);
+  nextText = visibleUserMessageText(decodedFiles.text);
   const normalizedSkills = normalizeSkillReferences(skillReferences);
   const recovered = normalizedSkills.length ? { text: nextText, skillReferences: normalizedSkills } : recoverSkillReferences(nextText);
   nextText = recovered.text;
@@ -183,7 +186,8 @@ function normalizeUserTextAndImages(
   return {
     text: nextText,
     ...(images.length ? { imagePaths: Array.from(new Set(images)) } : {}),
-    ...(recovered.skillReferences.length ? { skillReferences: recovered.skillReferences } : {})
+    ...(recovered.skillReferences.length ? { skillReferences: recovered.skillReferences } : {}),
+    ...(decodedFiles.fileReferences.length ? { fileReferences: decodedFiles.fileReferences } : {})
   };
 }
 
@@ -325,6 +329,11 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
           text: normalized.text,
           ...(normalized.imagePaths?.length ? { imagePaths: normalized.imagePaths } : {}),
           ...(normalized.skillReferences?.length ? { skillReferences: normalized.skillReferences } : {}),
+          ...(item.fileReferences?.length
+            ? { fileReferences: item.fileReferences }
+            : normalized.fileReferences?.length
+              ? { fileReferences: normalized.fileReferences }
+              : {}),
           status: "sent"
         }
       };

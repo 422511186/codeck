@@ -6,7 +6,16 @@ import { useParams, useRouter } from "next/navigation";
 import { codex } from "../../../web/api/endpoints";
 import { ApiError } from "../../../web/api/client";
 import { dedupeRequest, runLockedAction } from "../../../web/api/requestCoordinator";
-import { getProject, touchProjectLastUsed, type Project } from "../../../web/storage/projects";
+import {
+  getProject,
+  listProjects,
+  removeProject,
+  renameProject,
+  saveLocalProject,
+  touchProjectLastUsed,
+  type Project
+} from "../../../web/storage/projects";
+import type { ProjectCatalog, ProjectStorage } from "../../../shared/projects";
 import { migrateLegacyDefaultModel, settingsStore } from "../../../web/storage/settings";
 import { saveJson, threadModeKey } from "../../../web/storage/localStore";
 import {
@@ -15,6 +24,7 @@ import {
   type ThreadSummary
 } from "../../../web/api/types";
 import { modelSelectionsEqual, type ModelSelection, type SelectableModel } from "../../../shared/custom-models";
+import { ActionSheet, ActionSheetItem, SwipeActionRow, UndoToast } from "../../../web/components/mobile";
 
 type Tab = "active" | "archived";
 
@@ -30,7 +40,14 @@ export default function ProjectThreadsPage(): JSX.Element {
   const [actionFor, setActionFor] = useState<{ thread: ThreadSummary; tab: Tab } | null>(null);
   const [actionPendingId, setActionPendingId] = useState<string | null>(null);
   const [startPending, setStartPending] = useState(false);
-  const suppressClickThreadId = useRef<string | null>(null);
+  const [undoToast, setUndoToast] = useState<{ threadId: string; kind: "archive" | "unarchive" } | null>(null);
+  const undoTimerRef = useRef<number | null>(null);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [projectOpPending, setProjectOpPending] = useState(false);
+  const [projectOpError, setProjectOpError] = useState<string | null>(null);
+  const [serverCatalog, setServerCatalog] = useState<ProjectCatalog | null>(null);
   const listRequestSeq = useRef(0);
 
   useEffect(() => {
@@ -39,6 +56,7 @@ export default function ProjectThreadsPage(): JSX.Element {
     if (localProject) {
       setProject(localProject);
       touchProjectLastUsed(localProject.id);
+      void codex.projectCatalog().then(setServerCatalog).catch(() => setServerCatalog(null));
       return () => {
         cancelled = true;
       };
@@ -46,6 +64,7 @@ export default function ProjectThreadsPage(): JSX.Element {
     (async () => {
       try {
         const catalog = await codex.projectCatalog();
+        setServerCatalog(catalog);
         const serverProject = catalog.projects.find((entry) => entry.id === projectId);
         if (!serverProject) {
           router.replace("/projects");
@@ -147,9 +166,26 @@ export default function ProjectThreadsPage(): JSX.Element {
     }
   }
 
-  async function submitArchiveAction(): Promise<void> {
-    if (!actionFor || actionPendingId) return;
-    const { thread, tab: actionTab } = actionFor;
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current !== null) {
+        window.clearTimeout(undoTimerRef.current);
+      }
+    };
+  }, []);
+
+  function scheduleUndoClear(): void {
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+    }
+    undoTimerRef.current = window.setTimeout(() => {
+      setUndoToast(null);
+      undoTimerRef.current = null;
+    }, 4500);
+  }
+
+  async function runThreadArchiveAction(thread: ThreadSummary, actionTab: Tab): Promise<void> {
+    if (actionPendingId) return;
     setActionPendingId(thread.id);
     setError(null);
     try {
@@ -160,10 +196,149 @@ export default function ProjectThreadsPage(): JSX.Element {
       }
       setThreads((prev) => prev.filter((item) => item.id !== thread.id));
       setActionFor(null);
+      setUndoToast({ threadId: thread.id, kind: actionTab === "archived" ? "unarchive" : "archive" });
+      scheduleUndoClear();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
       setActionPendingId(null);
+    }
+  }
+
+  async function submitArchiveAction(): Promise<void> {
+    if (!actionFor) return;
+    await runThreadArchiveAction(actionFor.thread, actionFor.tab);
+  }
+
+  async function undoLastArchiveAction(): Promise<void> {
+    if (!undoToast || actionPendingId) return;
+    const { threadId, kind } = undoToast;
+    setActionPendingId(threadId);
+    setError(null);
+    try {
+      if (kind === "archive") {
+        await codex.unarchiveThread(threadId);
+      } else {
+        await codex.archiveThread(threadId);
+      }
+      setUndoToast(null);
+      if (project) {
+        const list = await codex.listThreadsForCwd(project.path, tab === "archived");
+        setThreads(list);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : (err as Error).message);
+    } finally {
+      setActionPendingId(null);
+    }
+  }
+
+
+  function storageOf(p: Project): ProjectStorage {
+    return p.storage === "server" ? "server" : "client";
+  }
+
+  function acceptCatalogFromError(error: unknown): void {
+    if (!(error instanceof ApiError) || typeof error.body !== "object" || error.body === null) return;
+    const body = error.body as Partial<ProjectCatalog>;
+    if (
+      typeof body.revision === "number" &&
+      (body.defaultStorage === "client" || body.defaultStorage === "server") &&
+      Array.isArray(body.projects)
+    ) {
+      setServerCatalog({
+        revision: body.revision,
+        defaultStorage: body.defaultStorage,
+        projects: body.projects
+      });
+    }
+  }
+
+  async function renameCurrentProject(name: string): Promise<void> {
+    if (!project || !name.trim()) return;
+    setProjectOpPending(true);
+    setProjectOpError(null);
+    try {
+      if (storageOf(project) === "client") {
+        renameProject(project.id, name.trim());
+        setProject({ ...project, name: name.trim() });
+      } else {
+        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
+        const catalog = await codex.renameServerProject(project.id, name.trim(), serverCatalog.revision);
+        setServerCatalog(catalog);
+        const updated = catalog.projects.find((entry) => entry.id === project.id);
+        if (updated) setProject(updated);
+      }
+      setRenameOpen(false);
+      setProjectMenuOpen(false);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setProjectOpError(error instanceof Error ? error.message : "重命名项目失败");
+    } finally {
+      setProjectOpPending(false);
+    }
+  }
+
+  async function moveCurrentProject(): Promise<void> {
+    if (!project || !serverCatalog) return;
+    setProjectOpPending(true);
+    setProjectOpError(null);
+    try {
+      if (storageOf(project) === "client") {
+        const catalog = await codex.createServerProject(
+          {
+            id: project.id,
+            name: project.name,
+            path: project.path,
+            addedAt: project.addedAt,
+            lastUsedAt: project.lastUsedAt
+          },
+          serverCatalog.revision
+        );
+        removeProject(project.id);
+        setServerCatalog(catalog);
+        const updated = catalog.projects.find((entry) => entry.id === project.id);
+        if (updated) setProject(updated);
+      } else {
+        saveLocalProject(project);
+        try {
+          const catalog = await codex.deleteServerProject(project.id, serverCatalog.revision);
+          setServerCatalog(catalog);
+          const local = listProjects().find((entry) => entry.id === project.id) ?? { ...project, storage: "client" as const };
+          setProject(local);
+        } catch (error) {
+          removeProject(project.id);
+          throw error;
+        }
+      }
+      setProjectMenuOpen(false);
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setProjectOpError(error instanceof Error ? error.message : "修改存储位置失败");
+    } finally {
+      setProjectOpPending(false);
+    }
+  }
+
+  async function removeCurrentProject(): Promise<void> {
+    if (!project) return;
+    const ok = window.confirm(`确定从列表移除「${project.name}」？不会删除工作区文件。`);
+    if (!ok) return;
+    setProjectOpPending(true);
+    setProjectOpError(null);
+    try {
+      if (storageOf(project) === "client") {
+        removeProject(project.id);
+      } else {
+        if (!serverCatalog) throw new Error("服务端项目目录当前不可用");
+        await codex.deleteServerProject(project.id, serverCatalog.revision);
+      }
+      router.replace("/projects");
+    } catch (error) {
+      acceptCatalogFromError(error);
+      setProjectOpError(error instanceof Error ? error.message : "移除项目失败");
+    } finally {
+      setProjectOpPending(false);
     }
   }
 
@@ -198,6 +373,24 @@ export default function ProjectThreadsPage(): JSX.Element {
             {project.path}
           </div>
         </div>
+      
+        <button
+          type="button"
+          aria-label="项目设置"
+          onClick={() => {
+            setProjectOpError(null);
+            setProjectMenuOpen(true);
+          }}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "var(--cw-fg-muted)",
+            fontSize: 14,
+            padding: "6px 8px"
+          }}
+        >
+          设置
+        </button>
       </header>
 
       <div
@@ -241,16 +434,17 @@ export default function ProjectThreadsPage(): JSX.Element {
               <ThreadRow
                 key={t.id}
                 thread={t}
-                onClick={() => {
-                  if (suppressClickThreadId.current === t.id) {
-                    suppressClickThreadId.current = null;
+                tab={tab}
+                actionPending={actionPendingId === t.id}
+                onOpen={() => {
+                  if (tab === "archived") {
+                    setActionFor({ thread: t, tab });
                     return;
                   }
                   router.push(`/threads/${t.id}`);
                 }}
-                onLongPress={() => {
-                  suppressClickThreadId.current = t.id;
-                  setActionFor({ thread: t, tab });
+                onSwipeAction={() => {
+                  void runThreadArchiveAction(t, tab);
                 }}
               />
             ))}
@@ -289,6 +483,114 @@ export default function ProjectThreadsPage(): JSX.Element {
           }}
           onSubmit={submitArchiveAction}
         />
+      ) : null}
+      {undoToast ? (
+        <UndoToast
+          message={undoToast.kind === "archive" ? "已归档" : "已移出归档"}
+          onUndo={() => {
+            void undoLastArchiveAction();
+          }}
+          onDismiss={() => setUndoToast(null)}
+        />
+      ) : null}
+    
+      {projectMenuOpen ? (
+        <ActionSheet
+          title={project.name}
+          onClose={() => {
+            if (!projectOpPending) setProjectMenuOpen(false);
+          }}
+          aria-label="项目操作"
+        >
+          {projectOpError ? (
+            <div style={{ color: "var(--cw-danger)", fontSize: 13, padding: "4px 8px 8px" }}>{projectOpError}</div>
+          ) : null}
+          <ActionSheetItem
+            label="重命名"
+            disabled={projectOpPending || (storageOf(project) === "server" && !serverCatalog)}
+            onClick={() => {
+              setRenameValue(project.name);
+              setRenameOpen(true);
+              setProjectMenuOpen(false);
+            }}
+          />
+          <ActionSheetItem
+            label={storageOf(project) === "server" ? "改为仅当前设备" : "保存到服务端"}
+            disabled={projectOpPending || !serverCatalog}
+            onClick={() => {
+              void moveCurrentProject();
+            }}
+          />
+          <ActionSheetItem
+            label="从列表移除"
+            tone="danger"
+            divided
+            disabled={projectOpPending || (storageOf(project) === "server" && !serverCatalog)}
+            onClick={() => {
+              void removeCurrentProject();
+            }}
+          />
+          <ActionSheetItem
+            label="取消"
+            divided
+            disabled={projectOpPending}
+            onClick={() => setProjectMenuOpen(false)}
+          />
+        </ActionSheet>
+      ) : null}
+      {renameOpen ? (
+        <ActionSheet
+          title="重命名项目"
+          align="center"
+          onClose={() => {
+            if (!projectOpPending) setRenameOpen(false);
+          }}
+        >
+          <input
+            value={renameValue}
+            onChange={(event) => setRenameValue(event.target.value)}
+            autoFocus
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid var(--cw-border)",
+              background: "var(--cw-bg)",
+              color: "var(--cw-fg)",
+              fontSize: 16
+            }}
+          />
+          {projectOpError ? (
+            <div style={{ color: "var(--cw-danger)", fontSize: 13 }}>{projectOpError}</div>
+          ) : null}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 8 }}>
+            <button
+              type="button"
+              disabled={projectOpPending}
+              onClick={() => setRenameOpen(false)}
+              style={{ padding: "8px 12px", border: "none", background: "transparent", color: "var(--cw-fg)" }}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={projectOpPending || !renameValue.trim()}
+              onClick={() => {
+                void renameCurrentProject(renameValue);
+              }}
+              style={{
+                padding: "8px 14px",
+                border: "none",
+                borderRadius: 10,
+                background: "var(--cw-accent)",
+                color: "#fff"
+              }}
+            >
+              保存
+            </button>
+          </div>
+        </ActionSheet>
       ) : null}
     </main>
   );
@@ -372,110 +674,73 @@ function TabButton({
 
 function ThreadRow({
   thread,
-  onClick,
-  onLongPress
+  tab,
+  actionPending,
+  onOpen,
+  onSwipeAction
 }: {
   thread: ThreadSummary;
-  onClick: () => void;
-  onLongPress: () => void;
+  tab: Tab;
+  actionPending: boolean;
+  onOpen: () => void;
+  onSwipeAction: () => void;
 }): JSX.Element {
   const running = thread.status === "running";
   const title = thread.title || "新会话";
   const preview = thread.preview || "";
   const time = useMemo(() => formatRelative(thread.updatedAt), [thread.updatedAt]);
-  const timerRef = useRef<number | null>(null);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-  const longPressedRef = useRef(false);
-
-  function clearPressTimer(): void {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  useEffect(() => clearPressTimer, []);
-
-  function handlePointerDown(event: React.PointerEvent<HTMLLIElement>): void {
-    if (event.button !== 0) return;
-    clearPressTimer();
-    longPressedRef.current = false;
-    startRef.current = { x: event.clientX, y: event.clientY };
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
-      longPressedRef.current = true;
-      onLongPress();
-    }, 500);
-  }
-
-  function handlePointerMove(event: React.PointerEvent<HTMLLIElement>): void {
-    const start = startRef.current;
-    if (!start) return;
-    const dx = Math.abs(event.clientX - start.x);
-    const dy = Math.abs(event.clientY - start.y);
-    if (dx > 8 || dy > 8) {
-      clearPressTimer();
-      startRef.current = null;
-    }
-  }
-
-  function handlePointerEnd(): void {
-    clearPressTimer();
-    startRef.current = null;
-  }
-
-  function handleClick(): void {
-    if (longPressedRef.current) {
-      longPressedRef.current = false;
-      return;
-    }
-    onClick();
-  }
+  const actionLabel = tab === "archived" ? "移出归档" : "归档";
 
   return (
-    <li
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerEnd}
-      onPointerCancel={handlePointerEnd}
-      onPointerLeave={handlePointerEnd}
-      onClick={handleClick}
-      style={{
-        background: "var(--cw-card)",
-        border: "1px solid var(--cw-border)",
-        borderRadius: 12,
-        padding: 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        userSelect: "none"
-      }}
-    >
-      <div
+    <li style={{ listStyle: "none" }}>
+      <SwipeActionRow
+        action={{
+          label: actionLabel,
+          onClick: onSwipeAction,
+          tone: tab === "archived" ? "default" : "danger",
+          disabled: actionPending
+        }}
+        onContentClick={onOpen}
+        disabled={actionPending}
         style={{
-          fontWeight: 600,
-          fontSize: 15,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap"
+          border: "1px solid var(--cw-border)",
+          borderRadius: 12
+        }}
+        contentStyle={{
+          borderRadius: 12,
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          userSelect: "none"
         }}
       >
-        {title}
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          color: "var(--cw-fg-muted)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap"
-        }}
-      >
-        {preview || "（暂无消息）"}
-      </div>
-      <div style={{ fontSize: 12, color: running ? "var(--cw-accent)" : "var(--cw-fg-subtle)" }}>
-        {running ? "正在运行" : time}
-      </div>
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: 15,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: "var(--cw-fg-muted)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          }}
+        >
+          {preview || "（暂无消息）"}
+        </div>
+        <div style={{ fontSize: 12, color: running ? "var(--cw-accent)" : "var(--cw-fg-subtle)" }}>
+          {running ? "正在运行" : time}
+        </div>
+      </SwipeActionRow>
     </li>
   );
 }
@@ -495,53 +760,15 @@ function ThreadActionSheet({
   const label = isArchived ? "移出归档" : "归档";
   const title = action.thread.title || "新会话";
   return (
-    <Backdrop onClose={onClose} align="bottom">
-      <div style={bottomSheetStyle}>
-        <div style={{ fontSize: 13, color: "var(--cw-fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {title}
-        </div>
-        <button
-          type="button"
-          disabled={pending}
-          style={{ ...sheetItem, color: isArchived ? "var(--cw-fg)" : "var(--cw-danger)", opacity: pending ? 0.6 : 1 }}
-          onClick={onSubmit}
-        >
-          {pending ? `${label}中…` : label}
-        </button>
-        <button type="button" disabled={pending} style={{ ...sheetItem, opacity: pending ? 0.6 : 1 }} onClick={onClose}>
-          取消
-        </button>
-      </div>
-    </Backdrop>
-  );
-}
-
-function Backdrop({
-  onClose,
-  align = "center",
-  children
-}: {
-  onClose: () => void;
-  align?: "center" | "bottom";
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: align === "bottom" ? "flex-end" : "center",
-        justifyContent: "center",
-        zIndex: 50
-      }}
-    >
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}>
-        {children}
-      </div>
-    </div>
+    <ActionSheet title={title} onClose={onClose} aria-label="会话操作">
+      <ActionSheetItem
+        label={pending ? `${label}中…` : label}
+        tone={isArchived ? "default" : "danger"}
+        disabled={pending}
+        onClick={onSubmit}
+      />
+      <ActionSheetItem label="取消" divided disabled={pending} onClick={onClose} />
+    </ActionSheet>
   );
 }
 

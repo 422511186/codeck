@@ -1,5 +1,6 @@
 import {
   audit,
+  badRequest,
   getAppServerGateway,
   ok,
   readJsonRecord,
@@ -25,19 +26,20 @@ export async function POST(
     }
 
     const body = await readJsonRecord(request);
-    const hasRawResponse = Object.prototype.hasOwnProperty.call(body, "response");
-    if (!hasRawResponse && typeof body.value !== "string") {
+    if (typeof body.value !== "string") {
       throw new RouteValidationError("value 无效");
     }
 
-    await audit("request.resolve", hasRawResponse ? { requestId: id, mode: "raw" } : { requestId: id, value: body.value });
-    await getAppServerGateway().resolveServerRequest(
-      id,
-      typeof body.value === "string" ? body.value : "",
-      hasRawResponse ? { response: body.response } : undefined
-    );
+    await audit("request.resolve", { requestId: id, value: body.value });
+    await getAppServerGateway().resolveServerRequest(id, body.value);
     return ok();
   } catch (error) {
+    const structured = typeof error === "object" && error !== null
+      ? error as { httpStatus?: unknown }
+      : null;
+    if (structured?.httpStatus === 400) {
+      return badRequest(error instanceof Error ? error.message : "审批选项无效或已过期");
+    }
     return serverError(error, "无法处理请求");
   }
 }

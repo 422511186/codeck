@@ -7,12 +7,17 @@ import {
   setContextUsage as saveContextUsageSnapshot,
   type ContextUsageSnapshot
 } from "../storage/contextUsage";
-import { loadJson, saveJson, threadNoticeDismissalsKey } from "../storage/localStore";
+import {
+  loadJson,
+  saveJson,
+  threadNoticeDismissalsKey,
+  threadPermissionProfileKey
+} from "../storage/localStore";
 import { diffEntryFromText, timelineItemToEntry, type TimelineEntry, type ToolEntry } from "./timeline";
 import {
+  appServerWarningNotice,
   extractLegacyWarningNotices,
-  isLegacyAppServerWarningText,
-  normalizedLegacyAppServerWarningText
+  isLegacyAppServerWarningText
 } from "./timeline-adapter";
 import {
   applyTimelineInput,
@@ -160,6 +165,9 @@ export type ThreadState = {
   permissionProfileId?: string | null;
   approvalPolicy?: ApprovalPolicy | null;
   approvalsReviewer?: ApprovalsReviewer | null;
+  runtimePermissionProfileId?: string | null;
+  runtimeApprovalPolicy?: string | null;
+  runtimeApprovalsReviewer?: string | null;
   activeTurnId: string | null;
   lastSeenItemId: string | null;
   contextUsage: ContextUsageSnapshot | null;
@@ -203,6 +211,7 @@ type Actions = {
   upsertThreadNotice: (threadId: string, notice: ThreadNoticeInput) => void;
   dismissThreadNotice: (threadId: string, noticeId: string) => void;
   replaceOrAddEntry: (threadId: string, entry: TimelineEntry, revision?: number, eventId?: string) => void;
+  removeEntry: (threadId: string, entryId: string) => void;
   appendTextToEntry: (threadId: string, entry: TimelineEntry) => void;
   startReasoningEntry: (
     threadId: string,
@@ -244,6 +253,12 @@ type Actions = {
     profileId: string | null | undefined,
     approvalPolicy?: ApprovalPolicy | null,
     approvalsReviewer?: ApprovalsReviewer | null
+  ) => void;
+  setRuntimePermissionProfile: (
+    threadId: string,
+    profileId: string | null | undefined,
+    approvalPolicy?: string | null,
+    approvalsReviewer?: string | null
   ) => void;
   setContextUsage: (threadId: string, usage: ContextUsageSnapshot) => void;
   setPlan: (threadId: string, plan: Array<{ text: string; completed: boolean }>) => void;
@@ -298,6 +313,9 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     permissionProfileId: undefined,
     approvalPolicy: undefined,
     approvalsReviewer: undefined,
+    runtimePermissionProfileId: undefined,
+    runtimeApprovalPolicy: undefined,
+    runtimeApprovalsReviewer: undefined,
     activeTurnId: null,
     lastSeenItemId: null,
     contextUsage: null,
@@ -397,11 +415,17 @@ export const useStore = create<State & Actions>((set, get) => ({
   setThreadEntries: (threadId, entries, cursor, detailEntries = []) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
-      const snapshotEngine = reduceThreadTimelineState(prev, { kind: "snapshot-window", entries, cursor });
-      const reducedEngine = detailEntries.length
+      const snapshotIngress = migrateTimelineIngress(threadId, prev.notices, entries);
+      const detailIngress = migrateTimelineIngress(threadId, snapshotIngress.notices, detailEntries);
+      const snapshotEngine = reduceThreadTimelineState(prev, {
+        kind: "snapshot-window",
+        entries: snapshotIngress.entries,
+        cursor
+      });
+      const reducedEngine = detailIngress.entries.length
         ? applyTimelineInput(snapshotEngine, {
             kind: "live-event-batch",
-            inputs: detailEntries.map((entry) => ({ kind: "turn-item-detail" as const, entry }))
+            inputs: detailIngress.entries.map((entry) => ({ kind: "turn-item-detail" as const, entry }))
           })
         : snapshotEngine;
       const nextEntries = reducedEngine.entries;
@@ -413,6 +437,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             {
               ...prev,
               timelineEngine,
+              notices: detailIngress.notices,
               cursor,
               reachedBeginning: cursor === null,
               timelineGeneration: timelineEngine.generation,
@@ -430,9 +455,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   mergeThreadEntries: (threadId, entries, cursor) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "snapshot-merge",
-        entries,
+        entries: ingress.entries,
         cursor
       });
       const nextEntries = timelineEngine.entries;
@@ -443,6 +469,7 @@ export const useStore = create<State & Actions>((set, get) => ({
             {
               ...prev,
               timelineEngine,
+              notices: ingress.notices,
               cursor,
               reachedBeginning: cursor === null,
               timelineGeneration: timelineEngine.generation,
@@ -460,38 +487,28 @@ export const useStore = create<State & Actions>((set, get) => ({
       const prev = state.threads[threadId] ?? emptyThread();
       const replacement = replaceLatestTimelineWindow(prev.entries, entries, window);
       if (!replacement) return state;
+      const ingress = migrateTimelineIngress(threadId, prev.notices, replacement);
       const timelineEngine = applyTimelineInput(currentTimelineEngine(prev), {
         kind: "snapshot-window",
-        entries: replacement,
+        entries: ingress.entries,
         cursor,
         generation: window.historyStamp.generation
       });
-      const extracted = extractLegacyWarningNotices(timelineEngine.entries);
-      const migratedTimelineEngine = extracted.notices.length
-        ? applyTimelineInput(timelineEngine, {
-            kind: "rollback-fork-replace",
-            entries: extracted.entries,
-            generation: timelineEngine.generation
-          })
-        : timelineEngine;
       applied = true;
       return {
         threads: {
           ...state.threads,
           [threadId]: indexedThreadState({
             ...prev,
-            timelineEngine: migratedTimelineEngine,
-            notices: mergeThreadNotices(
-              prev.notices,
-              extracted.notices.filter((notice) => !loadDismissedThreadNoticeIds(threadId).has(notice.id))
-            ),
+            timelineEngine,
+            notices: ingress.notices,
             cursor,
             reachedBeginning: cursor === null,
             timelineGeneration: window.historyStamp.generation,
-            processedEventIds: migratedTimelineEngine.processedEventIds,
-            itemRevisions: migratedTimelineEngine.itemRevisions,
-            snapshotDeltaSuppressions: migratedTimelineEngine.snapshotDeltaSuppressions
-          }, migratedTimelineEngine.entries)
+            processedEventIds: timelineEngine.processedEventIds,
+            itemRevisions: timelineEngine.itemRevisions,
+            snapshotDeltaSuppressions: timelineEngine.snapshotDeltaSuppressions
+          }, timelineEngine.entries)
         }
       };
     });
@@ -500,9 +517,10 @@ export const useStore = create<State & Actions>((set, get) => ({
   prependEntries: (threadId, entries, cursor, reachedBeginning) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "pagination-page",
-        entries,
+        entries: ingress.entries,
         cursor,
         reachedBeginning
       });
@@ -510,16 +528,23 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine, cursor, reachedBeginning }, nextEntries)
+          [threadId]: indexedThreadState({
+            ...prev,
+            timelineEngine,
+            notices: ingress.notices,
+            cursor,
+            reachedBeginning
+          }, nextEntries)
         }
       };
     }),
   appendEntries: (threadId, entries) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, entries);
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "live-event-batch",
-        inputs: entries.map((entry) => ({
+        inputs: ingress.entries.map((entry) => ({
           kind: entry.body.kind === "user-message" && entry.body.status === "sending"
             ? "optimistic-user" as const
             : "overlay-item" as const,
@@ -531,7 +556,12 @@ export const useStore = create<State & Actions>((set, get) => ({
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine, lastSeenItemId: last }, nextEntries)
+          [threadId]: indexedThreadState({
+            ...prev,
+            timelineEngine,
+            notices: ingress.notices,
+            lastSeenItemId: last
+          }, nextEntries)
         }
       };
     }),
@@ -572,9 +602,20 @@ export const useStore = create<State & Actions>((set, get) => ({
   replaceOrAddEntry: (threadId, entry, revision, eventId) =>
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
+      const ingress = migrateTimelineIngress(threadId, prev.notices, [entry]);
+      const migratedEntry = ingress.entries[0];
+      if (!migratedEntry) {
+        if (ingress.notices === prev.notices) return state;
+        return {
+          threads: {
+            ...state.threads,
+            [threadId]: { ...prev, notices: ingress.notices }
+          }
+        };
+      }
       const timelineEngine = reduceThreadTimelineState(prev, {
         kind: "completed-item",
-        entry,
+        entry: migratedEntry,
         ...(eventId ? { eventId } : {}),
         ...(typeof revision === "number" ? { revision } : {})
       });
@@ -584,17 +625,31 @@ export const useStore = create<State & Actions>((set, get) => ({
           ...state.threads,
           [threadId]: indexedThreadState(
             {
-            ...prev,
-            timelineEngine,
-            timelineGeneration: timelineEngine.generation,
-            localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
-              normalizedEntries,
-              prev.localUserMessageIdsByTurn
-            ),
-            lastSeenItemId: entry.id
+              ...prev,
+              timelineEngine,
+              notices: ingress.notices,
+              timelineGeneration: timelineEngine.generation,
+              localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
+                normalizedEntries,
+                prev.localUserMessageIdsByTurn
+              ),
+              lastSeenItemId: migratedEntry.id
             },
             normalizedEntries
           )
+        }
+      };
+    }),
+  removeEntry: (threadId, entryId) =>
+    set((state) => {
+      const prev = state.threads[threadId];
+      if (!prev) return state;
+      const timelineEngine = reduceThreadTimelineState(prev, { kind: "remove-entry", entryId });
+      if (timelineEngine === prev.timelineEngine) return state;
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
         }
       };
     }),
@@ -966,7 +1021,22 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
       };
     }),
-  setPermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) =>
+  setPermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) => {
+    const current = get().threads[threadId] ?? emptyThread();
+    const nextApprovalPolicy = approvalPolicy === undefined ? current.approvalPolicy : approvalPolicy;
+    const nextApprovalsReviewer =
+      approvalsReviewer === undefined ? current.approvalsReviewer : approvalsReviewer;
+    if (
+      profileId !== undefined &&
+      nextApprovalPolicy !== undefined &&
+      nextApprovalsReviewer !== undefined
+    ) {
+      saveJson(threadPermissionProfileKey(threadId), {
+        permissions: profileId,
+        approvalPolicy: nextApprovalPolicy,
+        approvalsReviewer: nextApprovalsReviewer
+      });
+    }
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
       return {
@@ -977,6 +1047,25 @@ export const useStore = create<State & Actions>((set, get) => ({
             permissionProfileId: profileId,
             approvalPolicy: approvalPolicy === undefined ? prev.approvalPolicy : approvalPolicy,
             approvalsReviewer: approvalsReviewer === undefined ? prev.approvalsReviewer : approvalsReviewer
+          }
+        }
+      };
+    });
+  },
+  setRuntimePermissionProfile: (threadId, profileId, approvalPolicy, approvalsReviewer) =>
+    set((state) => {
+      const prev = state.threads[threadId] ?? emptyThread();
+      return {
+        threads: {
+          ...state.threads,
+          [threadId]: {
+            ...prev,
+            runtimePermissionProfileId:
+              profileId === undefined ? prev.runtimePermissionProfileId : profileId,
+            runtimeApprovalPolicy:
+              approvalPolicy === undefined ? prev.runtimeApprovalPolicy : approvalPolicy,
+            runtimeApprovalsReviewer:
+              approvalsReviewer === undefined ? prev.runtimeApprovalsReviewer : approvalsReviewer
           }
         }
       };
@@ -998,10 +1087,17 @@ export const useStore = create<State & Actions>((set, get) => ({
       const normalizedReq = normalizePendingRequest(req);
       const prev = state.threads[threadId] ?? emptyThread();
       if (prev.pendingApprovals.some((r) => r.requestId === normalizedReq.requestId)) return state;
+      const mismatchNotice = permissionMismatchNotice(threadId, prev, normalizedReq);
       return {
         threads: {
           ...state.threads,
-          [threadId]: { ...prev, pendingApprovals: [...prev.pendingApprovals, normalizedReq] }
+          [threadId]: {
+            ...prev,
+            notices: mismatchNotice
+              ? mergeThreadNotices(prev.notices, [mismatchNotice])
+              : prev.notices,
+            pendingApprovals: [...prev.pendingApprovals, normalizedReq]
+          }
         }
       };
     }),
@@ -1018,7 +1114,14 @@ export const useStore = create<State & Actions>((set, get) => ({
       const nextThreads = { ...state.threads };
       for (const [tid, list] of byThread) {
         const prev = nextThreads[tid] ?? emptyThread();
-        nextThreads[tid] = { ...prev, pendingApprovals: list };
+        const mismatchNotices = list
+          .map((request) => permissionMismatchNotice(tid, prev, request))
+          .filter((notice): notice is ThreadNoticeInput => notice !== null);
+        nextThreads[tid] = {
+          ...prev,
+          notices: mergeThreadNotices(prev.notices, mismatchNotices),
+          pendingApprovals: list
+        };
       }
       return { threads: nextThreads };
     }),
@@ -1232,26 +1335,14 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         case "warning": {
           const message = typeof ev.message === "string" ? ev.message : "收到配置提示";
-          const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
-          get().upsertThreadNotice(threadId, {
-            id: `app-server-warning:${noticeText}`,
-            kind: "warning",
-            source: "app-server",
-            text: noticeText
-          });
+          get().upsertThreadNotice(threadId, appServerWarningNotice(message));
           break;
         }
         case "turn_error": {
           const turnId = typeof ev.turnId === "string" ? ev.turnId : threadId;
           const message = typeof ev.message === "string" ? ev.message : "运行失败";
           if (isLegacyAppServerWarningText(message)) {
-            const noticeText = normalizedLegacyAppServerWarningText(message) ?? message;
-            get().upsertThreadNotice(threadId, {
-              id: `app-server-warning:${noticeText}`,
-              kind: "warning",
-              source: "app-server",
-              text: noticeText
-            });
+            get().upsertThreadNotice(threadId, appServerWarningNotice(message));
             break;
           }
           if (ev.willRetry === true) {
@@ -1285,17 +1376,34 @@ export const useStore = create<State & Actions>((set, get) => ({
           if ("activePermissionProfile" in ev) {
             const activeProfile = ev.activePermissionProfile as { id?: unknown } | null;
             const profileId = activeProfile && typeof activeProfile.id === "string" ? activeProfile.id : null;
-            const approvalPolicy = "approvalPolicy" in ev ? approvalPolicyOrUndefined(ev.approvalPolicy) : undefined;
-            const reviewer = "approvalsReviewer" in ev ? approvalsReviewerOrUndefined(ev.approvalsReviewer) : undefined;
-            const current = get().threads[threadId];
-            const complete = approvalPolicy !== undefined && reviewer !== undefined;
-            const currentComplete =
-              current?.permissionProfileId !== undefined &&
-              current.approvalPolicy !== undefined &&
-              current.approvalsReviewer !== undefined;
-            if (complete || !currentComplete) {
-              get().setPermissionProfile(threadId, profileId, approvalPolicy, reviewer);
-            }
+            const approvalPolicy = ev.approvalPolicy === null
+              ? null
+              : typeof ev.approvalPolicy === "string"
+                ? ev.approvalPolicy
+                : undefined;
+            const reviewer = ev.approvalsReviewer === null
+              ? null
+              : typeof ev.approvalsReviewer === "string"
+                ? ev.approvalsReviewer
+                : undefined;
+            get().setRuntimePermissionProfile(threadId, profileId, approvalPolicy, reviewer);
+          }
+          break;
+        }
+        case "thread_permission_configured": {
+          const permissions = ev.permissions === null
+            ? null
+            : typeof ev.permissions === "string"
+              ? ev.permissions
+              : undefined;
+          const approvalPolicy = approvalPolicyOrUndefined(ev.approvalPolicy);
+          const reviewer = approvalsReviewerOrUndefined(ev.approvalsReviewer);
+          if (
+            permissions !== undefined &&
+            approvalPolicy !== undefined &&
+            reviewer !== undefined
+          ) {
+            get().setPermissionProfile(threadId, permissions, approvalPolicy, reviewer);
           }
           break;
         }
@@ -1531,6 +1639,25 @@ function mergeThreadNotices(existing: ThreadNotice[], incoming: ThreadNoticeInpu
     });
   }
   return [...merged.values()];
+}
+
+function migrateTimelineIngress(
+  threadId: string,
+  existingNotices: ThreadNotice[],
+  entries: TimelineEntry[]
+): { entries: TimelineEntry[]; notices: ThreadNotice[] } {
+  const extracted = extractLegacyWarningNotices(entries);
+  if (!extracted.notices.length) {
+    return { entries: extracted.entries, notices: existingNotices };
+  }
+  const dismissed = loadDismissedThreadNoticeIds(threadId);
+  return {
+    entries: extracted.entries,
+    notices: mergeThreadNotices(
+      existingNotices,
+      extracted.notices.filter((notice) => !dismissed.has(notice.id))
+    )
+  };
 }
 
 function loadDismissedThreadNoticeIds(threadId: string): Set<string> {
@@ -2102,6 +2229,32 @@ function normalizePendingRequest(req: PendingServerRequest): PendingServerReques
     ...req,
     requestId: String(req.requestId),
     request: req.request ?? (typeof req.params === "object" && req.params !== null ? (req.params as Record<string, unknown>) : {})
+  };
+}
+
+function permissionMismatchNotice(
+  threadId: string,
+  thread: ThreadState,
+  request: PendingServerRequest
+): ThreadNoticeInput | null {
+  if (
+    request.kind !== "command_approval" ||
+    thread.permissionProfileId !== ":danger-full-access" ||
+    thread.approvalPolicy !== "never"
+  ) {
+    return null;
+  }
+  const requestPayload = request.request ?? {};
+  const turnId = request.turnId ??
+    (typeof requestPayload.turnId === "string" ? requestPayload.turnId : null) ??
+    thread.activeTurnId ??
+    "unknown-turn";
+  const reviewer = thread.approvalsReviewer ?? "none";
+  return {
+    id: `permission-configuration-mismatch:${threadId}:${turnId}:${thread.permissionProfileId}:never:${reviewer}`,
+    kind: "warning",
+    source: "permission-configuration",
+    text: "权限配置未生效：当前配置为完全访问权限，但 app-server 仍要求命令审批。本次操作仍需你确认。"
   };
 }
 

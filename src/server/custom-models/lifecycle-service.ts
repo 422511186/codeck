@@ -36,6 +36,11 @@ type LifecycleGateway = Pick<
 
 type SwitchGuard = Pick<ThreadModelSwitchService, "ensurePendingOperationRecovered">;
 
+type PermissionRuntimeOverrides = Pick<
+  ThreadRuntimeOverrides,
+  "permissions" | "approvalPolicy" | "approvalsReviewer"
+>;
+
 type LifecycleServiceOptions = {
   catalogStore: CustomModelCatalogStore;
   bindingStore: ThreadModelBindingStore;
@@ -297,11 +302,14 @@ export class ThreadModelLifecycleService {
     };
   }
 
-  async resumeThread(threadId: string): Promise<MobileThreadDetail> {
+  async resumeThread(
+    threadId: string,
+    permissionOverrides: PermissionRuntimeOverrides = {}
+  ): Promise<MobileThreadDetail> {
     await this.ensureThreadReady(threadId);
     const binding = await this.options.bindingStore.getBinding(threadId);
     if (!binding) {
-      const thread = await this.options.gateway.resumeThread(threadId);
+      const thread = await this.options.gateway.resumeThread(threadId, permissionOverrides);
       assertThreadIdentity(thread, threadId);
       if (!thread.model) {
         return thread;
@@ -322,7 +330,8 @@ export class ThreadModelLifecycleService {
       model: binding.model,
       modelProvider: provider,
       modelContextWindow: binding.contextWindow,
-      reasoningEffort: binding.reasoningEffort
+      reasoningEffort: binding.reasoningEffort,
+      ...permissionOverrides
     };
     let thread = await this.options.gateway.resumeThread(threadId, overrides);
     assertThreadIdentity(thread, threadId);
