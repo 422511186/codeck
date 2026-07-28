@@ -40,7 +40,7 @@ TBD - created by archiving change add-custom-model-catalog. Update Purpose after
 - **AND** MUST 继续允许完整替换和删除已有模型
 
 ### Requirement: Versioned shared catalog persistence
-自定义模型目录 SHALL 是 Codex Web 部署级全局资源，连接同一实例的所有已认证设备 MUST 共享读写。后端 MUST 将 `{schemaVersion, revision, models}` 保存到专用可配置数据目录中的独立 JSON 文件，并使用进程锁、锁内重读、临时文件和原子替换完成写入。
+自定义模型目录 SHALL 是 codeck 部署级全局资源，连接同一实例的所有已认证设备 MUST 共享读写。后端 MUST 将 `{schemaVersion, revision, models}` 保存到专用可配置数据目录中的独立 JSON 文件，并使用进程锁、锁内重读、临时文件和原子替换完成写入。
 
 #### Scenario: Successful catalog mutation is atomic
 - **WHEN** 校验和修订号检查通过

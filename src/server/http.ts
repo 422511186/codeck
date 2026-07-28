@@ -19,7 +19,7 @@ const app = next({ dev });
 const config = getRuntimeConfig();
 
 if (config.generatedAccessToken) {
-  console.log(`Codex Web 临时登录 token: ${config.accessToken}`);
+  console.log(`codeck 临时登录 token: ${config.accessToken}`);
 }
 
 await app.prepare();
@@ -38,5 +38,5 @@ attachBrowserWebSocket(server, handleUpgrade, {
 });
 
 server.listen(config.bindPort, config.bindHost, () => {
-  console.log(`Codex Web 已启动: http://${config.bindHost}:${config.bindPort}`);
+  console.log(`codeck 已启动: http://${config.bindHost}:${config.bindPort}`);
 });

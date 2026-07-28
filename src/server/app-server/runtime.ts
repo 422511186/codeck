@@ -961,7 +961,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         type: "file",
         createdAtMs: 1_700_000_000_000,
         modifiedAtMs: 1_700_000_000_000,
-        text: "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
+        text: "# codeck\n\n移动端 Web 工作台 mock 文件。"
       }
     ]
   ]);

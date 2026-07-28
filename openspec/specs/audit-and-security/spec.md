@@ -248,7 +248,7 @@ Web 代理层 SHALL 将 JSON 解析失败、非对象 JSON body、字段类型�
 - **THEN** 接口 MUST 拒绝请求
 
 ### Requirement: Custom model data files stay inside the configured data directory
-自定义模型目录与会话绑定文件 SHALL 仅写入专用可配置 Codex Web 数据目录。文件路径 MUST 由后端配置解析，浏览器 MUST NOT 提供任意路径；Docker 部署 MUST 能通过持久卷保存该目录。
+自定义模型目录与会话绑定文件 SHALL 仅写入专用可配置 codeck 数据目录。文件路径 MUST 由后端配置解析，浏览器 MUST NOT 提供任意路径；Docker 部署 MUST 能通过持久卷保存该目录。
 
 #### Scenario: Browser cannot choose persistence path
 - **WHEN** 用户调用任一自定义模型或切换 API

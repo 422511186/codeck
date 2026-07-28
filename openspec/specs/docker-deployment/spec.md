@@ -4,7 +4,7 @@
 TBD - created by archiving change add-docker-compose-deployment. Update Purpose after archive.
 ## Requirements
 ### Requirement: Docker Image Builds Production Runtime
-项目 SHALL 提供生产 Docker 镜像构建方式，镜像内使用 Next.js 生产产物和已编译 server JavaScript 启动 Codex Web。
+项目 SHALL 提供生产 Docker 镜像构建方式，镜像内使用 Next.js 生产产物和已编译 server JavaScript 启动 codeck。
 
 #### Scenario: Docker image builds from source
 - **WHEN** 维护者在项目根目录运行 Docker 镜像构建命令
@@ -12,7 +12,7 @@ TBD - created by archiving change add-docker-compose-deployment. Update Purpose 
 - **AND** 镜像 MUST 包含 `.next/` 和 `dist/server/` 运行产物
 
 #### Scenario: Docker runtime does not require development transpilers
-- **WHEN** 容器以生产模式启动 Codex Web
+- **WHEN** 容器以生产模式启动 codeck
 - **THEN** 启动命令 MUST 使用 Node.js 运行已编译 JavaScript
 - **AND** 运行镜像 MUST NOT 依赖 `tsx` 或运行时 TypeScript 转译
 
@@ -34,22 +34,22 @@ TBD - created by archiving change add-docker-compose-deployment. Update Purpose 
 
 #### Scenario: User starts service with Compose
 - **WHEN** 用户根据文档创建本地 Compose 环境文件并运行 Compose 启动命令
-- **THEN** Compose MUST 启动 Codex Web 容器
+- **THEN** Compose MUST 启动 codeck 容器
 - **AND** 宿主机端口 MUST 映射到容器内 Web 服务端口
 - **AND** 手机浏览器 MUST 能通过宿主机局域网 IP 和映射端口访问服务
 
 #### Scenario: Compose loads environment explicitly
-- **WHEN** 用户使用 Compose 部署 Codex Web
+- **WHEN** 用户使用 Compose 部署 codeck
 - **THEN** Compose 配置 MUST 通过 `env_file`、`environment` 或部署平台等启动层显式注入 `CODEX_WEB_*` 环境变量
 - **AND** 文档 MUST 说明 Node.js、Next.js 和容器不会自动读取宿主机 `/etc/codex-web.env`
 
 #### Scenario: Compose persists runtime data
-- **WHEN** 用户重建或升级 Codex Web 容器
+- **WHEN** 用户重建或升级 codeck 容器
 - **THEN** 上传目录和审计日志路径 MUST 通过 bind mount 或 Docker volume 持久化
-- **AND** `CODEX_WEB_WORKSPACE_ROOTS` MUST 只指向用户允许 Codex Web 操作的 workspace 路径
+- **AND** `CODEX_WEB_WORKSPACE_ROOTS` MUST 只指向用户允许 codeck 操作的 workspace 路径
 
 #### Scenario: Compose constrains runtime resources and restarts safely
-- **WHEN** 用户使用 Docker Compose 部署 Codex Web
+- **WHEN** 用户使用 Docker Compose 部署 codeck
 - **THEN** Compose 配置 MUST 设置 `restart: unless-stopped`
 - **AND** Compose 配置 MUST 提供可通过环境变量覆盖的内存限制
 - **AND** Compose 配置 MUST 提供可通过环境变量覆盖的 memory-swap 限制
@@ -78,7 +78,7 @@ Docker Compose 部署 SHALL 默认推荐 `CODEX_WEB_APP_SERVER_MODE=external`，
 项目 SHALL 提供 Docker/Compose 验证流程，并保证验证不会影响当前正在 `23000` 端口服务手机会话的实例。
 
 #### Scenario: Docker smoke test uses non-current host port
-- **WHEN** Docker smoke test 需要启动 Codex Web 容器
+- **WHEN** Docker smoke test 需要启动 codeck 容器
 - **THEN** 验证流程 MUST 显式使用非 `23000` 的宿主机端口映射
 - **AND** 默认端口选择 MUST 从 `23001` 起寻找可用端口并跳过 `23000`
 
@@ -101,7 +101,7 @@ Docker Compose 部署 SHALL 默认推荐 `CODEX_WEB_APP_SERVER_MODE=external`，
 - **AND** 文档 MUST 说明 Docker 部署与宿主机 tarball 部署的区别和适用场景
 
 #### Scenario: User exposes container service to phone browser
-- **WHEN** 用户希望从手机浏览器访问 Compose 部署的 Codex Web
+- **WHEN** 用户希望从手机浏览器访问 Compose 部署的 codeck
 - **THEN** 文档 MUST 说明 `CODEX_WEB_BIND_HOST`、容器端口、宿主机端口映射、访问 token 和局域网访问方式
 - **AND** 文档 MUST 提醒公网访问前需要 HTTPS/TLS、反向代理访问控制、IP allowlist 或更强认证
 

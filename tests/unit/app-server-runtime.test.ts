@@ -4401,7 +4401,7 @@ describe("createAppServerGateway", () => {
     ]);
     await expect(gateway.readFile("C:\\Users\\huang\\workspace\\README.md")).resolves.toEqual({
       path: "C:\\Users\\huang\\workspace\\README.md",
-      text: "# Codex Web\n\n移动端 Web 工作台 mock 文件。"
+      text: "# codeck\n\n移动端 Web 工作台 mock 文件。"
     });
     await expect(gateway.getMetadata("C:\\Users\\huang\\workspace\\README.md")).resolves.toMatchObject({
       isDirectory: false,
