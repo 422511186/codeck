@@ -23,6 +23,40 @@ describe("Markdown", () => {
     expect(container.querySelector("p code")?.textContent).toBe("cwd");
   });
 
+  it("renders GFM tables with semantic structure and intrinsic-width scrolling", () => {
+    const { container } = render(
+      <Markdown
+        text={[
+          "| Name | Status |",
+          "| --- | --- |",
+          "| api | ready |",
+          "| web | pending |"
+        ].join("\n")}
+      />
+    );
+
+    const scroller = container.querySelector("[data-markdown-table-scroll='true']");
+    const table = container.querySelector("table");
+
+    expect(scroller).toHaveClass("cw-markdown-table-scroll");
+    expect(table).toHaveClass("cw-markdown-table");
+    expect(table).toHaveStyle({ width: "max-content", minWidth: "100%" });
+    expect(table?.style.maxWidth).toBe("");
+    expect(container.querySelectorAll("thead th")).toHaveLength(2);
+    expect(container.querySelectorAll("tbody td")).toHaveLength(4);
+  });
+
+  it("defines theme-driven GitHub table styles", () => {
+    const tokens = readFileSync("src/web/theme/tokens.css", "utf8");
+
+    expect(tokens).toContain(".cw-markdown-table {");
+    expect(tokens).toContain(".cw-markdown-table th,");
+    expect(tokens).toContain("border: 1px solid var(--cw-border);");
+    expect(tokens).toContain("background: var(--cw-bg-elevated);");
+    expect(tokens).toContain("padding: 8px 10px;");
+    expect(tokens).toContain("vertical-align: top;");
+  });
+
   it("renders fenced code as a block", () => {
     const { container } = render(<Markdown text={"```ts\nconst cwd = 'C:/Users/huang';\n```"} />);
 

@@ -54,8 +54,14 @@ function MarkdownImpl({ text }: Props): JSX.Element {
           },
           table({ children }) {
             return (
-              <div data-markdown-table-scroll="true" style={markdownTableScrollStyle}>
-                <table style={markdownTableStyle}>{children}</table>
+              <div
+                className="cw-markdown-table-scroll"
+                data-markdown-table-scroll="true"
+                style={markdownTableScrollStyle}
+              >
+                <table className="cw-markdown-table" style={markdownTableStyle}>
+                  {children}
+                </table>
               </div>
             );
           },
@@ -233,7 +239,7 @@ const markdownTableScrollStyle: CSSProperties = {
 
 const markdownTableStyle: CSSProperties = {
   width: "max-content",
-  maxWidth: "100%",
+  minWidth: "100%",
   borderCollapse: "collapse"
 };
 

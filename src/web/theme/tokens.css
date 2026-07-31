@@ -263,6 +263,37 @@ a {
   font-size: 0.9em;
 }
 
+.cw-markdown-table-scroll {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-color: var(--cw-fg-subtle) transparent;
+  scrollbar-width: thin;
+}
+
+.cw-markdown-table {
+  width: max-content;
+  min-width: 100%;
+  border: 1px solid var(--cw-border);
+  border-collapse: collapse;
+  color: var(--cw-fg);
+  text-align: left;
+}
+
+.cw-markdown-table th,
+.cw-markdown-table td {
+  padding: 8px 10px;
+  border: 1px solid var(--cw-border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.cw-markdown-table th {
+  background: var(--cw-bg-elevated);
+  color: var(--cw-fg);
+  font-weight: 600;
+}
+
 .cw-thread-scroller {
   scrollbar-width: thin;
   scrollbar-color: var(--cw-fg-subtle) transparent;
