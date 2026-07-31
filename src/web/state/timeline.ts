@@ -98,6 +98,7 @@ export type TimelineEntry = {
   revision?: number;
   baselineWatermark?: number;
   sourceLocator?: CanonicalSourceLocator;
+  provisional?: "turn-diff";
   sendOperation?: {
     payloadFingerprint: string;
     bootId?: string;
@@ -446,6 +447,7 @@ function timelineEntryMeta(
   | "fragmentSequence"
   | "baselineWatermark"
   | "sourceLocator"
+  | "provisional"
   | "completeness"
 > {
   return {
@@ -460,6 +462,7 @@ function timelineEntryMeta(
     ...(typeof item.fragmentSequence === "number" ? { fragmentSequence: item.fragmentSequence } : {}),
     ...(typeof item.baselineWatermark === "number" ? { baselineWatermark: item.baselineWatermark } : {}),
     ...(item.sourceLocator ? { sourceLocator: item.sourceLocator } : {}),
+    ...(item.provisional ? { provisional: item.provisional } : {}),
     ...(item.completeness ? { completeness: item.completeness } : {})
   };
 }

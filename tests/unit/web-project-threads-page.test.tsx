@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import ProjectThreadsPage from "../../src/app/projects/[projectId]/page";
 import { ApiError } from "../../src/web/api/client";
@@ -148,8 +148,10 @@ describe("ProjectThreadsPage", () => {
     render(<ProjectThreadsPage />);
 
     expect(await screen.findByText("Server Project")).toBeInTheDocument();
-    expect(mockListThreadsForCwd).toHaveBeenCalledWith("C:/server-project", false);
-    expect(mockTouchServerProject).toHaveBeenCalledWith("proj-1", expect.any(Number));
+    await waitFor(() => {
+      expect(mockListThreadsForCwd).toHaveBeenCalledWith("C:/server-project", false);
+      expect(mockTouchServerProject).toHaveBeenCalledWith("proj-1", expect.any(Number));
+    });
     expect(mockTouchProjectLastUsed).not.toHaveBeenCalled();
   });
 
@@ -321,17 +323,18 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Test thread")).toBeInTheDocument();
     });
 
-    const threadRow = screen.getByText("Test thread").closest("li");
+    const threadRow = screen.getByText("Test thread").closest('[data-swipe-content="true"]');
     await user.click(threadRow!);
 
     expect(mockPush).toHaveBeenCalledWith("/threads/t1");
   });
 
-  it("should open thread action sheet on long press without navigating", async () => {
+  it("should open the archived thread action sheet on content click", async () => {
+    const user = userEvent.setup();
     mockListThreadsForCwd.mockResolvedValue([
       {
-        id: "t1",
-        title: "Long press thread",
+        id: "t-archived-click",
+        title: "Archived click target",
         preview: "Preview",
         updatedAt: Date.now(),
         status: "idle"
@@ -339,19 +342,19 @@ describe("ProjectThreadsPage", () => {
     ]);
 
     render(<ProjectThreadsPage />);
+    await user.click(screen.getByRole("tab", { name: "已归档" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Long press thread")).toBeInTheDocument();
+      expect(screen.getByText("Archived click target")).toBeInTheDocument();
     });
 
-    const threadRow = screen.getByText("Long press thread").closest("li");
-    triggerLongPress(threadRow!);
+    const threadRow = screen.getByText("Archived click target").closest('[data-swipe-content="true"]');
+    await user.click(threadRow!);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
+      expect(within(screen.getByRole("dialog")).getByRole("button", { name: "移出归档" })).toBeInTheDocument();
     });
 
-    threadRow!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(mockPush).not.toHaveBeenCalled();
   });
 
@@ -372,7 +375,8 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Scroll cancel target")).toBeInTheDocument();
     });
 
-    const threadRow = screen.getByText("Scroll cancel target").closest("li")!;
+    const threadRow = screen.getByText("Scroll cancel target").closest('[data-swipe-content="true"]')!;
+    const swipeRow = threadRow.closest('[data-swipe-row="true"]')!;
     vi.useFakeTimers();
     threadRow.dispatchEvent(
       new PointerEvent("pointerdown", {
@@ -395,7 +399,7 @@ describe("ProjectThreadsPage", () => {
     });
     vi.useRealTimers();
 
-    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+    expect(swipeRow).toHaveAttribute("data-swipe-open", "false");
     expect(mockPush).not.toHaveBeenCalled();
   });
 
@@ -417,7 +421,7 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Active archive target")).toBeInTheDocument();
     });
 
-    triggerLongPress(screen.getByText("Active archive target").closest("li")!);
+    triggerSwipe(screen.getByText("Active archive target").closest('[data-swipe-content="true"]')!);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "归档" })).toBeInTheDocument();
@@ -433,7 +437,7 @@ describe("ProjectThreadsPage", () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it("should unarchive archived thread from long press sheet and remove it from current list", async () => {
+  it("should unarchive archived thread from its action sheet and remove it from current list", async () => {
     const user = userEvent.setup();
     mockListThreadsForCwd.mockImplementation((_cwd: string, archived: boolean) =>
       Promise.resolve(
@@ -459,14 +463,14 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Archived restore target")).toBeInTheDocument();
     });
 
-    triggerLongPress(screen.getByText("Archived restore target").closest("li")!);
+    await user.click(screen.getByText("Archived restore target").closest('[data-swipe-content="true"]')!);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "移出归档" })).toBeInTheDocument();
+      expect(within(screen.getByRole("dialog")).getByRole("button", { name: "移出归档" })).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "移出归档" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "移出归档" }));
 
     await waitFor(() => {
       expect(mockUnarchiveThread).toHaveBeenCalledWith("t-archived");
@@ -494,7 +498,7 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Archive failure target")).toBeInTheDocument();
     });
 
-    triggerLongPress(screen.getByText("Archive failure target").closest("li")!);
+    triggerSwipe(screen.getByText("Archive failure target").closest('[data-swipe-content="true"]')!);
     await user.click(await screen.findByRole("button", { name: "归档" }));
 
     await waitFor(() => {
@@ -530,13 +534,13 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Unarchive failure target")).toBeInTheDocument();
     });
 
-    triggerLongPress(screen.getByText("Unarchive failure target").closest("li")!);
-    await user.click(await screen.findByRole("button", { name: "移出归档" }));
+    await user.click(screen.getByText("Unarchive failure target").closest('[data-swipe-content="true"]')!);
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "移出归档" }));
 
     await waitFor(() => {
       expect(screen.getByText("移出归档失败")).toBeInTheDocument();
     });
-    expect(screen.getByText("Unarchive failure target")).toBeInTheDocument();
+    expect(screen.getAllByText("Unarchive failure target")).toHaveLength(2);
   });
 
   it("should ignore duplicate archive submissions while request is pending", async () => {
@@ -563,7 +567,7 @@ describe("ProjectThreadsPage", () => {
       expect(screen.getByText("Pending archive target")).toBeInTheDocument();
     });
 
-    triggerLongPress(screen.getByText("Pending archive target").closest("li")!);
+    triggerSwipe(screen.getByText("Pending archive target").closest('[data-swipe-content="true"]')!);
     const archiveButton = await screen.findByRole("button", { name: "归档" });
 
     await user.click(archiveButton);
@@ -808,18 +812,35 @@ describe("ProjectThreadsPage", () => {
   });
 });
 
-function triggerLongPress(target: Element): void {
-  vi.useFakeTimers();
-  target.dispatchEvent(
-    new PointerEvent("pointerdown", {
-      bubbles: true,
-      cancelable: true,
-      clientX: 10,
-      clientY: 10
-    })
-  );
+function triggerSwipe(target: Element): void {
   act(() => {
-    vi.advanceTimersByTime(501);
+    target.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        pointerId: 1,
+        clientX: 120,
+        clientY: 10
+      })
+    );
+    target.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        clientX: 40,
+        clientY: 10
+      })
+    );
+    target.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        clientX: 40,
+        clientY: 10
+      })
+    );
   });
-  vi.useRealTimers();
 }

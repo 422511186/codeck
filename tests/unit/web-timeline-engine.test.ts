@@ -979,6 +979,81 @@ describe("timeline engine", () => {
     );
   });
 
+  it("removes a provisional turn diff when a canonical file item arrives", () => {
+    const stamp = { bootId: "boot-file", generation: 3 };
+    let state = applyTimelineInput(createTimelineEngineState({ generation: 3 }), {
+      kind: "live-event",
+      entry: {
+        id: "turn-file-diff",
+        turnId: "turn-file",
+        ...stamp,
+        historyStamp: stamp,
+        provisional: "turn-diff",
+        createdAt: 1,
+        body: { kind: "diff", path: "工作区变更", added: 1, removed: 0, diff: "+draft" }
+      }
+    });
+    state = applyTimelineInput(state, {
+      kind: "completed-item",
+      entry: {
+        id: "file-canonical",
+        turnId: "turn-file",
+        ...stamp,
+        historyStamp: stamp,
+        createdAt: 2,
+        body: {
+          kind: "tool",
+          toolKind: "file",
+          server: "file",
+          tool: "src/app.ts",
+          diffPath: "src/app.ts",
+          added: 1,
+          removed: 0,
+          status: "success",
+          result: "+final"
+        }
+      }
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["file-canonical"]);
+  });
+
+  it("suppresses a late provisional turn diff without merging distinct file item ids", () => {
+    const stamp = { bootId: "boot-files", generation: 5 };
+    let state = applyTimelineInput(createTimelineEngineState({ generation: 5 }), {
+      kind: "snapshot-window",
+      entries: ["file-a", "file-b"].map((id, index) => ({
+        id,
+        turnId: "turn-files",
+        ...stamp,
+        historyStamp: stamp,
+        createdAt: index + 1,
+        body: {
+          kind: "tool" as const,
+          toolKind: "file" as const,
+          server: "file",
+          tool: `src/${id}.ts`,
+          status: "success" as const,
+          result: "+same-looking-change"
+        }
+      }))
+    });
+    state = applyTimelineInput(state, {
+      kind: "live-event",
+      entry: {
+        id: "turn-files-diff",
+        turnId: "turn-files",
+        ...stamp,
+        historyStamp: stamp,
+        provisional: "turn-diff",
+        createdAt: 3,
+        body: { kind: "diff", path: "工作区变更", added: 1, removed: 0, diff: "+same-looking-change" }
+      }
+    });
+
+    expect(selectTimelineEntries(state).map((entry) => entry.id)).toEqual(["file-a", "file-b"]);
+  });
+
   it("inserts a repair-only file change between its anchored agent messages", () => {
     let state = applyTimelineInput(createTimelineEngineState(), {
       kind: "snapshot-window",

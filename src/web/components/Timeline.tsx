@@ -1030,7 +1030,7 @@ const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries
           <button
             type="button"
             aria-expanded={open}
-            aria-label={presentation.failed ? `${presentation.summary}，失败` : presentation.summary}
+            aria-label={presentation.summary}
             onClick={() => setOpen((current) => !current)}
             style={inlineActivityButtonStyle}
           >
@@ -1042,12 +1042,6 @@ const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries
               <ActivityKindIcon kind={presentation.summaryKind} />
             </span>
             <span style={inlineActivityTitleStyle}>{presentation.summary}</span>
-            {presentation.failed ? (
-              <span style={inlineActivityFailedStyle}>
-                <CircleAlert aria-hidden="true" size={13} strokeWidth={1.8} />
-                失败
-              </span>
-            ) : null}
             {open ? (
               <ChevronDown aria-hidden="true" size={15} strokeWidth={1.8} />
             ) : (
@@ -1676,15 +1670,6 @@ const inlineActivityTitleStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 500,
   lineHeight: 1.35
-};
-
-const inlineActivityFailedStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  flex: "0 0 auto",
-  color: "var(--cw-danger)",
-  fontSize: 12
 };
 
 const activityActionListStyle: React.CSSProperties = {

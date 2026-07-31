@@ -3416,6 +3416,152 @@ describe("web store codex events", () => {
     ]);
   });
 
+  it("replaces a provisional turn diff with one canonical completed file item", () => {
+    const common = {
+      threadId: "thread-file-canonical",
+      turnId: "turn-file-canonical",
+      bootId: "boot-file-canonical",
+      generation: 4
+    };
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "turn_diff_updated",
+        eventId: "file-diff-first",
+        diff: "diff --git a/src/app.ts b/src/app.ts\n+new line"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "file_output_delta",
+        eventId: "file-delta",
+        itemId: "file-item-1",
+        delta: "editing src/app.ts\n"
+      }
+    });
+    expect(useStore.getState().threads[common.threadId]?.entries.map((entry) => entry.id)).toEqual(["file-item-1"]);
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "item_updated",
+        eventId: "file-completed",
+        completedAtMs: 100,
+        item: {
+          id: "file-item-1",
+          role: "tool",
+          text: "src/app.ts",
+          toolKind: "file",
+          server: "file",
+          tool: "src/app.ts",
+          status: "success"
+        }
+      }
+    });
+
+    const entries = useStore.getState().threads[common.threadId]?.entries ?? [];
+    expect(entries.map((entry) => entry.id)).toEqual(["file-item-1"]);
+    expect(entries[0]).toMatchObject({
+      id: "file-item-1",
+      turnId: common.turnId,
+      historyStamp: { bootId: common.bootId, generation: common.generation },
+      body: expect.objectContaining({
+        kind: "tool",
+        toolKind: "file",
+        tool: "src/app.ts",
+        status: "success"
+      })
+    });
+  });
+
+  it("ignores a late turn diff after canonical file activity exists", () => {
+    const common = {
+      threadId: "thread-file-late-diff",
+      turnId: "turn-file-late-diff",
+      bootId: "boot-file-late-diff",
+      generation: 2
+    };
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "file_output_delta",
+        eventId: "file-delta-first",
+        itemId: "file-item-2",
+        delta: "editing src/one.ts\n"
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "turn_diff_updated",
+        eventId: "file-diff-late",
+        diff: "+should not create another entry"
+      }
+    });
+
+    const entries = useStore.getState().threads[common.threadId]?.entries ?? [];
+    expect(entries.map((entry) => entry.id)).toEqual(["file-item-2"]);
+    expect(entries[0]?.body).toEqual(expect.objectContaining({ kind: "tool", toolKind: "file" }));
+  });
+
+  it("keeps a turn diff as a fallback when no file item arrives", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_diff_updated",
+        threadId: "thread-file-fallback",
+        turnId: "turn-file-fallback",
+        diff: "+fallback"
+      }
+    });
+
+    expect(useStore.getState().threads["thread-file-fallback"]?.entries).toEqual([
+      expect.objectContaining({
+        id: "turn-file-fallback-diff",
+        turnId: "turn-file-fallback",
+        body: expect.objectContaining({ kind: "diff", diff: "+fallback" })
+      })
+    ]);
+  });
+
+  it("keeps different file item identities independent when leaving the diff fallback", () => {
+    const common = {
+      threadId: "thread-file-distinct",
+      turnId: "turn-file-distinct",
+      generation: 1
+    };
+    for (const [itemId, path] of [["file-a", "src/a.ts"], ["file-b", "src/b.ts"]] as const) {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          ...common,
+          kind: "file_output_delta",
+          itemId,
+          eventId: `${itemId}-delta`,
+          delta: `editing ${path}`
+        }
+      });
+    }
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        ...common,
+        kind: "turn_diff_updated",
+        eventId: "distinct-late-diff",
+        diff: "+fallback must stay hidden"
+      }
+    });
+
+    expect(useStore.getState().threads[common.threadId]?.entries.map((entry) => entry.id)).toEqual(["file-a", "file-b"]);
+  });
+
   it("syncs thread mode and model while keeping permission settings as runtime observation", () => {
     useStore.getState().dispatchEvent({
       type: "codex-event",

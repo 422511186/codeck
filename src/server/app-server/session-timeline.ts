@@ -1202,46 +1202,18 @@ function strongToolIdentityMatch(base: MobileTimelineItem, supplement: MobileTim
   return false;
 }
 
-function uniqueMessageAnchorToolMatch(
-  baseItems: MobileTimelineItem[],
-  baseIndex: number,
-  records: SessionTimelineRecord[],
-  supplement: MobileTimelineItem,
-  supplementIndex: number,
-  consumedBaseToolIndexes: ReadonlySet<number>
-): boolean {
-  const base = baseItems[baseIndex];
-  if (!base || base.role !== "tool" || base.turnId !== supplement.turnId) {
-    return false;
-  }
+type MessageAnchorInterval = {
+  beforeBaseMessageIndex: number | null;
+  afterBaseMessageIndex: number | null;
+  supplementStartIndex: number;
+  supplementEndIndex: number;
+};
 
-  const previousBaseMessage = findNeighborMessage(baseItems, baseIndex, "before");
-  const nextBaseMessage = findNeighborMessage(baseItems, baseIndex, "after");
-  const previousSupplementMessage = findNeighborRecordMessage(records, supplementIndex, "before");
-  const nextSupplementMessage = findNeighborRecordMessage(records, supplementIndex, "after");
-
-  if (!messagesAlign(previousBaseMessage, previousSupplementMessage) || !messagesAlign(nextBaseMessage, nextSupplementMessage)) {
-    return false;
-  }
-
-  // Only accept positional metadata matches when the anchor interval uniquely identifies one base tool.
-  const candidates = baseItems.flatMap((candidate, index) => {
-    if (consumedBaseToolIndexes.has(index) || candidate.role !== "tool" || candidate.turnId !== supplement.turnId) {
-      return [];
-    }
-    if (!messagesAlign(findNeighborMessage(baseItems, index, "before"), previousSupplementMessage)) {
-      return [];
-    }
-    if (!messagesAlign(findNeighborMessage(baseItems, index, "after"), nextSupplementMessage)) {
-      return [];
-    }
-    if (!weakToolMetadataMatch(candidate, supplement)) {
-      return [];
-    }
-    return [index];
-  });
-  return candidates.length === 1 && candidates[0] === baseIndex;
-}
+type CanonicalToolPlacement = {
+  baseIndex: number;
+  supplementIndex: number;
+  interval: MessageAnchorInterval;
+};
 
 function weakToolMetadataMatch(base: MobileTimelineItem, supplement: MobileTimelineItem): boolean {
   if (base.role === "tool" && supplement.role === "tool" && base.toolKind === "file" && supplement.toolKind === "file") {
@@ -1257,16 +1229,16 @@ function weakToolMetadataMatch(base: MobileTimelineItem, supplement: MobileTimel
   );
 }
 
-function findNeighborMessage(
+function findNeighborMessageIndex(
   items: MobileTimelineItem[],
   index: number,
   direction: "before" | "after"
-): string | null {
+): number | null {
   if (direction === "before") {
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       const item = items[cursor];
       if (item?.role === "agent" || item?.role === "user") {
-        return item.text;
+        return cursor;
       }
     }
     return null;
@@ -1274,7 +1246,7 @@ function findNeighborMessage(
   for (let cursor = index + 1; cursor < items.length; cursor += 1) {
     const item = items[cursor];
     if (item?.role === "agent" || item?.role === "user") {
-      return item.text;
+      return cursor;
     }
   }
   return null;
@@ -1284,12 +1256,12 @@ function findNeighborRecordMessage(
   records: SessionTimelineRecord[],
   index: number,
   direction: "before" | "after"
-): string | null {
+): { index: number; text: string } | null {
   if (direction === "before") {
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       const record = records[cursor];
       if (record?.kind === "message") {
-        return record.text;
+        return { index: cursor, text: record.text };
       }
     }
     return null;
@@ -1297,20 +1269,105 @@ function findNeighborRecordMessage(
   for (let cursor = index + 1; cursor < records.length; cursor += 1) {
     const record = records[cursor];
     if (record?.kind === "message") {
-      return record.text;
+      return { index: cursor, text: record.text };
     }
   }
   return null;
 }
 
-function messagesAlign(left: string | null, right: string | null): boolean {
-  if (left === null && right === null) {
-    return true;
+function uniqueBaseMessageIndex(baseItems: MobileTimelineItem[], text: string): number | null {
+  const matches = baseItems.flatMap((item, index) =>
+    (item.role === "agent" || item.role === "user") && textEquivalent(item.text, text) ? [index] : []
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function resolveMessageAnchorInterval(
+  baseItems: MobileTimelineItem[],
+  records: SessionTimelineRecord[],
+  supplementIndex: number
+): MessageAnchorInterval | null {
+  const previous = findNeighborRecordMessage(records, supplementIndex, "before");
+  const next = findNeighborRecordMessage(records, supplementIndex, "after");
+  if (!previous && !next) {
+    return null;
   }
-  if (left === null || right === null) {
-    return false;
+
+  const beforeBaseMessageIndex = previous ? uniqueBaseMessageIndex(baseItems, previous.text) : null;
+  const afterBaseMessageIndex = next ? uniqueBaseMessageIndex(baseItems, next.text) : null;
+  if ((previous && beforeBaseMessageIndex === null) || (next && afterBaseMessageIndex === null)) {
+    return null;
   }
-  return textEquivalent(left, right);
+  if (
+    beforeBaseMessageIndex !== null &&
+    afterBaseMessageIndex !== null &&
+    beforeBaseMessageIndex >= afterBaseMessageIndex
+  ) {
+    return null;
+  }
+
+  return {
+    beforeBaseMessageIndex,
+    afterBaseMessageIndex,
+    supplementStartIndex: previous ? previous.index + 1 : 0,
+    supplementEndIndex: next ? next.index : records.length
+  };
+}
+
+function baseToolMatchesAnchorInterval(
+  baseItems: MobileTimelineItem[],
+  baseIndex: number,
+  interval: MessageAnchorInterval
+): boolean {
+  return (
+    findNeighborMessageIndex(baseItems, baseIndex, "before") === interval.beforeBaseMessageIndex &&
+    findNeighborMessageIndex(baseItems, baseIndex, "after") === interval.afterBaseMessageIndex
+  );
+}
+
+function resolveCanonicalToolPlacements(
+  baseItems: MobileTimelineItem[],
+  records: SessionTimelineRecord[]
+): CanonicalToolPlacement[] {
+  const placements: CanonicalToolPlacement[] = [];
+  const consumedBaseToolIndexes = new Set<number>();
+
+  for (let supplementIndex = 0; supplementIndex < records.length; supplementIndex += 1) {
+    const record = records[supplementIndex];
+    if (!record || record.kind !== "tool") {
+      continue;
+    }
+    const interval = resolveMessageAnchorInterval(baseItems, records, supplementIndex);
+    if (!interval) {
+      continue;
+    }
+
+    const strongCandidates = baseItems.flatMap((base, baseIndex) =>
+      !consumedBaseToolIndexes.has(baseIndex) && strongToolIdentityMatch(base, record.item)
+        ? [baseIndex]
+        : []
+    );
+    let baseIndex = strongCandidates.length === 1 ? strongCandidates[0]! : -1;
+    if (baseIndex < 0) {
+      const anchoredMetadataCandidates = baseItems.flatMap((base, candidateIndex) =>
+        !consumedBaseToolIndexes.has(candidateIndex) &&
+        base.role === "tool" &&
+        weakToolMetadataMatch(base, record.item) &&
+        baseToolMatchesAnchorInterval(baseItems, candidateIndex, interval)
+          ? [candidateIndex]
+          : []
+      );
+      baseIndex = anchoredMetadataCandidates.length === 1 ? anchoredMetadataCandidates[0]! : -1;
+    }
+    if (baseIndex < 0) {
+      continue;
+    }
+
+    consumedBaseToolIndexes.add(baseIndex);
+    placements.push({ baseIndex, supplementIndex, interval });
+  }
+
+  return placements;
 }
 
 function withBaseTurnMeta(item: MobileTimelineItem, baseItems: MobileTimelineItem[]): MobileTimelineItem {
@@ -1354,39 +1411,14 @@ function mergeTurnSessionRecords(
 
   const result: MobileTimelineItem[] = [];
   const usedToolIds = new Set(baseItems.map((item) => item.id));
-  const consumedBaseToolIndexes = new Set<number>();
+  const placements = resolveCanonicalToolPlacements(baseItems, records);
+  const placementBySupplementIndex = new Map(
+    placements.map((placement) => [placement.supplementIndex, placement] as const)
+  );
+  const placedBaseToolIndexes = new Set(placements.map((placement) => placement.baseIndex));
+  const emittedBaseToolIndexes = new Set<number>();
   let cursor = 0;
   let matchedMessage = false;
-
-  const consumeMatchingBaseTool = (
-    supplement: MobileTimelineItem,
-    supplementIndex: number
-  ): boolean => {
-    const strongIndex = baseItems.findIndex(
-      (base, baseIndex) => !consumedBaseToolIndexes.has(baseIndex) && strongToolIdentityMatch(base, supplement)
-    );
-    if (strongIndex >= 0) {
-      consumedBaseToolIndexes.add(strongIndex);
-      return true;
-    }
-
-    const uniqueIndex = baseItems.findIndex((base, baseIndex) =>
-      !consumedBaseToolIndexes.has(baseIndex) &&
-      uniqueMessageAnchorToolMatch(
-        baseItems,
-        baseIndex,
-        records,
-        supplement,
-        supplementIndex,
-        consumedBaseToolIndexes
-      )
-    );
-    if (uniqueIndex >= 0) {
-      consumedBaseToolIndexes.add(uniqueIndex);
-      return true;
-    }
-    return false;
-  };
 
   const collectToolRecords = (endExclusive: number): MobileTimelineItem[] => {
     const items: MobileTimelineItem[] = [];
@@ -1395,7 +1427,16 @@ function mergeTurnSessionRecords(
       if (!record || record.kind !== "tool") {
         continue;
       }
-      if (usedToolIds.has(record.item.id) || consumeMatchingBaseTool(record.item, index)) {
+      const placement = placementBySupplementIndex.get(index);
+      if (placement) {
+        const baseItem = baseItems[placement.baseIndex]!;
+        if (!emittedBaseToolIndexes.has(placement.baseIndex)) {
+          emittedBaseToolIndexes.add(placement.baseIndex);
+          items.push(baseItem);
+        }
+        continue;
+      }
+      if (usedToolIds.has(record.item.id)) {
         continue;
       }
       usedToolIds.add(record.item.id);
@@ -1408,7 +1449,11 @@ function mergeTurnSessionRecords(
     result.push(...collectToolRecords(endExclusive));
   };
 
-  for (const baseItem of baseItems) {
+  for (let baseIndex = 0; baseIndex < baseItems.length; baseIndex += 1) {
+    const baseItem = baseItems[baseIndex]!;
+    if (baseItem.role === "tool" && placedBaseToolIndexes.has(baseIndex)) {
+      continue;
+    }
     if (baseItem.role === "agent") {
       const messageIndex = records.findIndex(
         (record, index) => index >= cursor && record.kind === "message" && textEquivalent(record.text, baseItem.text)
@@ -1423,6 +1468,9 @@ function mergeTurnSessionRecords(
     }
 
     result.push(baseItem);
+    if (baseItem.role === "tool") {
+      emittedBaseToolIndexes.add(baseIndex);
+    }
   }
 
   if (matchedMessage) {

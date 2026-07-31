@@ -9,6 +9,8 @@ import {
   __resetTimelineDerivationDiagnostics,
   deriveTimelineRenderBlocks
 } from "../../src/web/components/Timeline";
+import { mergeSessionTimelineItems } from "../../src/server/app-server/session-timeline";
+import { threadDetailEntries } from "../../src/web/state/timeline-adapter";
 import { __getMarkdownDiagnostics, __resetMarkdownDiagnostics } from "../../src/web/components/Markdown";
 import { __getDiffViewDiagnostics, __resetDiffViewDiagnostics } from "../../src/web/components/cards/DiffCard";
 import {
@@ -229,6 +231,215 @@ describe("Timeline", () => {
     expect(blocks[2]).toMatchObject({
       kind: "inline-activity-log",
       entries: [expect.objectContaining({ id: "cmd-b" })]
+    });
+  });
+
+  it("canonical page and rollout supplement keep assistant-separated activity blocks after refresh", () => {
+    const baseItems = [
+      { id: "agent-a", turnId: "turn-cross-layer", role: "agent" as const, text: "message A" },
+      { id: "agent-b", turnId: "turn-cross-layer", role: "agent" as const, text: "message B" },
+      {
+        id: "cmd-a",
+        turnId: "turn-cross-layer",
+        role: "tool" as const,
+        text: "canonical A",
+        toolKind: "command" as const,
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success" as const
+      },
+      {
+        id: "cmd-b",
+        turnId: "turn-cross-layer",
+        role: "tool" as const,
+        text: "canonical B",
+        toolKind: "command" as const,
+        server: "/repo",
+        tool: "npm test",
+        status: "success" as const
+      }
+    ];
+    const rolloutLine = (payload: Record<string, unknown>) =>
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          ...payload,
+          internal_chat_message_metadata_passthrough: { turn_id: "turn-cross-layer" }
+        }
+      });
+    const rollout = [
+      rolloutLine({
+        type: "function_call",
+        id: "cmd-a",
+        call_id: "call-cmd-a",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+      }),
+      rolloutLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "message A" }]
+      }),
+      rolloutLine({
+        type: "function_call",
+        id: "cmd-b",
+        call_id: "call-cmd-b",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm test", workdir: "/repo" })
+      }),
+      rolloutLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "message B" }]
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, rollout);
+    expect(merged.map((item) => item.id)).toEqual(["cmd-a", "agent-a", "cmd-b", "agent-b"]);
+
+    const detail = {
+      id: "thread-cross-layer",
+      title: "cross layer",
+      preview: "",
+      cwd: "/repo",
+      modelProvider: "openai",
+      status: "idle",
+      updatedAt: 100,
+      lastTurnId: "turn-cross-layer",
+      nextCursor: null,
+      timeline: merged
+    };
+    const refresh = () => {
+      useStore.getState().setThreadEntries(
+        detail.id,
+        threadDetailEntries(detail),
+        null
+      );
+      return deriveTimelineRenderBlocks(useStore.getState().threads[detail.id]!.entries);
+    };
+
+    const liveBlocks = refresh();
+    const refreshedBlocks = refresh();
+
+    for (const blocks of [liveBlocks, refreshedBlocks]) {
+      expect(blocks.map((block) => block.kind)).toEqual([
+        "inline-activity-log",
+        "entry",
+        "inline-activity-log",
+        "entry"
+      ]);
+      expect(blocks[0]).toMatchObject({
+        kind: "inline-activity-log",
+        entries: [expect.objectContaining({ id: "cmd-a" })]
+      });
+      expect(blocks[2]).toMatchObject({
+        kind: "inline-activity-log",
+        entries: [expect.objectContaining({ id: "cmd-b" })]
+      });
+    }
+  });
+
+  it("file fallback 在 canonical items 到达及刷新后收敛为一个 activity block", () => {
+    const threadId = "thread-file-refresh";
+    const turnId = "turn-file-refresh";
+    const stamp = { bootId: "boot-file-refresh", generation: 4 };
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_diff_updated",
+        threadId,
+        turnId,
+        ...stamp,
+        eventId: "turn-diff-first",
+        diff: "+provisional"
+      }
+    });
+    for (const [itemId, path] of [["file-a", "src/a.ts"], ["file-b", "src/b.ts"]] as const) {
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "file_output_delta",
+          threadId,
+          turnId,
+          ...stamp,
+          itemId,
+          eventId: `${itemId}-delta`,
+          delta: `editing ${path}`
+        }
+      });
+      useStore.getState().dispatchEvent({
+        type: "codex-event",
+        event: {
+          kind: "item_updated",
+          threadId,
+          turnId,
+          ...stamp,
+          itemId,
+          eventId: `${itemId}-completed`,
+          completedAtMs: itemId === "file-a" ? 1 : 2,
+          item: {
+            id: itemId,
+            role: "tool",
+            text: path,
+            toolKind: "file",
+            server: "file",
+            tool: path,
+            status: "success"
+          }
+        }
+      });
+    }
+
+    const liveEntries = useStore.getState().threads[threadId]!.entries;
+    const liveBlocks = deriveTimelineRenderBlocks(liveEntries);
+    expect(liveEntries.map((entry) => entry.id)).toEqual(["file-a", "file-b"]);
+    expect(liveBlocks).toHaveLength(1);
+    expect(liveBlocks[0]).toMatchObject({
+      kind: "inline-activity-log",
+      entries: [expect.objectContaining({ id: "file-a" }), expect.objectContaining({ id: "file-b" })]
+    });
+
+    useStore.getState().setThreadEntries(threadId, [
+      {
+        id: "file-a",
+        turnId,
+        ...stamp,
+        historyStamp: stamp,
+        createdAt: 1,
+        body: {
+          kind: "tool",
+          toolKind: "file",
+          server: "file",
+          tool: "src/a.ts",
+          status: "success",
+          result: "+a"
+        }
+      },
+      {
+        id: "file-b",
+        turnId,
+        ...stamp,
+        historyStamp: stamp,
+        createdAt: 2,
+        body: {
+          kind: "tool",
+          toolKind: "file",
+          server: "file",
+          tool: "src/b.ts",
+          status: "success",
+          result: "+b"
+        }
+      }
+    ], null);
+
+    const refreshedEntries = useStore.getState().threads[threadId]!.entries;
+    const refreshedBlocks = deriveTimelineRenderBlocks(refreshedEntries);
+    expect(refreshedEntries.map((entry) => entry.id)).toEqual(["file-a", "file-b"]);
+    expect(refreshedBlocks).toHaveLength(1);
+    expect(refreshedBlocks[0]).toMatchObject({
+      kind: "inline-activity-log",
+      entries: [expect.objectContaining({ id: "file-a" }), expect.objectContaining({ id: "file-b" })]
     });
   });
 
@@ -2474,8 +2685,10 @@ describe("Timeline", () => {
     );
 
     const headline = "编辑了文件、运行了命令等操作";
-    const disclosure = screen.getByRole("button", { name: `${headline}，失败` });
+    const disclosure = screen.getByRole("button", { name: headline });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(disclosure).not.toHaveTextContent("失败");
+    expect(disclosure.querySelector("[data-activity-status-icon]")).toBeNull();
     expect(container.querySelectorAll("button[aria-expanded='false']")).toHaveLength(1);
     expect(container.textContent).not.toContain("▣");
     expect(container.querySelector("[data-activity-summary-icon='tool'] svg")).not.toBeNull();
@@ -2506,6 +2719,7 @@ describe("Timeline", () => {
     expect(secondSubagentAction).toBeInTheDocument();
     expect(commandAction).toBeInTheDocument();
     expect(mcpAction).toBeInTheDocument();
+    expect(screen.getByLabelText("失败")).toBeInTheDocument();
     expect(screen.queryByText("one test failed")).not.toBeInTheDocument();
     expect(screen.queryByText("old")).not.toBeInTheDocument();
     expect(expandedText.indexOf("已加载 openspec-apply-change Skill")).toBeLessThan(
@@ -2724,20 +2938,25 @@ describe("Timeline", () => {
       />
     );
 
-    expect(screen.getByText("失败")).toBeInTheDocument();
+    const disclosure = screen.getByRole("button", { name: "读取了文件" });
+    expect(disclosure).not.toHaveTextContent("失败");
+    expect(screen.queryByLabelText("失败")).not.toBeInTheDocument();
     expect(screen.queryByText("Failed")).not.toBeInTheDocument();
     expect(screen.queryByText(/No such file/)).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("读取了文件").closest("button")!);
+    await user.click(disclosure);
 
     const failedAction = screen.getByRole("button", { name: "已读取 missing.md" });
     expect(failedAction).toBeInTheDocument();
+    expect(screen.getByLabelText("失败")).toBeInTheDocument();
     expect(screen.queryByText(/No such file/)).not.toBeInTheDocument();
 
     await user.click(failedAction);
 
+    expect(screen.getByText("失败")).toBeInTheDocument();
     expect(screen.getByText(/sed -n '1,80p' missing.md/)).toBeInTheDocument();
     expect(screen.getByText(/No such file or directory/)).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
   });
 
   it("file 工具活动第二次展开后显示文件输出详情", async () => {

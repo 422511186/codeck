@@ -1,4 +1,3 @@
-import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -161,60 +160,39 @@ describe("ProjectsPage", () => {
     expect(screen.queryByText("还没有项目")).not.toBeInTheDocument();
   });
 
-  it("客户端项目支持重命名、移除和本地 touch", async () => {
+  it("should enter a client project and touch it locally", async () => {
     const user = userEvent.setup();
     mockListProjects.mockReturnValue([clientProject()]);
     render(<ProjectsPage />);
     await screen.findByText("Client Project");
 
-    triggerLongPress(screen.getByText("Client Project").closest("li")!);
-    await user.click(await screen.findByRole("button", { name: "重命名" }));
-    const input = screen.getByDisplayValue("Client Project");
-    await user.clear(input);
-    await user.type(input, "Renamed");
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    expect(mockRenameProject).toHaveBeenCalledWith("client-1", "Renamed");
-
-    await user.click(screen.getByText("Client Project").closest("li")!);
+    await user.click(screen.getByText("Client Project"));
     expect(mockTouchProjectLastUsed).toHaveBeenCalledWith("client-1");
     expect(mockPush).toHaveBeenCalledWith("/projects/client-1");
   });
 
-  it("客户端项目移动到服务端时保留 ID，成功后删除本地记录", async () => {
+  it("should not open a project action menu from the project list", async () => {
     const user = userEvent.setup();
-    const project = clientProject();
-    mockListProjects.mockReturnValue([project]);
-    mockCreateServerProject.mockResolvedValue({ revision: 1, defaultStorage: "server", projects: [{ ...project, storage: "server" }] });
+    mockListProjects.mockReturnValue([clientProject()]);
     render(<ProjectsPage />);
     await screen.findByText("Client Project");
 
-    triggerLongPress(screen.getByText("Client Project").closest("li")!);
-    await user.click(await screen.findByRole("button", { name: "保存到服务端" }));
-
-    await waitFor(() => expect(mockCreateServerProject).toHaveBeenCalledWith({
-      id: "client-1",
-      name: "Client Project",
-      path: "C:/test/client",
-      addedAt: 1,
-      lastUsedAt: 10
-    }, 0));
-    expect(mockRemoveProject).toHaveBeenCalledWith("client-1");
+    await user.pointer([{ target: screen.getByText("Client Project"), keys: "[MouseLeft]" }]);
+    expect(screen.queryByRole("button", { name: "重命名" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存到服务端" })).not.toBeInTheDocument();
   });
 
-  it("服务端转客户端删除失败时回滚本地目标", async () => {
+  it("should enter a server project and update its last-used time", async () => {
     const user = userEvent.setup();
     const project = serverProject();
     mockProjectCatalog.mockResolvedValue({ revision: 1, defaultStorage: "server", projects: [project] });
-    mockDeleteServerProject.mockRejectedValue(new Error("删除服务端记录失败"));
     render(<ProjectsPage />);
     await screen.findByText("Server Project");
 
-    triggerLongPress(screen.getByText("Server Project").closest("li")!);
-    await user.click(await screen.findByRole("button", { name: "改为仅当前设备" }));
+    await user.click(screen.getByText("Server Project"));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("删除服务端记录失败"));
-    expect(mockSaveLocalProject).toHaveBeenCalledWith(project);
-    expect(mockRemoveProject).toHaveBeenCalledWith("server-1");
+    expect(mockTouchServerProject).toHaveBeenCalledWith("server-1", expect.any(Number));
+    expect(mockPush).toHaveBeenCalledWith("/projects/server-1");
   });
 
   it("同路径碰撞要求显式选择保留服务端", async () => {
@@ -235,10 +213,3 @@ describe("ProjectsPage", () => {
     expect(mockDeleteServerProject).not.toHaveBeenCalled();
   });
 });
-
-function triggerLongPress(target: Element): void {
-  vi.useFakeTimers();
-  target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
-  act(() => vi.advanceTimersByTime(501));
-  vi.useRealTimers();
-}

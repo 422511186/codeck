@@ -654,6 +654,7 @@ export type MobileTimelineItem = {
   fragmentSequence?: number;
   baselineWatermark?: number;
   sourceLocator?: CanonicalSourceLocator;
+  provisional?: "turn-diff";
   role: "user" | "agent" | "reasoning" | "plan" | "tool" | "diff" | "system" | "error";
   text: string;
   done?: boolean;

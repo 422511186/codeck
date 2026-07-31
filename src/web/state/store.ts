@@ -1339,12 +1339,17 @@ export const useStore = create<State & Actions>((set, get) => ({
         }
         case "turn_diff_updated": {
           const diff = typeof ev.diff === "string" ? ev.diff : "";
-          const entry = diffEntryFromText(`${ev.turnId ?? threadId}-diff`, diff, Date.now());
-          get().replaceOrAddEntry(threadId, {
-            ...entry,
-            ...(typeof ev.turnId === "string" ? { turnId: ev.turnId } : {}),
+          const turnId = typeof ev.turnId === "string" && ev.turnId ? ev.turnId : null;
+          if (turnId && threadHasCanonicalFileActivity(get().threads[threadId], turnId, generation)) {
+            break;
+          }
+          const entry = withCodexEventMetadata({
+            ...diffEntryFromText(provisionalTurnDiffId(turnId ?? threadId), diff, Date.now()),
+            provisional: "turn-diff" as const,
+            ...(turnId ? { turnId } : {}),
             ...(generation !== null ? { generation } : {})
-          }, undefined, eventId ?? undefined);
+          }, ev);
+          get().replaceOrAddEntry(threadId, entry, undefined, eventId ?? undefined);
           break;
         }
         case "context_compacted": {
@@ -1448,13 +1453,14 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "item_updated": {
           const entry = (ev.entry as TimelineEntry | undefined) ?? null;
           if (entry) {
+            const nextEntry = withCodexEventMetadata({
+              ...entry,
+              ...(typeof ev.turnId === "string" && !entry.turnId ? { turnId: ev.turnId } : {}),
+              ...(generation !== null && typeof entry.generation !== "number" ? { generation } : {})
+            }, ev);
             get().replaceOrAddEntry(
               threadId,
-              withCodexEventMetadata({
-                ...entry,
-                ...(typeof ev.turnId === "string" && !entry.turnId ? { turnId: ev.turnId } : {}),
-                ...(generation !== null && typeof entry.generation !== "number" ? { generation } : {})
-              }, ev),
+              nextEntry,
               typeof ev.revision === "number" ? ev.revision : undefined,
               eventId ?? undefined
             );
@@ -1464,19 +1470,15 @@ export const useStore = create<State & Actions>((set, get) => ({
           if (item) {
             const createdAt = typeof ev.completedAtMs === "number" ? ev.completedAtMs : Date.now();
             const revision = typeof ev.revision === "number" ? ev.revision : null;
-            get().replaceOrAddEntry(
-              threadId,
-              timelineItemToEntry(
-                withCodexEventMetadata({
-                  ...item,
-                  ...(typeof ev.turnId === "string" && !item.turnId ? { turnId: ev.turnId } : {}),
-                  ...(generation !== null && typeof item.generation !== "number" ? { generation } : {})
-                }, ev),
-                createdAt
-              ),
-              revision ?? undefined,
-              eventId ?? undefined
+            const nextEntry = timelineItemToEntry(
+              withCodexEventMetadata({
+                ...item,
+                ...(typeof ev.turnId === "string" && !item.turnId ? { turnId: ev.turnId } : {}),
+                ...(generation !== null && typeof item.generation !== "number" ? { generation } : {})
+              }, ev),
+              createdAt
             );
+            get().replaceOrAddEntry(threadId, nextEntry, revision ?? undefined, eventId ?? undefined);
           }
           break;
         }
@@ -1742,6 +1744,30 @@ function localUserMessageIdsByTurnFromEntries(
 
 function pendingReasoningId(threadId: string, turnId: string | null): string {
   return `${turnId ?? threadId}-reasoning-pending`;
+}
+
+function provisionalTurnDiffId(turnId: string): string {
+  return `${turnId}-diff`;
+}
+
+function threadHasCanonicalFileActivity(
+  thread: ThreadState | undefined,
+  turnId: string,
+  generation: number | null
+): boolean {
+  return Boolean(thread?.entries.some((entry) => {
+    if (
+      entry.turnId !== turnId ||
+      entry.body.kind !== "tool" ||
+      entry.body.toolKind !== "file" ||
+      entry.id.startsWith("synthetic:") ||
+      entry.id.startsWith("unresolved:")
+    ) {
+      return false;
+    }
+    const entryGeneration = entry.historyStamp?.generation ?? entry.generation;
+    return generation === null || typeof entryGeneration !== "number" || entryGeneration === generation;
+  }));
 }
 
 function isVisibleTimelineEvent(kind: string): boolean {

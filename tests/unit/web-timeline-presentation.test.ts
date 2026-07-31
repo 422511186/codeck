@@ -169,6 +169,29 @@ describe("timeline presentation", () => {
     ]);
   });
 
+  it("running、success 和 failed command 使用相同的中性顶层摘要", () => {
+    const summaries = (["running", "success", "failed"] as const).map((status) =>
+      createActivityPresentation([
+        toolEntry(`command-${status}`, "npm test", `${status} output`, "/repo", "command", status)
+      ])
+    );
+
+    expect(summaries.map((presentation) => presentation.summary)).toEqual([
+      "运行了命令",
+      "运行了命令",
+      "运行了命令"
+    ]);
+    expect(summaries.map((presentation) => presentation.items[0]?.label)).toEqual([
+      "已运行 npm test",
+      "已运行 npm test",
+      "已运行 npm test"
+    ]);
+    expect(summaries.map((presentation) => presentation.failed)).toEqual([false, false, true]);
+    for (const presentation of summaries) {
+      expect(presentation.summary).not.toMatch(/运行中|已完成|成功|失败|Failed/i);
+    }
+  });
+
   it("keeps identical-metadata commands split by a visible assistant message as two activity groups", () => {
     const entries: TimelineEntry[] = [
       {

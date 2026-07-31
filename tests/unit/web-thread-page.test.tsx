@@ -215,13 +215,12 @@ function forkActionDetail(): unknown {
   };
 }
 
+function openMessageActions(messageText: string): void {
+  fireEvent.click(screen.getByText(messageText));
+}
+
 async function triggerMessageFork(): Promise<void> {
-  vi.useFakeTimers();
-  fireEvent.pointerDown(screen.getByText("previous prompt"));
-  act(() => {
-    vi.advanceTimersByTime(450);
-  });
-  vi.useRealTimers();
+  openMessageActions("previous prompt");
   fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 }
 
@@ -5993,7 +5992,7 @@ describe("ThreadPage", () => {
     );
   });
 
-  it("should rewind from a long-pressed user message", async () => {
+  it("should rewind from a tapped user message", async () => {
     mockRollbackThread.mockResolvedValue({
       id: "thread-1",
       cwd: "C:/test",
@@ -6063,12 +6062,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
 
     expect(mockRollbackThread).toHaveBeenCalledWith("thread-1", expect.objectContaining({
@@ -6118,12 +6112,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("conflicted prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("conflicted prompt");
     fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
 
     await waitFor(() => {
@@ -6178,12 +6167,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("same only text"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("same only text");
 
     mockThreadState.mockReturnValue({
       entries: currentEntries,
@@ -6464,12 +6448,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("edit this prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("edit this prompt");
     fireEvent.click(await screen.findByRole("button", { name: "回滚到这里" }));
 
     await waitFor(() => {
@@ -6479,7 +6458,7 @@ describe("ThreadPage", () => {
     expect(screen.getByPlaceholderText("输入消息")).toHaveValue("edit this prompt updated");
   });
 
-  it("should fork from a long-pressed user message and prepare draft in the fork", async () => {
+  it("should fork from a tapped user message and prepare draft in the fork", async () => {
     const fileReference = {
       id: "fork-file",
       name: "fork-note.txt",
@@ -6559,12 +6538,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith(
@@ -6933,12 +6907,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockRollbackThread).toHaveBeenCalledTimes(2));
@@ -7002,12 +6971,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith(
@@ -7138,12 +7102,7 @@ describe("ThreadPage", () => {
       expect(screen.queryByText(/载入中/)).not.toBeInTheDocument();
     });
 
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockRequestSnapshotRepair).toHaveBeenCalledWith(
@@ -7207,12 +7166,7 @@ describe("ThreadPage", () => {
     render(<ThreadPage />);
 
     await screen.findByText("previous prompt");
-    vi.useFakeTimers();
-    fireEvent.pointerDown(screen.getByText("previous prompt"));
-    act(() => {
-      vi.advanceTimersByTime(450);
-    });
-    vi.useRealTimers();
+    openMessageActions("previous prompt");
     fireEvent.click(await screen.findByRole("button", { name: "从这里 Fork" }));
 
     await waitFor(() => expect(mockForkThread).toHaveBeenCalledWith(

@@ -780,6 +780,10 @@ function applyLiveDeltaInput(state: TimelineEngineState, input: TimelineDeltaInp
     }
   }
 
+  if (isCanonicalFileActivity(input.entry)) {
+    stateWithProvisional = removeMatchingProvisionalTurnDiffs(stateWithProvisional, input.entry);
+  }
+
   const acceptedState = acceptedDeltaMetadataState(
     stateWithProvisional,
     input,
@@ -791,14 +795,14 @@ function applyLiveDeltaInput(state: TimelineEngineState, input: TimelineDeltaInp
     return acceptedState;
   }
 
-  const currentIndex = state.indexes.byIdentity.get(identity);
+  const currentIndex = acceptedState.indexes.byIdentity.get(identity);
   if (typeof currentIndex === "number") {
-    const current = state.entries[currentIndex];
+    const current = acceptedState.entries[currentIndex];
     const appended = current ? appendDeltaEntry(current, input.entry) : null;
     if (!appended) {
       return withDiagnostic(withDiagnostic(acceptedState, "identityConflicts"), "repairRequests");
     }
-    const entries = state.entries.slice();
+    const entries = acceptedState.entries.slice();
     entries[currentIndex] = appended;
     return {
       ...acceptedState,
@@ -812,10 +816,10 @@ function applyLiveDeltaInput(state: TimelineEngineState, input: TimelineDeltaInp
     return pendingReplacement;
   }
 
-  const entries = [...state.entries, input.entry];
-  const byEntryId = new Map(state.indexes.byEntryId);
-  const byIdentity = new Map(state.indexes.byIdentity);
-  const byTurnId = new Map(state.indexes.byTurnId);
+  const entries = [...acceptedState.entries, input.entry];
+  const byEntryId = new Map(acceptedState.indexes.byEntryId);
+  const byIdentity = new Map(acceptedState.indexes.byIdentity);
+  const byTurnId = new Map(acceptedState.indexes.byTurnId);
   const index = entries.length - 1;
   byEntryId.set(input.entry.id, index);
   byIdentity.set(identity, index);
@@ -1431,7 +1435,58 @@ function normalizeEntries(entries: TimelineEntry[]): TimelineEntry[] {
       identityIndexes.set(identity, nextIndex);
     }
   }
-  return orderEntries(merged);
+  return orderEntries(suppressProvisionalTurnDiffs(merged, generation));
+}
+
+function suppressProvisionalTurnDiffs(entries: TimelineEntry[], fallbackGeneration: number): TimelineEntry[] {
+  const canonicalFileEntries = entries.filter(isCanonicalFileActivity);
+  if (!canonicalFileEntries.length) {
+    return entries;
+  }
+  return entries.filter(
+    (entry) =>
+      entry.provisional !== "turn-diff" ||
+      !canonicalFileEntries.some((canonical) => sameTimelineTurnScope(entry, canonical, fallbackGeneration))
+  );
+}
+
+function removeMatchingProvisionalTurnDiffs(
+  state: TimelineEngineState,
+  canonicalFileEntry: TimelineEntry
+): TimelineEngineState {
+  const entries = state.entries.filter(
+    (entry) =>
+      entry.provisional !== "turn-diff" ||
+      !sameTimelineTurnScope(entry, canonicalFileEntry, state.generation)
+  );
+  return entries.length === state.entries.length ? state : withEntries(state, entries);
+}
+
+function isCanonicalFileActivity(entry: TimelineEntry): boolean {
+  return (
+    entry.body.kind === "tool" &&
+    entry.body.toolKind === "file" &&
+    !entry.id.startsWith("synthetic:") &&
+    !entry.id.startsWith("unresolved:")
+  );
+}
+
+function sameTimelineTurnScope(
+  left: TimelineEntry,
+  right: TimelineEntry,
+  fallbackGeneration: number
+): boolean {
+  if (!left.turnId || left.turnId !== right.turnId) {
+    return false;
+  }
+  const leftGeneration = left.historyStamp?.generation ?? left.generation ?? fallbackGeneration;
+  const rightGeneration = right.historyStamp?.generation ?? right.generation ?? fallbackGeneration;
+  if (leftGeneration !== rightGeneration) {
+    return false;
+  }
+  const leftBootId = left.historyStamp?.bootId ?? left.bootId;
+  const rightBootId = right.historyStamp?.bootId ?? right.bootId;
+  return !leftBootId || !rightBootId || leftBootId === rightBootId;
 }
 
 function buildTimelineIndexes(entries: TimelineEntry[], generation: number): TimelineEngineIndexes {

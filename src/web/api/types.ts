@@ -51,6 +51,7 @@ export type TimelineItem = {
   fragmentSequence?: number;
   baselineWatermark?: number;
   sourceLocator?: CanonicalSourceLocator;
+  provisional?: "turn-diff";
   role: TimelineRole;
   text: string;
   done?: boolean;

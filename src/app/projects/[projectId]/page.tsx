@@ -37,6 +37,7 @@ export default function ProjectThreadsPage(): JSX.Element {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [actionFor, setActionFor] = useState<{ thread: ThreadSummary; tab: Tab } | null>(null);
   const [actionPendingId, setActionPendingId] = useState<string | null>(null);
   const [startPending, setStartPending] = useState(false);
@@ -188,6 +189,7 @@ export default function ProjectThreadsPage(): JSX.Element {
     if (actionPendingId) return;
     setActionPendingId(thread.id);
     setError(null);
+    setOperationError(null);
     try {
       if (actionTab === "archived") {
         await codex.unarchiveThread(thread.id);
@@ -199,7 +201,7 @@ export default function ProjectThreadsPage(): JSX.Element {
       setUndoToast({ threadId: thread.id, kind: actionTab === "archived" ? "unarchive" : "archive" });
       scheduleUndoClear();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : (err as Error).message);
+      setOperationError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
       setActionPendingId(null);
     }
@@ -215,6 +217,7 @@ export default function ProjectThreadsPage(): JSX.Element {
     const { threadId, kind } = undoToast;
     setActionPendingId(threadId);
     setError(null);
+    setOperationError(null);
     try {
       if (kind === "archive") {
         await codex.unarchiveThread(threadId);
@@ -227,7 +230,7 @@ export default function ProjectThreadsPage(): JSX.Element {
         setThreads(list);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : (err as Error).message);
+      setOperationError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
       setActionPendingId(null);
     }
@@ -392,6 +395,12 @@ export default function ProjectThreadsPage(): JSX.Element {
           设置
         </button>
       </header>
+
+      {operationError ? (
+        <div role="alert" style={{ color: "var(--cw-danger)", padding: "4px 0 8px", fontSize: 14 }}>
+          {operationError}
+        </div>
+      ) : null}
 
       <div
         role="tablist"

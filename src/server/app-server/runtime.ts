@@ -247,6 +247,43 @@ type TimelineContentCursorState = {
   chunkBytes: number;
 };
 
+type SessionTimelineSupplementRevision = {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  dev: number;
+  ino: number;
+};
+
+type SessionTimelineSupplementCacheEntry = {
+  path: string;
+  revision: SessionTimelineSupplementRevision;
+  lines: string[];
+  trailingPartialLine: string;
+  scanStart: number;
+  scanOffset: number;
+  searchExhausted: boolean;
+  indexedBytes: number;
+  lastAccessedAt: number;
+};
+
+export type SessionTimelineSupplementDiagnostics = {
+  scanCount: number;
+  cacheHitCount: number;
+  coalescedRequestCount: number;
+  invalidationCount: number;
+  degradedCount: number;
+  readCount: number;
+  readBytes: number;
+  reads: Array<{
+    path: string;
+    start: number;
+    end: number;
+    bytes: number;
+    kind: "cold" | "append";
+  }>;
+};
+
 export type BrowserTimelineEvent = BrowserCodexEventEnvelope | BrowserServerRequestEvent;
 
 const MAX_TIMELINE_OVERLAY_ITEMS_PER_THREAD = 200;
@@ -256,6 +293,12 @@ const MAX_TIMELINE_CONTENT_CURSORS = 10_000;
 const MAX_BROWSER_EVENT_OWNER_LEDGER = 2_000;
 const SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT = 64 * 1024 * 1024;
 const SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT = 16 * 1024 * 1024;
+const SESSION_TIMELINE_SUPPLEMENT_COLD_TAIL_BYTES = 1 * 1024 * 1024;
+const SESSION_TIMELINE_SUPPLEMENT_TARGET_SCAN_BYTES = 4 * 1024 * 1024;
+const MAX_SESSION_TIMELINE_SUPPLEMENT_CACHE_FILES = 24;
+const MAX_SESSION_TIMELINE_SUPPLEMENT_CACHE_BYTES = 32 * 1024 * 1024;
+const SESSION_TIMELINE_SUPPLEMENT_CACHE_IDLE_MS = 15 * 60 * 1000;
+const MAX_SESSION_TIMELINE_SUPPLEMENT_DIAGNOSTIC_READS = 256;
 const TIMELINE_HARD_BUDGET_METADATA_BYTE_BUDGET = 16 * 1024;
 const SESSION_CONTEXT_USAGE_TAIL_LINES = 500;
 const SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT = 200_000;
@@ -281,6 +324,154 @@ type BoundedJsonlRead = {
   lines: string[];
   budgetExhausted: boolean;
 };
+
+function sessionTimelineSupplementRevision(metadata: {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  dev: number;
+  ino: number;
+}): SessionTimelineSupplementRevision {
+  return {
+    size: metadata.size,
+    mtimeMs: metadata.mtimeMs,
+    ctimeMs: metadata.ctimeMs,
+    dev: metadata.dev,
+    ino: metadata.ino
+  };
+}
+
+function sameSessionTimelineSupplementRevision(
+  left: SessionTimelineSupplementRevision,
+  right: SessionTimelineSupplementRevision
+): boolean {
+  return left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.dev === right.dev &&
+    left.ino === right.ino;
+}
+
+function canAppendSessionTimelineSupplementRevision(
+  previous: SessionTimelineSupplementRevision,
+  next: SessionTimelineSupplementRevision
+): boolean {
+  return previous.dev === next.dev &&
+    previous.ino === next.ino &&
+    next.size > previous.size &&
+    next.mtimeMs >= previous.mtimeMs;
+}
+
+function sessionTimelineSupplementCacheKey(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isIndexedSessionTimelineLine(line: string): boolean {
+  return line.includes("response_item") || line.includes("token_count");
+}
+
+function isCompleteJsonLine(line: string): boolean {
+  try {
+    JSON.parse(line);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function indexedSessionLinesFromRange(
+  text: string,
+  options: { skipLeadingPartial: boolean; endsAtFileEnd: boolean }
+): { lines: string[]; trailingPartialLine: string } {
+  const endsWithNewline = text.endsWith("\n");
+  const parts = text.split("\n").map((line) => line.replace(/\r$/, ""));
+  if (endsWithNewline) {
+    parts.pop();
+  }
+  if (options.skipLeadingPartial && parts.length) {
+    parts.shift();
+  }
+
+  let trailingPartialLine = "";
+  if (!endsWithNewline && parts.length) {
+    const trailing = parts.at(-1)!;
+    if (!options.endsAtFileEnd || !isCompleteJsonLine(trailing)) {
+      trailingPartialLine = options.endsAtFileEnd ? trailing : "";
+      parts.pop();
+    }
+  }
+
+  return {
+    lines: parts.filter((line) => line && isIndexedSessionTimelineLine(line)),
+    trailingPartialLine
+  };
+}
+
+function appendIndexedSessionLines(
+  entry: SessionTimelineSupplementCacheEntry,
+  text: string
+): void {
+  const combined = `${entry.trailingPartialLine}${text}`;
+  const extracted = indexedSessionLinesFromRange(combined, {
+    skipLeadingPartial: false,
+    endsAtFileEnd: true
+  });
+  entry.lines.push(...extracted.lines);
+  entry.trailingPartialLine = extracted.trailingPartialLine;
+}
+
+function trimSessionTimelineSupplementLines(entry: SessionTimelineSupplementCacheEntry): void {
+  let indexedBytes = entry.lines.reduce((total, line) => total + utf8ByteLength(line) + 1, 0);
+  while (
+    entry.lines.length > SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT ||
+    indexedBytes > SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT
+  ) {
+    const removed = entry.lines.shift();
+    if (removed === undefined) {
+      break;
+    }
+    indexedBytes -= utf8ByteLength(removed) + 1;
+  }
+  entry.indexedBytes = Math.max(0, indexedBytes);
+}
+
+function sessionTimelineSupplementSatisfies(
+  entry: SessionTimelineSupplementCacheEntry,
+  allowedTurnIds: ReadonlySet<string>,
+  includeContextUsage: boolean
+): boolean {
+  const hasRequestedTurns = [...allowedTurnIds].every((turnId) =>
+    entry.lines.some((line) => line.includes("response_item") && line.includes(turnId))
+  );
+  const hasContextUsage = !includeContextUsage || entry.lines.some((line) => line.includes("token_count"));
+  return allowedTurnIds.size ? hasRequestedTurns : hasContextUsage;
+}
+
+async function readSessionTimelineFileRange(
+  filePath: string,
+  start: number,
+  end: number
+): Promise<string> {
+  if (end < start) {
+    return "";
+  }
+  const stream = createReadStream(filePath, {
+    encoding: "utf8",
+    start,
+    end,
+    highWaterMark: 64 * 1024
+  });
+  const chunks: string[] = [];
+  try {
+    for await (const chunk of stream) {
+      chunks.push(String(chunk));
+    }
+  } finally {
+    stream.destroy();
+  }
+  return chunks.join("");
+}
 
 async function readBoundedMatchingSessionLines(
   filePath: string,
@@ -758,6 +949,31 @@ function shouldExposeOverlayTimelineItem(item: MobileTimelineItem): boolean {
   return item.text.trim().length > 0;
 }
 
+function isCanonicalFileTimelineItem(item: MobileTimelineItem): boolean {
+  return (
+    item.role === "tool" &&
+    item.toolKind === "file" &&
+    !item.id.startsWith("synthetic:") &&
+    !item.id.startsWith("unresolved:")
+  );
+}
+
+function isProvisionalTurnDiffItem(item: MobileTimelineItem): boolean {
+  return item.provisional === "turn-diff";
+}
+
+function suppressProvisionalTurnDiffItems(items: MobileTimelineItem[]): MobileTimelineItem[] {
+  const turnsWithCanonicalFile = new Set(
+    items.flatMap((item) => (isCanonicalFileTimelineItem(item) && item.turnId ? [item.turnId] : []))
+  );
+  if (!turnsWithCanonicalFile.size) {
+    return items;
+  }
+  return items.filter(
+    (item) => !(isProvisionalTurnDiffItem(item) && item.turnId && turnsWithCanonicalFile.has(item.turnId))
+  );
+}
+
 
 function isMissingLiveThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -1020,6 +1236,7 @@ class MockAppServerPeer implements ManagedAppServerPeer {
   private readonly consumedRateLimitResetCredits = new Set<string>();
   private readonly notificationHandlers = new Set<(message: AppServerNotificationMessage) => void>();
   private readonly serverRequestHandlers = new Set<(message: AppServerServerRequestMessage) => void>();
+  private readonly mockTurnRunTokens = new Map<string, number>();
 
   private createThread(): Thread {
     return {
@@ -1699,7 +1916,12 @@ class MockAppServerPeer implements ManagedAppServerPeer {
         updatedAt: Math.floor(Date.now() / 1000)
       };
       this.upsertThread(this.thread);
+      const runToken = (this.mockTurnRunTokens.get(startParams.threadId) ?? 0) + 1;
+      this.mockTurnRunTokens.set(startParams.threadId, runToken);
       setTimeout(() => {
+        if (this.mockTurnRunTokens.get(startParams.threadId) !== runToken) {
+          return;
+        }
         const baseParams = {
           threadId: startParams.threadId,
           turnId
@@ -1779,13 +2001,27 @@ class MockAppServerPeer implements ManagedAppServerPeer {
     }
 
     if (method === "turn/interrupt") {
-      const interruptParams = params as { threadId?: string };
+      const interruptParams = params as { threadId?: string; turnId?: string };
       this.selectThread(interruptParams.threadId);
+      const turnId = interruptParams.turnId || this.thread.turns.at(-1)?.id;
+      this.mockTurnRunTokens.set(
+        this.thread.id,
+        (this.mockTurnRunTokens.get(this.thread.id) ?? 0) + 1
+      );
       this.thread = {
         ...this.thread,
         status: { type: "idle" }
       };
       this.upsertThread(this.thread);
+      if (turnId) {
+        this.emitNotification({
+          method: "turn/completed",
+          params: {
+            threadId: this.thread.id,
+            turn: { id: turnId, status: "interrupted" }
+          }
+        });
+      }
       return {};
     }
 
@@ -3371,6 +3607,21 @@ export class AppServerGateway {
   private readonly threadMutationLocks = new Map<string, Promise<void>>();
   private readonly rollbackOperations = new Map<string, RollbackOperationEntry>();
   private readonly outputDecoders = new Map<string, TextDecoder>();
+  private readonly sessionTimelineSupplementCache = new Map<string, SessionTimelineSupplementCacheEntry>();
+  private readonly sessionTimelineSupplementInFlight = new Map<
+    string,
+    Promise<SessionTimelineSupplementCacheEntry>
+  >();
+  private readonly sessionTimelineSupplementDiagnostics: SessionTimelineSupplementDiagnostics = {
+    scanCount: 0,
+    cacheHitCount: 0,
+    coalescedRequestCount: 0,
+    invalidationCount: 0,
+    degradedCount: 0,
+    readCount: 0,
+    readBytes: 0,
+    reads: []
+  };
   private processCounter = 0;
   private commandExecCounter = 0;
   private fsWatchCounter = 0;
@@ -3429,6 +3680,13 @@ export class AppServerGateway {
 
   getTimelineBootId(): string {
     return this.browserBootId;
+  }
+
+  getSessionTimelineSupplementDiagnostics(): SessionTimelineSupplementDiagnostics {
+    return {
+      ...this.sessionTimelineSupplementDiagnostics,
+      reads: this.sessionTimelineSupplementDiagnostics.reads.map((read) => ({ ...read }))
+    };
   }
 
   onBrowserEvent(handler: (event: BrowserTimelineEvent) => void): () => void {
@@ -4000,6 +4258,7 @@ export class AppServerGateway {
           tool: "change",
           status: "running"
         });
+        this.suppressProvisionalTurnDiffOverlay(event.threadId, event.turnId);
         break;
       case "tool_output_delta":
         this.appendTimelineOverlayText(event.threadId, event.turnId, event.itemId, event.delta, {
@@ -4019,12 +4278,19 @@ export class AppServerGateway {
           ...event.item,
           ...(event.item.role === "reasoning" ? { done: true } : {})
         });
+        if (isCanonicalFileTimelineItem(event.item)) {
+          this.suppressProvisionalTurnDiffOverlay(event.threadId, event.turnId);
+        }
         break;
       case "turn_diff_updated": {
         const stats = diffStats(event.diff);
+        if (this.threadHasCanonicalFileActivity(event.threadId, event.turnId)) {
+          break;
+        }
         this.upsertTimelineOverlayItem(event.threadId, event.turnId, {
           id: `${event.turnId}-diff`,
           role: "diff",
+          provisional: "turn-diff",
           text: event.diff,
           toolKind: "file",
           diffPath: "工作区变更",
@@ -4161,6 +4427,40 @@ export class AppServerGateway {
       updatedAtMs: Date.now()
     });
     this.trimTimelineOverlay(overlay);
+  }
+
+  private threadHasCanonicalFileActivity(threadId: string, turnId: string | null): boolean {
+    if (!turnId) {
+      return false;
+    }
+    const overlay = this.timelineOverlays.get(threadId);
+    if (!overlay) {
+      return false;
+    }
+    for (const entry of overlay.values()) {
+      if (entry.turnId === turnId && isCanonicalFileTimelineItem(entry.item)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private suppressProvisionalTurnDiffOverlay(threadId: string, turnId: string | null): void {
+    if (!turnId) {
+      return;
+    }
+    const overlay = this.timelineOverlays.get(threadId);
+    if (!overlay) {
+      return;
+    }
+    for (const [id, entry] of overlay) {
+      if (entry.turnId === turnId && isProvisionalTurnDiffItem(entry.item)) {
+        overlay.delete(id);
+      }
+    }
+    if (!overlay.size) {
+      this.timelineOverlays.delete(threadId);
+    }
   }
 
   private finishTurnTimelineOverlay(threadId: string, turnId: string, status: string): void {
@@ -4519,6 +4819,269 @@ export class AppServerGateway {
     return { ...thread, status: "idle" };
   }
 
+  private recordSessionTimelineSupplementRead(
+    path: string,
+    start: number,
+    end: number,
+    kind: "cold" | "append"
+  ): void {
+    const bytes = end >= start ? end - start + 1 : 0;
+    this.sessionTimelineSupplementDiagnostics.readCount += 1;
+    this.sessionTimelineSupplementDiagnostics.readBytes += bytes;
+    this.sessionTimelineSupplementDiagnostics.reads.push({ path, start, end, bytes, kind });
+    while (
+      this.sessionTimelineSupplementDiagnostics.reads.length >
+      MAX_SESSION_TIMELINE_SUPPLEMENT_DIAGNOSTIC_READS
+    ) {
+      this.sessionTimelineSupplementDiagnostics.reads.shift();
+    }
+  }
+
+  private async readTrackedSessionTimelineRange(
+    path: string,
+    start: number,
+    end: number,
+    kind: "cold" | "append"
+  ): Promise<string> {
+    const text = await readSessionTimelineFileRange(path, start, end);
+    this.recordSessionTimelineSupplementRead(path, start, end, kind);
+    return text;
+  }
+
+  private pruneSessionTimelineSupplementCache(now = Date.now(), preserveKey?: string): void {
+    for (const [key, entry] of this.sessionTimelineSupplementCache) {
+      if (
+        key !== preserveKey &&
+        !this.sessionTimelineSupplementInFlight.has(key) &&
+        now - entry.lastAccessedAt > SESSION_TIMELINE_SUPPLEMENT_CACHE_IDLE_MS
+      ) {
+        this.sessionTimelineSupplementCache.delete(key);
+      }
+    }
+
+    const cacheBytes = () => [...this.sessionTimelineSupplementCache.values()]
+      .reduce((total, entry) => total + entry.indexedBytes + utf8ByteLength(entry.trailingPartialLine), 0);
+    while (
+      this.sessionTimelineSupplementCache.size > MAX_SESSION_TIMELINE_SUPPLEMENT_CACHE_FILES ||
+      cacheBytes() > MAX_SESSION_TIMELINE_SUPPLEMENT_CACHE_BYTES
+    ) {
+      const candidate = [...this.sessionTimelineSupplementCache.entries()]
+        .filter(([key]) => key !== preserveKey && !this.sessionTimelineSupplementInFlight.has(key))
+        .sort((left, right) => left[1].lastAccessedAt - right[1].lastAccessedAt)[0];
+      if (!candidate) {
+        break;
+      }
+      this.sessionTimelineSupplementCache.delete(candidate[0]);
+    }
+  }
+
+  private async coldSessionTimelineSupplementEntry(
+    path: string,
+    revision: SessionTimelineSupplementRevision,
+    allowedTurnIds: ReadonlySet<string>,
+    includeContextUsage: boolean
+  ): Promise<SessionTimelineSupplementCacheEntry> {
+    this.sessionTimelineSupplementDiagnostics.scanCount += 1;
+    const now = Date.now();
+    if (revision.size <= 0) {
+      return {
+        path,
+        revision,
+        lines: [],
+        trailingPartialLine: "",
+        scanStart: 0,
+        scanOffset: 0,
+        searchExhausted: true,
+        indexedBytes: 0,
+        lastAccessedAt: now
+      };
+    }
+
+    const tailStart = Math.max(0, revision.size - SESSION_TIMELINE_SUPPLEMENT_COLD_TAIL_BYTES);
+    const tailText = await this.readTrackedSessionTimelineRange(path, tailStart, revision.size - 1, "cold");
+    const tail = indexedSessionLinesFromRange(tailText, {
+      skipLeadingPartial: tailStart > 0,
+      endsAtFileEnd: true
+    });
+    const entry: SessionTimelineSupplementCacheEntry = {
+      path,
+      revision,
+      lines: tail.lines,
+      trailingPartialLine: tail.trailingPartialLine,
+      scanStart: tailStart,
+      scanOffset: revision.size,
+      searchExhausted: tailStart === 0,
+      indexedBytes: 0,
+      lastAccessedAt: now
+    };
+
+    if (
+      tailStart > 0 &&
+      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+    ) {
+      const targetStart = Math.max(0, tailStart - SESSION_TIMELINE_SUPPLEMENT_TARGET_SCAN_BYTES);
+      const targetText = await this.readTrackedSessionTimelineRange(path, targetStart, tailStart - 1, "cold");
+      const target = indexedSessionLinesFromRange(targetText, {
+        skipLeadingPartial: targetStart > 0,
+        endsAtFileEnd: false
+      });
+      entry.lines = [...target.lines, ...entry.lines];
+      entry.scanStart = targetStart;
+      entry.searchExhausted = true;
+    }
+
+    trimSessionTimelineSupplementLines(entry);
+    if (
+      entry.searchExhausted &&
+      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+    ) {
+      this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
+    }
+    return entry;
+  }
+
+  private async extendSessionTimelineSupplementEntry(
+    current: SessionTimelineSupplementCacheEntry,
+    allowedTurnIds: ReadonlySet<string>,
+    includeContextUsage: boolean
+  ): Promise<SessionTimelineSupplementCacheEntry> {
+    this.sessionTimelineSupplementDiagnostics.scanCount += 1;
+    const entry: SessionTimelineSupplementCacheEntry = {
+      ...current,
+      lines: [...current.lines],
+      lastAccessedAt: Date.now()
+    };
+    const targetStart = Math.max(0, current.scanStart - SESSION_TIMELINE_SUPPLEMENT_TARGET_SCAN_BYTES);
+    if (targetStart < current.scanStart) {
+      const targetText = await this.readTrackedSessionTimelineRange(
+        current.path,
+        targetStart,
+        current.scanStart - 1,
+        "cold"
+      );
+      const target = indexedSessionLinesFromRange(targetText, {
+        skipLeadingPartial: targetStart > 0,
+        endsAtFileEnd: false
+      });
+      entry.lines = [...target.lines, ...entry.lines];
+      entry.scanStart = targetStart;
+    }
+    entry.searchExhausted = true;
+    trimSessionTimelineSupplementLines(entry);
+    if (!sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)) {
+      this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
+    }
+    return entry;
+  }
+
+  private async appendSessionTimelineSupplementEntry(
+    current: SessionTimelineSupplementCacheEntry,
+    revision: SessionTimelineSupplementRevision,
+    allowedTurnIds: ReadonlySet<string>,
+    includeContextUsage: boolean
+  ): Promise<SessionTimelineSupplementCacheEntry> {
+    this.sessionTimelineSupplementDiagnostics.scanCount += 1;
+    const entry: SessionTimelineSupplementCacheEntry = {
+      ...current,
+      revision,
+      lines: [...current.lines],
+      scanOffset: revision.size,
+      lastAccessedAt: Date.now()
+    };
+    const appendedText = await this.readTrackedSessionTimelineRange(
+      current.path,
+      current.scanOffset,
+      revision.size - 1,
+      "append"
+    );
+    appendIndexedSessionLines(entry, appendedText);
+    trimSessionTimelineSupplementLines(entry);
+    if (
+      entry.searchExhausted &&
+      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+    ) {
+      this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
+    }
+    return entry;
+  }
+
+  private async sessionTimelineSupplementEntry(
+    path: string,
+    revision: SessionTimelineSupplementRevision,
+    allowedTurnIds: ReadonlySet<string>,
+    includeContextUsage: boolean
+  ): Promise<SessionTimelineSupplementCacheEntry> {
+    const key = sessionTimelineSupplementCacheKey(path);
+    this.pruneSessionTimelineSupplementCache(Date.now(), key);
+
+    while (true) {
+      const inFlight = this.sessionTimelineSupplementInFlight.get(key);
+      if (inFlight) {
+        this.sessionTimelineSupplementDiagnostics.coalescedRequestCount += 1;
+        const entry = await inFlight;
+        if (!sameSessionTimelineSupplementRevision(entry.revision, revision)) {
+          continue;
+        }
+        entry.lastAccessedAt = Date.now();
+        if (
+          sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage) ||
+          entry.searchExhausted
+        ) {
+          return entry;
+        }
+        continue;
+      }
+
+      const current = this.sessionTimelineSupplementCache.get(key);
+      if (current && sameSessionTimelineSupplementRevision(current.revision, revision)) {
+        current.lastAccessedAt = Date.now();
+        if (
+          sessionTimelineSupplementSatisfies(current, allowedTurnIds, includeContextUsage) ||
+          current.searchExhausted
+        ) {
+          this.sessionTimelineSupplementDiagnostics.cacheHitCount += 1;
+          return current;
+        }
+      }
+
+      let operation: Promise<SessionTimelineSupplementCacheEntry>;
+      if (current && sameSessionTimelineSupplementRevision(current.revision, revision)) {
+        operation = this.extendSessionTimelineSupplementEntry(current, allowedTurnIds, includeContextUsage);
+      } else if (current && canAppendSessionTimelineSupplementRevision(current.revision, revision)) {
+        operation = this.appendSessionTimelineSupplementEntry(
+          current,
+          revision,
+          allowedTurnIds,
+          includeContextUsage
+        );
+      } else {
+        if (current) {
+          this.sessionTimelineSupplementDiagnostics.invalidationCount += 1;
+        }
+        operation = this.coldSessionTimelineSupplementEntry(
+          path,
+          revision,
+          allowedTurnIds,
+          includeContextUsage
+        );
+      }
+
+      const cachedOperation = operation.then((entry) => {
+        this.sessionTimelineSupplementCache.set(key, entry);
+        this.pruneSessionTimelineSupplementCache(Date.now(), key);
+        return entry;
+      });
+      this.sessionTimelineSupplementInFlight.set(key, cachedOperation);
+      try {
+        return await cachedOperation;
+      } finally {
+        if (this.sessionTimelineSupplementInFlight.get(key) === cachedOperation) {
+          this.sessionTimelineSupplementInFlight.delete(key);
+        }
+      }
+    }
+  }
+
   private async readSessionTimelineSupplement(
     threadId: string,
     allowedTurnIds: ReadonlySet<string>,
@@ -4534,20 +5097,16 @@ export class AppServerGateway {
       if (!metadata.isFile()) {
         return null;
       }
-      const turnIds = [...allowedTurnIds];
-      const { lines, budgetExhausted } = await readBoundedMatchingSessionLines(rolloutPath, metadata.size, {
-        maxSourceBytes: SESSION_TIMELINE_SUPPLEMENT_SOURCE_LIMIT,
-        maxMatchedBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
-        maxLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
-        maxElapsedMs: SESSION_TIMELINE_SUPPLEMENT_SCAN_TIME_MS,
-        matches: (line) =>
-          (line.includes("response_item") && turnIds.some((turnId) => line.includes(turnId))) ||
-          (Boolean(options.includeContextUsage) && line.includes("token_count"))
-      });
-      if (budgetExhausted && !lines.length) {
+      const entry = await this.sessionTimelineSupplementEntry(
+        rolloutPath,
+        sessionTimelineSupplementRevision(metadata),
+        allowedTurnIds,
+        Boolean(options.includeContextUsage)
+      );
+      if (!entry.lines.length) {
         return null;
       }
-      const supplement = scanSessionTimelineSupplement(lines, {
+      const supplement = scanSessionTimelineSupplement(entry.lines, {
         allowedTurnIds,
         maxScanLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
         maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
@@ -4557,13 +5116,14 @@ export class AppServerGateway {
           this.registerSessionTimelineContentSource(threadId, rolloutPath, metadata, locator)
       });
       const contextUsage = options.includeContextUsage
-        ? latestSessionContextUsageFromLines(lines, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES })
+        ? latestSessionContextUsageFromLines(entry.lines, { maxTailLines: SESSION_CONTEXT_USAGE_TAIL_LINES })
         : null;
       return {
         records: supplement.records,
         ...(contextUsage ? { contextUsage } : {})
       };
     } catch {
+      this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
       return null;
     }
   }
@@ -4698,7 +5258,7 @@ export class AppServerGateway {
       }
     }
 
-    return timeline;
+    return suppressProvisionalTurnDiffItems(timeline);
   }
 
   private withTimelineGeneration(detail: MobileThreadDetail): MobileThreadDetail {
@@ -5286,7 +5846,11 @@ export class AppServerGateway {
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     await this.ensureReady();
-    return this.client.interruptTurn(threadId, turnId);
+    await this.client.interruptTurn(threadId, turnId);
+    this.markTerminalTurn(threadId, turnId);
+    if (this.activeTurnIds.get(threadId) === turnId) {
+      this.activeTurnIds.delete(threadId);
+    }
   }
 
   async steerTurn(input: { threadId: string; expectedTurnId: string; text: string }): Promise<{ turnId: string }> {
@@ -6131,6 +6695,8 @@ export class AppServerGateway {
     this.timelineContentSources.clear();
     this.timelineContentCursors.clear();
     this.timelineContentCursorByPosition.clear();
+    this.sessionTimelineSupplementCache.clear();
+    this.sessionTimelineSupplementInFlight.clear();
     this.clearOutputDecoders();
   }
 }

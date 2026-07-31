@@ -831,6 +831,163 @@ describe("app-server session timeline merge", () => {
     ]);
   });
 
+  it("moves misplaced canonical commands to unique supplement message anchors", () => {
+    const baseItems: MobileTimelineItem[] = [
+      {
+        id: "agent-a",
+        turnId: "turn-1",
+        role: "agent",
+        text: "message A"
+      },
+      {
+        id: "agent-b",
+        turnId: "turn-1",
+        role: "agent",
+        text: "message B"
+      },
+      {
+        id: "cmd-a",
+        turnId: "turn-1",
+        role: "tool",
+        text: "first",
+        toolKind: "command",
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success"
+      },
+      {
+        id: "cmd-b",
+        turnId: "turn-1",
+        role: "tool",
+        text: "second",
+        toolKind: "command",
+        server: "/repo",
+        tool: "rg timeline src",
+        status: "success"
+      }
+    ];
+    const jsonl = [
+      sessionLine({
+        type: "function_call",
+        id: "cmd-a",
+        call_id: "call-cmd-a",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "message A" }]
+      }),
+      sessionLine({
+        type: "function_call",
+        id: "cmd-b",
+        call_id: "call-cmd-b",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "rg timeline src", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "message B" }]
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(merged.map((item) => item.id)).toEqual(["cmd-a", "agent-a", "cmd-b", "agent-b"]);
+    expect(merged.find((item) => item.id === "cmd-a")).toMatchObject({
+      role: "tool",
+      toolKind: "command",
+      server: "/repo",
+      tool: "rg timeline src",
+      text: "first",
+      status: "success"
+    });
+    expect(merged.find((item) => item.id === "cmd-b")).toMatchObject({
+      role: "tool",
+      toolKind: "command",
+      server: "/repo",
+      tool: "rg timeline src",
+      text: "second",
+      status: "success"
+    });
+  });
+
+  it("keeps a canonical command in place when the supplement message anchor is ambiguous", () => {
+    const baseItems: MobileTimelineItem[] = [
+      { id: "agent-a", turnId: "turn-1", role: "agent", text: "same message" },
+      { id: "agent-b", turnId: "turn-1", role: "agent", text: "same message" },
+      {
+        id: "cmd-canonical",
+        turnId: "turn-1",
+        role: "tool",
+        text: "canonical output",
+        toolKind: "command",
+        server: "/repo",
+        tool: "npm test",
+        status: "success"
+      }
+    ];
+    const jsonl = [
+      sessionLine({
+        type: "function_call",
+        id: "cmd-canonical",
+        call_id: "call-canonical",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm test", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "same message" }]
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(merged.map((item) => item.id)).toEqual(["agent-a", "agent-b", "cmd-canonical"]);
+  });
+
+  it("keeps a canonical command in place when one supplement anchor is outside the page window", () => {
+    const baseItems: MobileTimelineItem[] = [
+      { id: "agent-current", turnId: "turn-1", role: "agent", text: "current message" },
+      {
+        id: "cmd-current",
+        turnId: "turn-1",
+        role: "tool",
+        text: "canonical output",
+        toolKind: "command",
+        server: "/repo",
+        tool: "npm test",
+        status: "success"
+      }
+    ];
+    const jsonl = [
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "outside page" }]
+      }),
+      sessionLine({
+        type: "function_call",
+        id: "cmd-current",
+        call_id: "call-current",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "npm test", workdir: "/repo" })
+      }),
+      sessionLine({
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "current message" }]
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems(baseItems, jsonl);
+
+    expect(merged.map((item) => item.id)).toEqual(["agent-current", "cmd-current"]);
+  });
+
   it("keeps metadata-identical tools distinct unless strong identity or unique anchors match", () => {
     const baseItems: MobileTimelineItem[] = [
       { id: "user-1", turnId: "turn-1", role: "user", text: "运行两次" },

@@ -3481,9 +3481,10 @@ describe("CodexAppServerClient", () => {
     await expect(client.listThreadTurns({ threadId: "thread-1", cursor: "cursor-1", limit: 10 })).resolves.toEqual({
       items: [{ id: "item-page-agent-1", role: "agent", text: "分页 turn" }],
       nextCursor: "item-next",
-      turnManifest: { turnIds: [] }
+      turnManifest: { turnIds: [] },
+      completeness: { status: "repair-required", reason: "source-gap" }
     });
-    expect(peer.calls.at(-1)).toEqual({
+    expect(peer.calls).toContainEqual({
       method: "thread/items/list",
       params: {
         threadId: "thread-1",
@@ -3589,6 +3590,117 @@ describe("CodexAppServerClient", () => {
       nextCursor: null,
       turnManifest: { turnIds: ["turn-authoritative"] }
     });
+  });
+
+  it("item owner metadata 完整时不请求 broad full turns", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      if (method === "thread/items/list") {
+        return {
+          data: [
+            {
+              type: "agentMessage",
+              id: "agent-owned",
+              turnId: "turn-owned",
+              text: "已携带 owner",
+              phase: "final_answer",
+              memoryCitation: null
+            }
+          ],
+          nextCursor: null
+        };
+      }
+      if (method === "thread/turns/list") {
+        throw new Error("owner fast path must not request thread/turns/list");
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    await expect(client.listThreadTurns({ threadId: "thread-owned", limit: 30 })).resolves.toEqual({
+      items: [{ id: "agent-owned", turnId: "turn-owned", role: "agent", text: "已携带 owner" }],
+      nextCursor: null,
+      turnManifest: { turnIds: ["turn-owned"] }
+    });
+    expect(peer.calls.filter((call) => call.method === "thread/turns/list")).toEqual([]);
+  });
+
+  it("owner 缺失时 resolver 受 RPC 和 item budget 限制并返回 repair-required", async () => {
+    const peer = new FakePeer();
+    peer.request = async (method, params) => {
+      peer.calls.push({ method, params });
+      const request = params as { turnId?: string; itemsView?: string; limit?: number };
+      if (method === "thread/items/list" && !request.turnId) {
+        return {
+          data: [
+            {
+              type: "agentMessage",
+              id: "agent-unresolved",
+              text: "owner 未知",
+              phase: "final_answer",
+              memoryCitation: null
+            }
+          ],
+          nextCursor: null
+        };
+      }
+      if (method === "thread/turns/list") {
+        return {
+          data: Array.from({ length: 50 }, (_, index) => ({
+            id: `candidate-turn-${index}`,
+            itemsView: "notLoaded",
+            status: { type: "completed" },
+            error: null,
+            startedAt: index,
+            completedAt: index + 1,
+            durationMs: 1,
+            items: []
+          })),
+          nextCursor: "more-turns",
+          backwardsCursor: null
+        };
+      }
+      if (method === "thread/items/list" && request.turnId) {
+        return {
+          data: Array.from({ length: 200 }, (_, index) => ({
+            type: "agentMessage",
+            id: `${request.turnId}-unrelated-${index}`,
+            text: "x".repeat(256),
+            phase: "final_answer",
+            memoryCitation: null
+          })),
+          nextCursor: "more-items"
+        };
+      }
+      return {};
+    };
+    const client = new CodexAppServerClient(peer);
+
+    const page = await client.listThreadTurns({ threadId: "thread-unresolved", limit: 30 });
+    const manifestCalls = peer.calls.filter((call) => call.method === "thread/turns/list");
+    const candidateItemCalls = peer.calls.filter((call) => {
+      if (call.method !== "thread/items/list") return false;
+      return Boolean((call.params as { turnId?: string }).turnId);
+    });
+
+    expect(manifestCalls).toHaveLength(1);
+    expect(manifestCalls[0]?.params).toEqual(expect.objectContaining({
+      itemsView: "notLoaded",
+      limit: expect.any(Number)
+    }));
+    expect(candidateItemCalls.length).toBeLessThanOrEqual(8);
+    expect(candidateItemCalls.every((call) => (call.params as { limit?: number }).limit! <= 100)).toBe(true);
+    expect(page).toEqual(expect.objectContaining({
+      items: [expect.objectContaining({ id: "agent-unresolved" })],
+      completeness: { status: "repair-required", reason: "source-gap" }
+    }));
+    expect(
+      peer.calls.some((call) =>
+        call.method === "thread/turns/list" &&
+        (call.params as { itemsView?: string }).itemsView === "full"
+      )
+    ).toBe(false);
   });
 
   it.each([

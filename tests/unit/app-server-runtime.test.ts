@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, stat, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -1789,6 +1789,45 @@ async function withRolloutText<T>(text: string, run: (rolloutPath: string) => Pr
 
 async function withSessionRolloutPath<T>(run: (rolloutPath: string) => Promise<T>): Promise<T> {
   return withRolloutText(sessionJsonl(), run);
+}
+
+type SessionTimelineSupplementDiagnostics = {
+  scanCount: number;
+  cacheHitCount: number;
+  coalescedRequestCount: number;
+  invalidationCount: number;
+  degradedCount: number;
+  readCount: number;
+  readBytes: number;
+  reads: Array<{
+    path: string;
+    start: number;
+    end: number;
+    bytes: number;
+    kind: "cold" | "append";
+  }>;
+};
+
+function sessionTimelineSupplementDiagnostics(
+  gateway: AppServerGateway
+): SessionTimelineSupplementDiagnostics {
+  return (gateway as unknown as {
+    getSessionTimelineSupplementDiagnostics(): SessionTimelineSupplementDiagnostics;
+  }).getSessionTimelineSupplementDiagnostics();
+}
+
+function rolloutCommandLine(itemId: string, command: string): string {
+  return JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "function_call",
+      id: itemId,
+      call_id: `call-${itemId}`,
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: command, workdir: "/tmp/workspace" }),
+      internal_chat_message_metadata_passthrough: { turn_id: "turn-1" }
+    }
+  });
 }
 
 class RollbackPeer implements ManagedAppServerPeer {
@@ -4038,6 +4077,138 @@ describe("createAppServerGateway", () => {
     });
   });
 
+  it("大 rollout 冷扫描只读取有界尾窗并记录读取区间", async () => {
+    const rolloutText = `${"x".repeat(4 * 1024 * 1024)}\n${rolloutCommandLine(
+      "tool-cold-tail",
+      "npm test"
+    )}\n`;
+
+    await withRolloutText(rolloutText, async (rolloutPath) => {
+      const gateway = new AppServerGateway(new SessionResponseItemsPeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      const detail = await gateway.readThread("thread-1");
+      const diagnostics = sessionTimelineSupplementDiagnostics(gateway);
+      const metadata = await stat(rolloutPath);
+
+      expect(detail.timeline.map((item) => item.id)).toContain("tool-cold-tail");
+      expect(diagnostics).toMatchObject({ scanCount: 1, readCount: 1 });
+      expect(diagnostics.reads).toEqual([
+        expect.objectContaining({
+          path: rolloutPath,
+          start: expect.any(Number),
+          end: metadata.size - 1,
+          kind: "cold"
+        })
+      ]);
+      expect(diagnostics.reads[0]!.start).toBeGreaterThan(0);
+      expect(diagnostics.reads[0]!.bytes).toBeLessThan(metadata.size);
+      expect(diagnostics.readBytes).toBe(diagnostics.reads[0]!.bytes);
+    });
+  });
+
+  it("metadata 与 latest page 并发读取复用同一 revision scan", async () => {
+    await withSessionRolloutPath(async (rolloutPath) => {
+      const gateway = new AppServerGateway(
+        new SessionResponseItemsWithTimelineMetaPeer(rolloutPath),
+        { assertPathAllowed: (path) => path }
+      );
+
+      const [metadata, page] = await Promise.all([
+        gateway.readThreadMetadata("thread-1"),
+        gateway.listThreadTurns({ threadId: "thread-1" })
+      ]);
+      const diagnostics = sessionTimelineSupplementDiagnostics(gateway);
+
+      expect(metadata.contextUsage?.totalTokens).toBe(52000);
+      expect(page.items.map((item) => item.id)).toContain("fc-read");
+      expect(diagnostics.scanCount).toBe(1);
+      expect(diagnostics.readCount).toBe(1);
+      expect(diagnostics.coalescedRequestCount).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("append-only rollout 只读取上次 offset 之后的新字节", async () => {
+    await withSessionRolloutPath(async (rolloutPath) => {
+      const gateway = new AppServerGateway(
+        new SessionResponseItemsWithTimelineMetaPeer(rolloutPath),
+        { assertPathAllowed: (path) => path }
+      );
+
+      await gateway.listThreadTurns({ threadId: "thread-1" });
+      const previousSize = (await stat(rolloutPath)).size;
+      await appendFile(
+        rolloutPath,
+        `\n${rolloutCommandLine("tool-appended", "npm run typecheck")}\n`,
+        "utf8"
+      );
+
+      const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+      const diagnostics = sessionTimelineSupplementDiagnostics(gateway);
+      const currentSize = (await stat(rolloutPath)).size;
+
+      expect(page.items.map((item) => item.id)).toContain("tool-appended");
+      expect(diagnostics.scanCount).toBe(2);
+      expect(diagnostics.reads.at(-1)).toEqual({
+        path: rolloutPath,
+        start: previousSize,
+        end: currentSize - 1,
+        bytes: currentSize - previousSize,
+        kind: "append"
+      });
+    });
+  });
+
+  it("截断、同尺寸替换和 revision 回退都会失效 supplement cache", async () => {
+    const first = `${rolloutCommandLine("revision-a", "npm test")}\n`;
+    const replacement = `${rolloutCommandLine("revision-b", "npm lint")}\n`;
+    expect(Buffer.byteLength(replacement)).toBe(Buffer.byteLength(first));
+
+    await withRolloutText(first, async (rolloutPath) => {
+      const gateway = new AppServerGateway(
+        new SessionResponseItemsWithTimelineMetaPeer(rolloutPath),
+        { assertPathAllowed: (path) => path }
+      );
+
+      await utimes(rolloutPath, new Date("2026-07-29T10:00:00.000Z"), new Date("2026-07-29T10:00:00.000Z"));
+      await gateway.listThreadTurns({ threadId: "thread-1" });
+
+      await writeFile(rolloutPath, replacement, "utf8");
+      await utimes(rolloutPath, new Date("2026-07-29T11:00:00.000Z"), new Date("2026-07-29T11:00:00.000Z"));
+      expect((await gateway.listThreadTurns({ threadId: "thread-1" })).items.map((item) => item.id))
+        .toContain("revision-b");
+
+      await utimes(rolloutPath, new Date("2026-07-29T09:00:00.000Z"), new Date("2026-07-29T09:00:00.000Z"));
+      await gateway.listThreadTurns({ threadId: "thread-1" });
+
+      await truncate(rolloutPath, Buffer.byteLength(replacement) - 8);
+      await gateway.listThreadTurns({ threadId: "thread-1" });
+
+      const diagnostics = sessionTimelineSupplementDiagnostics(gateway);
+      expect(diagnostics.scanCount).toBe(4);
+      expect(diagnostics.invalidationCount).toBe(3);
+    });
+  });
+
+  it("completion repair 重试复用未变化 revision 的 supplement 结果", async () => {
+    await withSessionRolloutPath(async (rolloutPath) => {
+      const gateway = new AppServerGateway(new EmptySessionTimelinePeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await gateway.readThreadMetadata("thread-1");
+      }
+
+      const diagnostics = sessionTimelineSupplementDiagnostics(gateway);
+      expect(diagnostics.scanCount).toBe(1);
+      expect(diagnostics.readCount).toBe(1);
+      expect(diagnostics.cacheHitCount).toBeGreaterThanOrEqual(3);
+      expect(diagnostics.degradedCount).toBe(0);
+    });
+  });
+
   it("app-server 已有 fileChange 时不会把 JSONL apply_patch 补成重复文件活动", async () => {
     await withSessionRolloutPath(async (rolloutPath) => {
     const peer = new SessionResponseItemsWithNativePatchPeer(rolloutPath);
@@ -4154,6 +4325,7 @@ describe("createAppServerGateway", () => {
         expect.objectContaining({
           id: "turn-1-diff",
           role: "diff",
+          provisional: "turn-diff",
           diffPath: "工作区变更",
           added: 2,
           removed: 1,
@@ -4161,6 +4333,78 @@ describe("createAppServerGateway", () => {
         })
       ])
     });
+  });
+
+  it("刷新读取用 canonical file items 替换 turn diff fallback 并保留不同 itemId", async () => {
+    const peer = new NotificationOverlayPeer();
+    const gateway = new AppServerGateway(peer);
+
+    await gateway.ensureReady();
+    peer.emitNotification({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diff: "+provisional"
+      }
+    });
+    peer.emitNotification({
+      method: "item/fileChange/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "file-a",
+        delta: "editing src/a.ts\n"
+      }
+    });
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "fileChange",
+          id: "file-a",
+          status: "success",
+          changes: [{ path: "src/a.ts", diff: "+a" }]
+        }
+      }
+    });
+    peer.emitNotification({
+      method: "item/fileChange/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "file-b",
+        delta: "editing src/b.ts\n"
+      }
+    });
+    peer.emitNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "fileChange",
+          id: "file-b",
+          status: "success",
+          changes: [{ path: "src/b.ts", diff: "+b" }]
+        }
+      }
+    });
+    peer.emitNotification({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diff: "+late provisional"
+      }
+    });
+
+    const detail = await gateway.readThread("thread-1");
+    const fileItems = detail.timeline.filter((item) => item.role === "tool" && item.toolKind === "file");
+    expect(fileItems.map((item) => item.id)).toEqual(["file-a", "file-b"]);
+    expect(detail.timeline.some((item) => item.provisional === "turn-diff" || item.id === "turn-1-diff")).toBe(false);
   });
 
   it("mock 模式发送消息时会广播规范化 realtime 事件", async () => {

@@ -303,10 +303,14 @@ import type {
 import { createTurnUserInput } from "./user-input";
 import { decodeFilesMentioned, type FileReference } from "../../shared/file-attachments";
 import { getRuntimeConfig } from "../runtime";
+import { TIMELINE_PAGE_BYTE_BUDGET, utf8ByteLength } from "../../shared/timeline-content";
 
 const DEFAULT_TIMELINE_PAGE_LIMIT = 30;
 const MAX_TIMELINE_PAGE_LIMIT = 100;
 const LEGACY_THREAD_TURN_PAGE_LIMIT = 1;
+const OWNER_RESOLVER_MAX_RPC = 8;
+const OWNER_RESOLVER_TURN_LIMIT = 8;
+const OWNER_RESOLVER_ITEM_LIMIT = 120;
 const LEGACY_ITEM_CURSOR_KIND = "legacy-thread-items";
 
 type LegacyItemCursor = {
@@ -2703,6 +2707,84 @@ export class CodexAppServerClient {
     };
   }
 
+  private async resolveThreadItemOwners(
+    threadId: string,
+    unresolvedItemIds: ReadonlySet<string>,
+    pageLimit: number
+  ): Promise<{ ownerByItemId: Map<string, string>; complete: boolean }> {
+    const ownerByItemId = new Map<string, string>();
+    const unresolved = new Set(unresolvedItemIds);
+    let rpcCount = 0;
+    let itemCount = 0;
+    let scannedBytes = 0;
+    let manifest: ThreadTurnsListResponse;
+
+    try {
+      manifest = (await this.peer.request("thread/turns/list", {
+        threadId,
+        limit: OWNER_RESOLVER_TURN_LIMIT,
+        sortDirection: "desc",
+        itemsView: "notLoaded"
+      } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
+      rpcCount += 1;
+      scannedBytes += utf8ByteLength(JSON.stringify(manifest));
+    } catch {
+      return { ownerByItemId, complete: false };
+    }
+
+    const candidates = manifest.data.slice(0, OWNER_RESOLVER_TURN_LIMIT);
+    for (const turn of candidates) {
+      for (const item of turn.items) {
+        itemCount += 1;
+        if (unresolved.delete(item.id)) {
+          ownerByItemId.set(item.id, turn.id);
+        }
+        if (!unresolved.size || itemCount >= OWNER_RESOLVER_ITEM_LIMIT) {
+          break;
+        }
+      }
+      if (!unresolved.size || itemCount >= OWNER_RESOLVER_ITEM_LIMIT) {
+        break;
+      }
+    }
+
+    for (const turn of candidates) {
+      if (
+        !unresolved.size ||
+        rpcCount >= OWNER_RESOLVER_MAX_RPC ||
+        itemCount >= OWNER_RESOLVER_ITEM_LIMIT ||
+        scannedBytes >= TIMELINE_PAGE_BYTE_BUDGET
+      ) {
+        break;
+      }
+      let response: ThreadItemsListResponse;
+      try {
+        response = (await this.peer.request("thread/items/list", {
+          threadId,
+          turnId: turn.id,
+          limit: Math.min(pageLimit, MAX_TIMELINE_PAGE_LIMIT),
+          sortDirection: "desc"
+        } satisfies ThreadItemsListParams)) as ThreadItemsListResponse;
+        rpcCount += 1;
+      } catch {
+        continue;
+      }
+      scannedBytes += utf8ByteLength(JSON.stringify(response));
+      const remainingItems = OWNER_RESOLVER_ITEM_LIMIT - itemCount;
+      for (const item of response.data.slice(0, remainingItems)) {
+        itemCount += 1;
+        if (unresolved.delete(item.id)) {
+          ownerByItemId.set(item.id, turn.id);
+        }
+        if (!unresolved.size) {
+          break;
+        }
+      }
+    }
+
+    return { ownerByItemId, complete: unresolved.size === 0 };
+  }
+
   async listThreadTurns(input: ListThreadTurnsInput): Promise<MobileTimelinePage> {
     const legacyCursor = parseLegacyItemCursor(input.cursor);
     const params: ThreadItemsListParams = {
@@ -2783,42 +2865,36 @@ export class CodexAppServerClient {
       };
     }
 
-    let authoritativeTurns: Thread["turns"] = [];
-    if (!input.cursor) {
-      try {
-        const turnPage = (await this.peer.request("thread/turns/list", {
-          threadId: input.threadId,
-          limit: timelinePageLimit(input.limit),
-          sortDirection: "desc",
-          itemsView: "full"
-        } satisfies ThreadTurnsListParams)) as ThreadTurnsListResponse;
-        authoritativeTurns = chronologicalTurnsFromDescPage(turnPage.data);
-      } catch {
-        // The item page remains readable, but destructive actions fail closed without this manifest.
-      }
-    }
-    const turnIdByItemId = new Map(
-      authoritativeTurns.flatMap((turn) => turn.items.map((item) => [item.id, turn.id] as const))
-    );
-    const items = response.data.flatMap((item) => {
+    const mappedItems = response.data.flatMap((item) => {
       const mapped = timelineItem(item);
       if (!mapped) return [];
       const timelineMeta = threadItemTimelineMeta(item);
-      const turnId = timelineMeta.turnId ?? turnIdByItemId.get(item.id);
       return [{
+        itemId: item.id,
         ...mapped,
-        ...timelineMeta,
-        ...(turnId ? { turnId } : {})
+        ...timelineMeta
       }];
+    });
+    const unresolvedItemIds = new Set(
+      mappedItems.flatMap((item) => item.turnId ? [] : [item.itemId])
+    );
+    const ownerResolution = unresolvedItemIds.size
+      ? await this.resolveThreadItemOwners(input.threadId, unresolvedItemIds, timelinePageLimit(input.limit))
+      : { ownerByItemId: new Map<string, string>(), complete: true };
+    const items = mappedItems.map(({ itemId, ...item }) => {
+      const turnId = item.turnId ?? ownerResolution.ownerByItemId.get(itemId);
+      return {
+        ...item,
+        ...(turnId ? { turnId } : {})
+      };
     }).reverse();
     return {
       items,
       nextCursor: response.nextCursor ?? null,
-      turnManifest: {
-        turnIds: authoritativeTurns.length
-          ? authoritativeTurns.map((turn) => turn.id)
-          : orderedTimelineTurnIds(items)
-      }
+      turnManifest: { turnIds: orderedTimelineTurnIds(items) },
+      ...(!ownerResolution.complete
+        ? { completeness: { status: "repair-required" as const, reason: "source-gap" as const } }
+        : {})
     };
   }
 
