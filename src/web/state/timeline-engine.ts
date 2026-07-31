@@ -1552,6 +1552,74 @@ function mergeFileReferences(
   return merged;
 }
 
+function metadataMatchCandidates(
+  pageEntry: TimelineEntry,
+  detailEntries: TimelineEntry[],
+  usedDetailIndexes: ReadonlySet<number>
+): number[] {
+  const exactIdMatches = detailEntries.flatMap((detail, index) =>
+    !usedDetailIndexes.has(index) && detail.id === pageEntry.id ? [index] : []
+  );
+  if (exactIdMatches.length === 1) {
+    return exactIdMatches;
+  }
+
+  if (pageEntry.body.kind !== "user-message") {
+    return [];
+  }
+  const pageText = pageEntry.body.text.trim();
+  if (!pageText) {
+    return [];
+  }
+  return detailEntries.flatMap((detail, index) => {
+    if (usedDetailIndexes.has(index) || detail.body.kind !== "user-message") {
+      return [];
+    }
+    if (detail.body.text.trim() !== pageText) {
+      return [];
+    }
+    if (pageEntry.turnId && detail.turnId && pageEntry.turnId !== detail.turnId) {
+      return [];
+    }
+    if (pageEntry.turnId && !detail.turnId) {
+      return [];
+    }
+    return [index];
+  });
+}
+
+export function mergeTimelineEntryMetadata(
+  pageEntries: TimelineEntry[],
+  detailEntries: TimelineEntry[]
+): TimelineEntry[] {
+  const usedDetailIndexes = new Set<number>();
+  return pageEntries.map((pageEntry) => {
+    const candidates = metadataMatchCandidates(pageEntry, detailEntries, usedDetailIndexes);
+    if (candidates.length !== 1) {
+      return pageEntry;
+    }
+    const detailEntry = detailEntries[candidates[0]!];
+    if (!detailEntry || pageEntry.body.kind !== "user-message" || detailEntry.body.kind !== "user-message") {
+      return pageEntry;
+    }
+
+    usedDetailIndexes.add(candidates[0]!);
+    return {
+      ...pageEntry,
+      body: {
+        ...pageEntry.body,
+        ...(pageEntry.body.imagePaths?.length || !detailEntry.body.imagePaths?.length
+          ? {}
+          : { imagePaths: [...detailEntry.body.imagePaths] }),
+        ...(pageEntry.body.skillReferences?.length || !detailEntry.body.skillReferences?.length
+          ? {}
+          : { skillReferences: [...detailEntry.body.skillReferences] }),
+        fileReferences: mergeFileReferences(pageEntry.body.fileReferences, detailEntry.body.fileReferences)
+      }
+    };
+  });
+}
+
 function mergeEntry(current: TimelineEntry, next: TimelineEntry, authoritative = false): TimelineEntry {
   const currentCandidate = contentCandidateForEntry(current, 1);
   const nextCandidate = contentCandidateForEntry(next, authoritative ? 2 : 1);

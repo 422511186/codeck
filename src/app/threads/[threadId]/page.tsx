@@ -12,6 +12,7 @@ import { ApiError } from "../../../web/api/client";
 import { createRequestCoordinator, isRequestAbort } from "../../../web/api/requestCoordinator";
 import { useStore, type ThreadNotice } from "../../../web/state/store";
 import { hasVisibleTurnOutput, rollbackMetadataForEntry, timelineItemToEntry, type TimelineEntry } from "../../../web/state/timeline";
+import { mergeTimelineEntryMetadata } from "../../../web/state/timeline-engine";
 import { Timeline } from "../../../web/components/Timeline";
 import { PlanBar } from "../../../web/components/cards/PlanBar";
 import { ChatInput } from "../../../web/components/ChatInput";
@@ -567,7 +568,7 @@ export default function ThreadPage(): JSX.Element {
           }
           return;
         }
-        applyThreadDetail({
+        const pageDetail = {
           ...td,
           bootId: initialPage.bootId ?? td.bootId,
           generation: initialPage.generation ?? td.generation,
@@ -575,7 +576,11 @@ export default function ThreadPage(): JSX.Element {
           turnManifest: initialPage.turnManifest ?? td.turnManifest,
           timeline: initialPage.items,
           nextCursor: initialPage.nextCursor ?? null
-        }, "replace");
+        };
+        applyThreadDetail(pageDetail, "replace", threadId, mergeTimelineEntryMetadata(
+          threadDetailEntries(pageDetail),
+          threadDetailEntries(td)
+        ));
       } catch (err) {
         if (isRequestAbort(err)) return;
         if (!cancelled) {

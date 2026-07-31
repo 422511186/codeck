@@ -912,6 +912,7 @@ export function latestSessionContextUsage(
 
 type SessionTimelineRecordsOptions = {
   allowedTurnIds?: ReadonlySet<string>;
+  includeUnboundSkillReferences?: boolean;
   maxSupplementRecords?: number;
   contentRefFactory?: (locator: SessionContentRefLocator) => string;
 };
@@ -1018,7 +1019,11 @@ export function scanSessionTimelineSupplement(
     if (!turnId) {
       continue;
     }
-    if (options.allowedTurnIds && !options.allowedTurnIds.has(turnId)) {
+    if (
+      options.allowedTurnIds &&
+      !options.allowedTurnIds.has(turnId) &&
+      !options.includeUnboundSkillReferences
+    ) {
       continue;
     }
 
@@ -1494,6 +1499,7 @@ function fallbackToolInsertIndex(items: MobileTimelineItem[]): number {
 
 export type MergeSessionTimelineItemsOptions = {
   allowedTurnIds?: ReadonlySet<string>;
+  includeUnboundSkillReferences?: boolean;
   maxSupplementRecords?: number;
 };
 
@@ -1504,9 +1510,54 @@ export function mergeSessionTimelineItems(
 ): MobileTimelineItem[] {
   const records = sessionTimelineRecords(jsonl, {
     allowedTurnIds: options.allowedTurnIds,
+    includeUnboundSkillReferences: options.includeUnboundSkillReferences,
     maxSupplementRecords: options.maxSupplementRecords ?? DEFAULT_SESSION_SUPPLEMENT_RECORD_LIMIT
   });
   return mergeSessionTimelineRecords(baseItems, records);
+}
+
+function mergeUnboundSkillReferences(
+  baseItems: MobileTimelineItem[],
+  records: SessionTimelineRecord[]
+): MobileTimelineItem[] {
+  const usersByText = new Map<string, MobileTimelineItem[]>();
+  for (const item of baseItems) {
+    if (item.role !== "user") {
+      continue;
+    }
+    const text = item.text.trim();
+    if (!text) {
+      continue;
+    }
+    const users = usersByText.get(text) ?? [];
+    users.push(item);
+    usersByText.set(text, users);
+  }
+
+  const recoveredById = new Map<string, MobileSkillReference[]>();
+  for (const record of records) {
+    if (record.kind !== "skill-reference") {
+      continue;
+    }
+    const users = usersByText.get(record.anchorText.trim()) ?? [];
+    if (users.length !== 1 || users[0]!.skillReferences?.length) {
+      continue;
+    }
+    const existing = recoveredById.get(users[0]!.id) ?? [];
+    for (const skill of record.skillReferences) {
+      if (!existing.some((current) => current.name === skill.name && current.path === skill.path)) {
+        existing.push(skill);
+      }
+    }
+    recoveredById.set(users[0]!.id, existing);
+  }
+
+  return baseItems.map((item) => {
+    const skillReferences = recoveredById.get(item.id);
+    return skillReferences?.length && !item.skillReferences?.length
+      ? { ...item, skillReferences }
+      : item;
+  });
 }
 
 export function mergeSessionTimelineRecords(
@@ -1544,5 +1595,5 @@ export function mergeSessionTimelineRecords(
     result.push(...mergeTurnSessionRecords(chunk, recordsByTurn.get(turnId) ?? []));
   }
 
-  return result;
+  return mergeUnboundSkillReferences(result, records);
 }

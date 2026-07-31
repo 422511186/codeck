@@ -1264,6 +1264,28 @@ class SessionResponseItemsWithTimelineMetaPeer extends SessionResponseItemsPeer 
   }
 }
 
+class SessionResponseItemsWithoutTurnMetaPeer extends SessionResponseItemsPeer {
+  override async request(method: string, params?: unknown): Promise<unknown> {
+    if (method === "thread/turns/list") {
+      this.calls.push({ method, params });
+      return { data: [], nextCursor: null, backwardsCursor: null };
+    }
+    if (method === "thread/items/list") {
+      this.calls.push({ method, params });
+      return {
+        data: sessionThread().turns[0]!.items.map((item) => {
+          const mapped = { ...(item as Record<string, unknown>) };
+          return mapped.id === "user-1"
+            ? { ...mapped, content: [{ type: "text", text: "historical skill", text_elements: [] }] }
+            : mapped;
+        }),
+        nextCursor: null
+      };
+    }
+    return super.request(method, params);
+  }
+}
+
 class EmptySessionTimelinePeer extends SessionResponseItemsPeer {
   override async request(method: string, params?: unknown): Promise<unknown> {
     if (method === "thread/turns/list") {
@@ -5801,6 +5823,46 @@ describe("createAppServerGateway", () => {
     await gateway.deleteThread("mock-thread-1");
     await expect(gateway.listThreads()).resolves.toMatchObject({
       threads: expect.not.arrayContaining([expect.objectContaining({ id: "mock-thread-1" })])
+    });
+  });
+
+  it("recovers a Skill for a paged user item when the page has no turnId", async () => {
+    const turnMeta = { turn_id: "turn-1" };
+    const line = (text: string) => JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+        internal_chat_message_metadata_passthrough: turnMeta
+      }
+    });
+    const rolloutText = [
+      line("historical skill"),
+      line([
+        "<skill>",
+        "<name>openspec-explore</name>",
+        "<path>C:\\Users\\hzy\\workspace\\codex-web-phone\\.codex\\skills\\openspec-explore\\SKILL.md</path>",
+        "---",
+        "private Skill body",
+        "</skill>"
+      ].join("\n"))
+    ].join("\n");
+
+    await withRolloutText(rolloutText, async (rolloutPath) => {
+      const gateway = new AppServerGateway(new SessionResponseItemsWithoutTurnMetaPeer(rolloutPath), {
+        assertPathAllowed: (path) => path
+      });
+
+      const page = await gateway.listThreadTurns({ threadId: "thread-1" });
+      const user = page.items.find((item) => item.role === "user");
+
+      expect(user?.turnId).toBeUndefined();
+      expect(user?.skillReferences).toEqual([{
+        name: "openspec-explore",
+        path: "C:\\Users\\hzy\\workspace\\codex-web-phone\\.codex\\skills\\openspec-explore\\SKILL.md"
+      }]);
+      expect(JSON.stringify(page)).not.toContain("private Skill body");
     });
   });
 });

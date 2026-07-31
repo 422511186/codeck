@@ -439,13 +439,18 @@ function trimSessionTimelineSupplementLines(entry: SessionTimelineSupplementCach
 function sessionTimelineSupplementSatisfies(
   entry: SessionTimelineSupplementCacheEntry,
   allowedTurnIds: ReadonlySet<string>,
-  includeContextUsage: boolean
+  includeContextUsage: boolean,
+  includeUnboundSkillReferences = false
 ): boolean {
   const hasRequestedTurns = [...allowedTurnIds].every((turnId) =>
     entry.lines.some((line) => line.includes("response_item") && line.includes(turnId))
   );
   const hasContextUsage = !includeContextUsage || entry.lines.some((line) => line.includes("token_count"));
-  return allowedTurnIds.size ? hasRequestedTurns : hasContextUsage;
+  return allowedTurnIds.size
+    ? hasRequestedTurns
+    : includeUnboundSkillReferences
+      ? true
+      : hasContextUsage;
 }
 
 async function readSessionTimelineFileRange(
@@ -4879,7 +4884,8 @@ export class AppServerGateway {
     path: string,
     revision: SessionTimelineSupplementRevision,
     allowedTurnIds: ReadonlySet<string>,
-    includeContextUsage: boolean
+    includeContextUsage: boolean,
+    includeUnboundSkillReferences: boolean
   ): Promise<SessionTimelineSupplementCacheEntry> {
     this.sessionTimelineSupplementDiagnostics.scanCount += 1;
     const now = Date.now();
@@ -4917,7 +4923,12 @@ export class AppServerGateway {
 
     if (
       tailStart > 0 &&
-      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+      !sessionTimelineSupplementSatisfies(
+        entry,
+        allowedTurnIds,
+        includeContextUsage,
+        includeUnboundSkillReferences
+      )
     ) {
       const targetStart = Math.max(0, tailStart - SESSION_TIMELINE_SUPPLEMENT_TARGET_SCAN_BYTES);
       const targetText = await this.readTrackedSessionTimelineRange(path, targetStart, tailStart - 1, "cold");
@@ -4933,7 +4944,12 @@ export class AppServerGateway {
     trimSessionTimelineSupplementLines(entry);
     if (
       entry.searchExhausted &&
-      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+      !sessionTimelineSupplementSatisfies(
+        entry,
+        allowedTurnIds,
+        includeContextUsage,
+        includeUnboundSkillReferences
+      )
     ) {
       this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
     }
@@ -4943,7 +4959,8 @@ export class AppServerGateway {
   private async extendSessionTimelineSupplementEntry(
     current: SessionTimelineSupplementCacheEntry,
     allowedTurnIds: ReadonlySet<string>,
-    includeContextUsage: boolean
+    includeContextUsage: boolean,
+    includeUnboundSkillReferences: boolean
   ): Promise<SessionTimelineSupplementCacheEntry> {
     this.sessionTimelineSupplementDiagnostics.scanCount += 1;
     const entry: SessionTimelineSupplementCacheEntry = {
@@ -4968,7 +4985,12 @@ export class AppServerGateway {
     }
     entry.searchExhausted = true;
     trimSessionTimelineSupplementLines(entry);
-    if (!sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)) {
+    if (!sessionTimelineSupplementSatisfies(
+      entry,
+      allowedTurnIds,
+      includeContextUsage,
+      includeUnboundSkillReferences
+    )) {
       this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
     }
     return entry;
@@ -4978,7 +5000,8 @@ export class AppServerGateway {
     current: SessionTimelineSupplementCacheEntry,
     revision: SessionTimelineSupplementRevision,
     allowedTurnIds: ReadonlySet<string>,
-    includeContextUsage: boolean
+    includeContextUsage: boolean,
+    includeUnboundSkillReferences: boolean
   ): Promise<SessionTimelineSupplementCacheEntry> {
     this.sessionTimelineSupplementDiagnostics.scanCount += 1;
     const entry: SessionTimelineSupplementCacheEntry = {
@@ -4998,7 +5021,12 @@ export class AppServerGateway {
     trimSessionTimelineSupplementLines(entry);
     if (
       entry.searchExhausted &&
-      !sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage)
+      !sessionTimelineSupplementSatisfies(
+        entry,
+        allowedTurnIds,
+        includeContextUsage,
+        includeUnboundSkillReferences
+      )
     ) {
       this.sessionTimelineSupplementDiagnostics.degradedCount += 1;
     }
@@ -5009,7 +5037,8 @@ export class AppServerGateway {
     path: string,
     revision: SessionTimelineSupplementRevision,
     allowedTurnIds: ReadonlySet<string>,
-    includeContextUsage: boolean
+    includeContextUsage: boolean,
+    includeUnboundSkillReferences: boolean
   ): Promise<SessionTimelineSupplementCacheEntry> {
     const key = sessionTimelineSupplementCacheKey(path);
     this.pruneSessionTimelineSupplementCache(Date.now(), key);
@@ -5024,7 +5053,12 @@ export class AppServerGateway {
         }
         entry.lastAccessedAt = Date.now();
         if (
-          sessionTimelineSupplementSatisfies(entry, allowedTurnIds, includeContextUsage) ||
+          sessionTimelineSupplementSatisfies(
+            entry,
+            allowedTurnIds,
+            includeContextUsage,
+            includeUnboundSkillReferences
+          ) ||
           entry.searchExhausted
         ) {
           return entry;
@@ -5036,7 +5070,12 @@ export class AppServerGateway {
       if (current && sameSessionTimelineSupplementRevision(current.revision, revision)) {
         current.lastAccessedAt = Date.now();
         if (
-          sessionTimelineSupplementSatisfies(current, allowedTurnIds, includeContextUsage) ||
+          sessionTimelineSupplementSatisfies(
+            current,
+            allowedTurnIds,
+            includeContextUsage,
+            includeUnboundSkillReferences
+          ) ||
           current.searchExhausted
         ) {
           this.sessionTimelineSupplementDiagnostics.cacheHitCount += 1;
@@ -5046,13 +5085,19 @@ export class AppServerGateway {
 
       let operation: Promise<SessionTimelineSupplementCacheEntry>;
       if (current && sameSessionTimelineSupplementRevision(current.revision, revision)) {
-        operation = this.extendSessionTimelineSupplementEntry(current, allowedTurnIds, includeContextUsage);
+        operation = this.extendSessionTimelineSupplementEntry(
+          current,
+          allowedTurnIds,
+          includeContextUsage,
+          includeUnboundSkillReferences
+        );
       } else if (current && canAppendSessionTimelineSupplementRevision(current.revision, revision)) {
         operation = this.appendSessionTimelineSupplementEntry(
           current,
           revision,
           allowedTurnIds,
-          includeContextUsage
+          includeContextUsage,
+          includeUnboundSkillReferences
         );
       } else {
         if (current) {
@@ -5062,7 +5107,8 @@ export class AppServerGateway {
           path,
           revision,
           allowedTurnIds,
-          includeContextUsage
+          includeContextUsage,
+          includeUnboundSkillReferences
         );
       }
 
@@ -5085,7 +5131,7 @@ export class AppServerGateway {
   private async readSessionTimelineSupplement(
     threadId: string,
     allowedTurnIds: ReadonlySet<string>,
-    options: { includeContextUsage?: boolean } = {}
+    options: { includeContextUsage?: boolean; includeUnboundSkillReferences?: boolean } = {}
   ): Promise<{ records: SessionTimelineRecord[]; contextUsage?: MobileThreadDetail["contextUsage"] } | null> {
     try {
       const sourceRolloutPath = await this.client.getConversationRolloutPath(threadId);
@@ -5101,13 +5147,15 @@ export class AppServerGateway {
         rolloutPath,
         sessionTimelineSupplementRevision(metadata),
         allowedTurnIds,
-        Boolean(options.includeContextUsage)
+        Boolean(options.includeContextUsage),
+        Boolean(options.includeUnboundSkillReferences)
       );
       if (!entry.lines.length) {
         return null;
       }
       const supplement = scanSessionTimelineSupplement(entry.lines, {
         allowedTurnIds,
+        includeUnboundSkillReferences: options.includeUnboundSkillReferences,
         maxScanLines: SESSION_TIMELINE_SUPPLEMENT_SCAN_LINE_LIMIT,
         maxScanBytes: SESSION_TIMELINE_SUPPLEMENT_MATCHED_TEXT_LIMIT,
         maxSupplementRecords: SESSION_TIMELINE_SUPPLEMENT_RECORD_LIMIT,
@@ -5150,10 +5198,13 @@ export class AppServerGateway {
     page: MobileTimelinePage
   ): Promise<MobileTimelinePage> {
     const allowedTurnIds = timelineTurnIdSet(page.items);
-    if (!allowedTurnIds.size) {
+    const hasUnboundUserItems = page.items.some((item) => item.role === "user" && !item.turnId && item.text.trim());
+    if (!allowedTurnIds.size && !hasUnboundUserItems) {
       return page;
     }
-    const supplement = await this.readSessionTimelineSupplement(threadId, allowedTurnIds);
+    const supplement = await this.readSessionTimelineSupplement(threadId, allowedTurnIds, {
+      includeUnboundSkillReferences: hasUnboundUserItems
+    });
     if (!supplement) {
       return page;
     }

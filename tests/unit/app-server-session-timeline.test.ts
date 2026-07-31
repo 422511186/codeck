@@ -914,6 +914,42 @@ describe("app-server session timeline merge", () => {
     });
   });
 
+  it("recovers a hidden rollout Skill for a page user item without turnId", () => {
+    const skillBody = [
+      "<skill>",
+      "<name>openspec-explore</name>",
+      "<path>C:\\Users\\hzy\\workspace\\codex-web-phone\\.codex\\skills\\openspec-explore\\SKILL.md</path>",
+      "---",
+      "private skill body",
+      "</skill>"
+    ].join("\n");
+    const jsonl = [
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "恢复历史 Skill" }]
+      }),
+      sessionLine({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: skillBody }]
+      })
+    ].join("\n");
+
+    const merged = mergeSessionTimelineItems([
+      { id: "user-page", role: "user", text: "恢复历史 Skill" }
+    ], jsonl);
+
+    expect(merged[0]).toMatchObject({
+      id: "user-page",
+      skillReferences: [{
+        name: "openspec-explore",
+        path: "C:\\Users\\hzy\\workspace\\codex-web-phone\\.codex\\skills\\openspec-explore\\SKILL.md"
+      }]
+    });
+    expect(JSON.stringify(merged)).not.toContain("private skill body");
+  });
+
   it("keeps a canonical command in place when the supplement message anchor is ambiguous", () => {
     const baseItems: MobileTimelineItem[] = [
       { id: "agent-a", turnId: "turn-1", role: "agent", text: "same message" },

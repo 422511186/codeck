@@ -24,6 +24,7 @@ import {
   createTimelineEngineState,
   isContextCompactionCompletionEntry,
   isVisibleTurnOutputEntry,
+  mergeTimelineEntryMetadata,
   selectOrderedDistinctTurnsForNormalizedEntries,
   selectTimelineEntries,
   type OrderedDistinctTurn,
@@ -424,9 +425,12 @@ export const useStore = create<State & Actions>((set, get) => ({
       const prev = state.threads[threadId] ?? emptyThread();
       const snapshotIngress = migrateTimelineIngress(threadId, prev.notices, entries);
       const detailIngress = migrateTimelineIngress(threadId, snapshotIngress.notices, detailEntries);
+      const snapshotEntries = detailIngress.entries.length
+        ? mergeTimelineEntryMetadata(snapshotIngress.entries, detailIngress.entries)
+        : snapshotIngress.entries;
       const snapshotEngine = reduceThreadTimelineState(prev, {
         kind: "snapshot-window",
-        entries: snapshotIngress.entries,
+        entries: snapshotEntries,
         cursor
       });
       const reducedEngine = detailIngress.entries.length

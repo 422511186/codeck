@@ -8,6 +8,7 @@ import {
   selectTimelineEntries,
   selectTurnHasVisibleOutput,
   timelineEventLedgerKey,
+  mergeTimelineEntryMetadata,
   type TimelineInput
 } from "../../src/web/state/timeline-engine";
 import type { TimelineEntry } from "../../src/web/state/timeline";
@@ -58,6 +59,81 @@ function systemEntry(id: string, turnId: string, text: string, createdAt: number
 }
 
 describe("timeline engine", () => {
+  it("fills sparse page user metadata from a unique detail entry", () => {
+    const pageEntry: TimelineEntry = {
+      id: "page-user",
+      createdAt: 1,
+      body: { kind: "user-message", text: "恢复历史 Skill", status: "sent" }
+    };
+    const detailEntry: TimelineEntry = {
+      id: "detail-user",
+      turnId: "turn-1",
+      createdAt: 1,
+      body: {
+        kind: "user-message",
+        text: "恢复历史 Skill",
+        status: "sent",
+        skillReferences: [{ name: "openspec-explore", path: "C:/skills/openspec-explore/SKILL.md" }],
+        imagePaths: ["/uploads/reference.png"],
+        fileReferences: [{
+          id: "file-1",
+          name: "reference.txt",
+          path: "/uploads/reference.txt",
+          mimeType: "text/plain",
+          size: 12
+        }]
+      }
+    };
+
+    const merged = mergeTimelineEntryMetadata([pageEntry], [detailEntry]);
+
+    expect(merged).toEqual([expect.objectContaining({
+      id: "page-user",
+      body: expect.objectContaining({
+        skillReferences: detailEntry.body.kind === "user-message" ? detailEntry.body.skillReferences : undefined,
+        imagePaths: ["/uploads/reference.png"],
+        fileReferences: detailEntry.body.kind === "user-message" ? detailEntry.body.fileReferences : undefined
+      })
+    })]);
+    expect(merged[0]?.turnId).toBeUndefined();
+  });
+
+  it("does not fill metadata when detail text matching is ambiguous", () => {
+    const pageEntry: TimelineEntry = {
+      id: "page-user",
+      createdAt: 1,
+      body: { kind: "user-message", text: "重复正文", status: "sent" }
+    };
+    const detailEntries: TimelineEntry[] = [
+      {
+        id: "detail-user-1",
+        turnId: "turn-1",
+        createdAt: 1,
+        body: {
+          kind: "user-message",
+          text: "重复正文",
+          status: "sent",
+          skillReferences: [{ name: "skill-a", path: "C:/skills/a/SKILL.md" }]
+        }
+      },
+      {
+        id: "detail-user-2",
+        turnId: "turn-2",
+        createdAt: 2,
+        body: {
+          kind: "user-message",
+          text: "重复正文",
+          status: "sent",
+          skillReferences: [{ name: "skill-b", path: "C:/skills/b/SKILL.md" }]
+        }
+      }
+    ];
+
+    const merged = mergeTimelineEntryMetadata([pageEntry], detailEntries);
+
+    expect(merged[0]?.body).toEqual(pageEntry.body);
+  });
+
   it("历史页重叠项只去重且不改写当前可见正文", () => {
     let state = createTimelineEngineState({
       entries: [agentEntry("agent-current", "turn-1", "当前稳定正文", 20)],
