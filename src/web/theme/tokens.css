@@ -312,6 +312,18 @@ a {
   border-radius: 999px;
 }
 
+@keyframes cw-timeline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cw-timeline-spin {
+  animation: cw-timeline-spin 1s linear infinite;
+  color: var(--cw-accent);
+  flex: 0 0 auto;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

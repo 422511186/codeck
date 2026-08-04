@@ -292,9 +292,31 @@ function activityCommandText(entry: TimelineEntry): string {
     return entry.body.command;
   }
   if (entry.body.kind === "tool") {
+    if (isLegacyCommandTool(entry)) {
+      const command = commandFromArguments(entry.body.arguments);
+      if (command) return command;
+    }
     return entry.body.tool;
   }
   return "";
+}
+
+function commandFromArguments(argumentsText?: string): string {
+  if (!argumentsText) return "";
+  try {
+    const value = JSON.parse(argumentsText) as { cmd?: unknown };
+    return typeof value.cmd === "string" ? value.cmd.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function isLegacyCommandTool(entry: TimelineEntry): boolean {
+  return entry.body.kind === "tool" && (
+    entry.body.toolKind === "command" ||
+    entry.body.server === "command" ||
+    entry.body.tool === "exec_command"
+  );
 }
 
 function commandTarget(command: string, kind: "read" | "list" | "search"): string {
@@ -328,11 +350,11 @@ function shortInlineText(text: string): string {
 }
 
 function isCommandActivity(entry: TimelineEntry): boolean {
-  return entry.body.kind === "command" || (entry.body.kind === "tool" && entry.body.toolKind === "command");
+  return entry.body.kind === "command" || isLegacyCommandTool(entry);
 }
 
 function isToolNamed(entry: TimelineEntry, pattern: RegExp): boolean {
-  if (entry.body.kind === "tool" && entry.body.toolKind !== "command") {
+  if (entry.body.kind === "tool" && entry.body.toolKind !== "command" && !isLegacyCommandTool(entry)) {
     return false;
   }
   const command = activityCommandText(entry);

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { PendingServerRequest, PendingServerRequestOption } from "../../api/types";
 import { codex } from "../../api/endpoints";
+import { BaseCard } from "./BaseCard";
 
 type Props = {
   approval: PendingServerRequest;
@@ -31,23 +32,15 @@ export function ApprovalCard({ approval, disabled, onResolved }: Props): JSX.Ele
   const summary = describeApproval(approval);
 
   return (
-    <div
-      style={{
-        border: "1px solid var(--cw-border)",
-        borderRadius: 12,
-        padding: 12,
-        background: "var(--cw-card)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
-        opacity: disabled ? 0.5 : 1,
-        pointerEvents: disabled ? "none" : "auto"
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span aria-hidden>⚠️</span>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>{summary.title}</span>
-      </div>
+    <div data-approval-status="pending" style={{ opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? "none" : "auto" }}>
+      <BaseCard
+        icon={<span aria-hidden="true" style={approvalIconStyle}>!</span>}
+        title={summary.title}
+        tone="warning"
+        defaultOpen={true}
+        collapsible={false}
+        right={<span style={{ color: "var(--cw-warning)", fontSize: 12 }}>等待响应</span>}
+      >
       {summary.details ? (
         <pre
           style={{
@@ -70,9 +63,23 @@ export function ApprovalCard({ approval, disabled, onResolved }: Props): JSX.Ele
       ) : (
         <ApprovalActions approval={approval} submitting={submitting} disabled={disabled} onSelect={resolve} />
       )}
+      </BaseCard>
     </div>
   );
 }
+
+const approvalIconStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 17,
+  height: 17,
+  border: "1px solid var(--cw-warning)",
+  borderRadius: "50%",
+  color: "var(--cw-warning)",
+  fontSize: 12,
+  fontWeight: 700
+};
 
 function ApprovalActions({
   approval,

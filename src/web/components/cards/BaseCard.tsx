@@ -32,7 +32,17 @@ export function BaseCard({
   const [open, setOpen] = useState(defaultOpen);
   const stripColor =
     accentColor ||
-    (status === "failed" ? "var(--cw-danger)" : status === "running" ? "var(--cw-accent)" : tone === "danger" ? "var(--cw-danger)" : "transparent");
+    (status === "failed"
+      ? "var(--cw-danger)"
+      : status === "running"
+        ? "var(--cw-accent)"
+        : tone === "danger"
+          ? "var(--cw-danger)"
+          : tone === "warning"
+            ? "var(--cw-warning)"
+            : tone === "info"
+              ? "var(--cw-accent)"
+              : "transparent");
 
   return (
     <div

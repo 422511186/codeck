@@ -2083,6 +2083,7 @@ function ThreadTimelineViewport({
   processingLabel: string;
 }): JSX.Element {
   const entries = useStore((s) => s.threads[threadId]?.entries ?? EMPTY_ENTRIES);
+  const eventStream = useStore((s) => s.threads[threadId]?.eventStream);
   const approvals = useStore((s) => s.threads[threadId]?.pendingApprovals ?? EMPTY_APPROVALS);
   const running = useStore((s) => s.threads[threadId]?.running ?? false);
   const activeTurnId = useStore((s) => s.threads[threadId]?.activeTurnId ?? null);
@@ -2129,6 +2130,7 @@ function ThreadTimelineViewport({
       <Timeline
         threadId={threadId}
         entries={entries}
+        eventStream={eventStream}
         followTail={followTail}
         approvals={approvals}
         running={running}

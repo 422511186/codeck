@@ -8,10 +8,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  CircleCheck,
   FileText,
   FolderOpen,
   Globe2,
   Image as ImageIcon,
+  LoaderCircle,
   Pencil,
   Search,
   Terminal as TerminalIcon,
@@ -37,6 +39,14 @@ import {
   timelineEntriesForPresentation,
   type ActivityPresentationItem
 } from "../state/timeline-presentation";
+import {
+  orderTimelineEntriesByEventStream,
+  timelineEntriesForEventStream,
+  timelineEntryStreamIdentity,
+  timelineStreamEventMatchesEntry,
+  timelineStreamDepthForEntry,
+  type TimelineEventStreamState
+} from "../state/timeline-event-stream";
 
 const EAGER_MARKDOWN_TEXT_LIMIT = 1_500;
 const LAZY_MARKDOWN_TEXT_LIMIT = 24_000;
@@ -87,6 +97,7 @@ const timelineDerivationDiagnostics: TimelineDerivationDiagnostics = {
 type Props = {
   threadId?: string;
   entries: TimelineEntry[];
+  eventStream?: TimelineEventStreamState;
   followTail?: boolean;
   approvals?: PendingServerRequest[];
   running?: boolean;
@@ -100,6 +111,7 @@ type Props = {
 export function Timeline({
   threadId,
   entries,
+  eventStream,
   followTail = false,
   approvals,
   running = false,
@@ -114,8 +126,14 @@ export function Timeline({
   const rowHeightCacheRef = useRef<Map<string, number>>(new Map());
   const [rowHeightVersion, setRowHeightVersion] = useState(0);
   const presentationEntries = useMemo(
-    () => timelineEntriesForPresentation(entries, { running, activeTurnId }),
-    [entries, running, activeTurnId]
+    () => {
+      const streamEntries = eventStream ? timelineEntriesForEventStream(entries, eventStream) : entries;
+      return timelineEntriesForPresentation(
+        eventStream ? orderTimelineEntriesByEventStream(streamEntries, eventStream) : streamEntries,
+        { running, activeTurnId }
+      );
+    },
+    [entries, eventStream, running, activeTurnId]
   );
   const allBlocks = useMemo(() => deriveTimelineRenderBlocks(presentationEntries), [presentationEntries]);
   const layoutIndex = useMemo(
@@ -346,7 +364,7 @@ export function Timeline({
             style={timelineRowStyle}
           >
             {block.kind === "inline-activity-log" ? (
-              <InlineActivityLog entries={block.entries} />
+              <InlineActivityLog entries={block.entries} eventStream={eventStream} />
             ) : (
               <TimelineRow
                 entry={block.entry}
@@ -406,10 +424,14 @@ function timelineRenderBlockEntryIdentity(block: TimelineRenderBlock): string {
       : block.identity;
 }
 
-export function deriveTimelineRenderBlocks(entries: TimelineEntry[]): TimelineRenderBlock[] {
+export function deriveTimelineRenderBlocks(
+  entries: TimelineEntry[],
+  eventStream?: TimelineEventStreamState
+): TimelineRenderBlock[] {
+  const orderedEntries = eventStream ? orderTimelineEntriesByEventStream(entries, eventStream) : entries;
   const blocks: TimelineRenderBlock[] = [];
   const usedBlockIdentities = new Set<string>();
-  const renderEntries = dedupeTimelineEntriesForRender(entries);
+  const renderEntries = dedupeTimelineEntriesForRender(orderedEntries);
   let index = 0;
   while (index < renderEntries.length) {
     const entry = renderEntries[index]!;
@@ -872,7 +894,7 @@ const TimelineRow = memo(function TimelineRow({
     case "system":
       return <SystemMessage entry={body} />;
     case "error":
-      return <ErrorCard text={body.text} />;
+      return <ErrorCard text={body.text} status={body.status} />;
     default:
       return <></>;
   }
@@ -996,7 +1018,13 @@ function TimelineCompletenessFooter({
   );
 }
 
-const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries: TimelineEntry[] }): JSX.Element {
+const InlineActivityLog = memo(function InlineActivityLog({
+  entries,
+  eventStream
+}: {
+  entries: TimelineEntry[];
+  eventStream?: TimelineEventStreamState;
+}): JSX.Element {
   timelineDerivationDiagnostics.inlineActivityRenderRuns += 1;
   const [open, setOpen] = useState(false);
   const [openActionKeys, setOpenActionKeys] = useState<Set<string>>(() => new Set());
@@ -1054,6 +1082,7 @@ const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries
                 <ActivityPresentationRow
                   key={item.key}
                   item={item}
+                  eventStream={eventStream}
                   open={openActionKeys.has(item.key)}
                   onToggle={() => toggleAction(item.key)}
                 />
@@ -1064,19 +1093,29 @@ const InlineActivityLog = memo(function InlineActivityLog({ entries }: { entries
       )}
     </div>
   );
-}, (previous, next) => inlineActivitySectionsCacheKey(previous.entries) === inlineActivitySectionsCacheKey(next.entries));
+}, (previous, next) =>
+  inlineActivitySectionsCacheKey(previous.entries) === inlineActivitySectionsCacheKey(next.entries) &&
+  previous.eventStream?.revision === next.eventStream?.revision
+);
 
 function ActivityPresentationRow({
   item,
+  eventStream,
   open,
   onToggle
 }: {
   item: ActivityPresentationItem;
+  eventStream?: TimelineEventStreamState;
   open: boolean;
   onToggle: () => void;
 }): JSX.Element {
+  const depth = eventStream ? timelineStreamDepthForEntry(item.entry, eventStream) : 0;
   return (
-    <div data-activity-action-kind={item.kind} style={activityActionItemStyle}>
+    <div
+      data-activity-action-kind={item.kind}
+      data-activity-depth={depth}
+      style={{ ...activityActionItemStyle, ...(depth ? { paddingLeft: Math.min(4, depth) * 14 } : {}) }}
+    >
       <button
         type="button"
         aria-expanded={open}
@@ -1088,7 +1127,8 @@ function ActivityPresentationRow({
           <ActivityKindIcon kind={item.kind} />
         </span>
         <span style={inlineActivityEntryTitleStyle}>{item.label}</span>
-        {activityEntryFailed(item.entry) ? (
+        {eventStream ? <ActivityStatusIcon entry={item.entry} eventStream={eventStream} /> : null}
+        {activityEntryFailed(item.entry) && !eventStream ? (
           <CircleAlert aria-label="失败" size={14} strokeWidth={1.8} style={{ color: "var(--cw-danger)" }} />
         ) : null}
         {open ? (
@@ -1100,6 +1140,59 @@ function ActivityPresentationRow({
       {open ? <ActivityDetail entry={item.entry} /> : null}
     </div>
   );
+}
+
+function ActivityStatusIcon({
+  entry,
+  eventStream
+}: {
+  entry: TimelineEntry;
+  eventStream: TimelineEventStreamState;
+}): JSX.Element {
+  const event = eventStream.events.find((candidate) => candidate.identity === timelineEntryStreamIdentity(entry)) ??
+    eventStream.events.find((candidate) =>
+      candidate.entryId === entry.id &&
+      candidate.turnId === entry.turnId &&
+      timelineStreamEventMatchesEntry(candidate, entry)
+    );
+  const status = event?.status ?? activityEntryStreamStatus(entry);
+  if (status === "running" || status === "pending" || status === "retrying") {
+    return (
+      <LoaderCircle
+        aria-label="进行中"
+        data-activity-status-icon="running"
+        size={14}
+        strokeWidth={1.8}
+        className="cw-timeline-spin"
+      />
+    );
+  }
+  if (status === "failed" || status === "cancelled" || status === "interrupted") {
+    return (
+      <CircleAlert
+        aria-label="失败"
+        data-activity-status-icon="failed"
+        size={14}
+        strokeWidth={1.8}
+        style={{ color: "var(--cw-danger)" }}
+      />
+    );
+  }
+  return (
+    <CircleCheck
+      aria-label="已完成"
+      data-activity-status-icon="success"
+      size={14}
+      strokeWidth={1.8}
+      style={{ color: "var(--cw-success)" }}
+    />
+  );
+}
+
+function activityEntryStreamStatus(entry: TimelineEntry): "running" | "success" | "failed" {
+  if (entry.body.kind === "reasoning") return entry.body.done ? "success" : "running";
+  if (entry.body.kind === "tool" || entry.body.kind === "command") return entry.body.status;
+  return "success";
 }
 
 function ActivityKindIcon({ kind }: { kind: ActivityPresentationItem["kind"] }): JSX.Element {

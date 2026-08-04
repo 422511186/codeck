@@ -42,6 +42,13 @@ import {
   type TimelineRepairWindow
 } from "../../shared/timeline-protocol";
 import type { WsCodexEvent, WsEvent, WsConnectionState } from "../ws/client";
+import {
+  applyTimelineStreamInput,
+  applyTimelineStreamInputs,
+  timelineEventStreamFromEntries,
+  type TimelineEventStreamState,
+  type TimelineStreamInput
+} from "./timeline-event-stream";
 import type {
   ModelInputModality,
   ModelSelection,
@@ -132,6 +139,7 @@ const timelineDiagnostics: TimelineDiagnostics = {
 export type ThreadState = {
   timelineEngine: TimelineEngineState;
   entries: TimelineEntry[];
+  eventStream: TimelineEventStreamState;
   entryIndexes: TimelineEntryIndexes;
   notices: ThreadNotice[];
   pendingApprovals: PendingServerRequest[];
@@ -289,6 +297,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
       deliveryEpoch: init?.deliveryEpoch
     });
   const entries = timelineEngine.entries;
+  const eventStream = init?.eventStream ?? timelineEventStreamFromEntries(entries);
   const entryIndexes = init?.entryIndexes ?? buildTimelineEntryIndexes(entries);
   return {
     notices: [],
@@ -326,6 +335,7 @@ export const emptyThread = (init?: Partial<ThreadState>): ThreadState => {
     ...init,
     timelineEngine,
     entries,
+    eventStream,
     entryIndexes,
     deletedTurnIds: timelineEngine.deletedTurnIds,
     interruptedTurnIds: timelineEngine.interruptedTurnIds,
@@ -631,23 +641,32 @@ export const useStore = create<State & Actions>((set, get) => ({
         ...(typeof revision === "number" ? { revision } : {})
       });
       const normalizedEntries = timelineEngine.entries;
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "entry",
+        entry: migratedEntry,
+        threadId,
+        ...(eventId ? { eventId } : {}),
+        ...(typeof migratedEntry.streamSequence === "number" ? { sequence: migratedEntry.streamSequence } : {})
+      });
+      const nextThread = indexedThreadState(
+        {
+          ...prev,
+          timelineEngine,
+          eventStream,
+          notices: ingress.notices,
+          timelineGeneration: timelineEngine.generation,
+          localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
+            normalizedEntries,
+            prev.localUserMessageIdsByTurn
+          ),
+          lastSeenItemId: migratedEntry.id
+        },
+        normalizedEntries
+      );
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState(
-            {
-              ...prev,
-              timelineEngine,
-              notices: ingress.notices,
-              timelineGeneration: timelineEngine.generation,
-              localUserMessageIdsByTurn: localUserMessageIdsByTurnFromEntries(
-                normalizedEntries,
-                prev.localUserMessageIdsByTurn
-              ),
-              lastSeenItemId: migratedEntry.id
-            },
-            normalizedEntries
-          )
+          [threadId]: nextThread
         }
       };
     }),
@@ -674,9 +693,15 @@ export const useStore = create<State & Actions>((set, get) => ({
         entry,
         deliveryEpoch: prev.deliveryEpoch
       });
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "entry",
+        entry,
+        threadId
+      });
       const nextThread = {
         ...prev,
         timelineEngine,
+        eventStream,
         entries: timelineEngine.entries,
         timelineGeneration: timelineEngine.generation,
         deletedTurnIds: timelineEngine.deletedTurnIds,
@@ -711,11 +736,17 @@ export const useStore = create<State & Actions>((set, get) => ({
         pendingId,
         ...(eventId ? { eventId } : {})
       });
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "entry",
+        entry,
+        threadId,
+        ...(eventId ? { eventId } : {})
+      });
 
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine, lastSeenItemId: itemId }, timelineEngine.entries)
+          [threadId]: indexedThreadState({ ...prev, timelineEngine, eventStream, lastSeenItemId: itemId }, timelineEngine.entries)
         }
       };
     }),
@@ -736,9 +767,15 @@ export const useStore = create<State & Actions>((set, get) => ({
         entry: deltaEntry,
         deliveryEpoch: prev.deliveryEpoch
       });
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "entry",
+        entry: deltaEntry,
+        threadId
+      });
       const nextThread = {
         ...prev,
         timelineEngine,
+        eventStream,
         entries: timelineEngine.entries,
         timelineGeneration: timelineEngine.generation,
         deletedTurnIds: timelineEngine.deletedTurnIds,
@@ -900,10 +937,20 @@ export const useStore = create<State & Actions>((set, get) => ({
     set((state) => {
       const prev = state.threads[threadId] ?? emptyThread();
       const timelineEngine = reduceThreadTimelineState(prev, { kind: "mark-turn-interrupted", turnId });
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "lifecycle",
+        threadId,
+        turnId,
+        itemId: `${turnId}-lifecycle`,
+        eventKind: "turn_interrupted",
+        status: "interrupted",
+        label: "执行已中断",
+        visible: true
+      });
       return {
         threads: {
           ...state.threads,
-          [threadId]: indexedThreadState({ ...prev, timelineEngine }, timelineEngine.entries)
+          [threadId]: indexedThreadState({ ...prev, timelineEngine, eventStream }, timelineEngine.entries)
         }
       };
     }),
@@ -1129,11 +1176,22 @@ export const useStore = create<State & Actions>((set, get) => ({
       const prev = state.threads[threadId] ?? emptyThread();
       if (prev.pendingApprovals.some((r) => r.requestId === normalizedReq.requestId)) return state;
       const mismatchNotice = permissionMismatchNotice(threadId, prev, normalizedReq);
+      const eventStream = applyTimelineStreamInput(prev.eventStream, {
+        kind: "lifecycle",
+        threadId,
+        turnId: "approval",
+        itemId: normalizedReq.requestId,
+        eventKind: "approval_requested",
+        status: "pending",
+        label: approvalStreamLabel(normalizedReq),
+        visible: false
+      });
       return {
         threads: {
           ...state.threads,
           [threadId]: {
             ...prev,
+            eventStream,
             notices: mismatchNotice
               ? mergeThreadNotices(prev.notices, [mismatchNotice])
               : prev.notices,
@@ -1158,8 +1216,22 @@ export const useStore = create<State & Actions>((set, get) => ({
         const mismatchNotices = list
           .map((request) => permissionMismatchNotice(tid, prev, request))
           .filter((notice): notice is ThreadNoticeInput => notice !== null);
+        const eventStream = list.reduce(
+          (stream, request) => applyTimelineStreamInput(stream, {
+            kind: "lifecycle",
+            threadId: tid,
+            turnId: "approval",
+            itemId: request.requestId,
+            eventKind: "approval_requested",
+            status: "pending",
+            label: approvalStreamLabel(request),
+            visible: false
+          }),
+          prev.eventStream
+        );
         nextThreads[tid] = {
           ...prev,
+          eventStream,
           notices: mergeThreadNotices(prev.notices, mismatchNotices),
           pendingApprovals: list
         };
@@ -1173,8 +1245,19 @@ export const useStore = create<State & Actions>((set, get) => ({
         if (!prev.pendingApprovals.some((r) => r.requestId === requestId)) continue;
         const resolved = new Set(prev.resolvedApprovals);
         resolved.add(requestId);
+        const eventStream = applyTimelineStreamInput(prev.eventStream, {
+          kind: "lifecycle",
+          threadId: tid,
+          turnId: "approval",
+          itemId: requestId,
+          eventKind: "approval_resolved",
+          status: "success",
+          label: "审批已处理",
+          visible: false
+        });
         nextThreads[tid] = {
           ...prev,
+          eventStream,
           resolvedApprovals: resolved,
           pendingApprovals: prev.pendingApprovals.filter((r) => r.requestId !== requestId)
         };
@@ -1219,6 +1302,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         set((state) => applyCodexDeltaInputs(state, batchEvents as BatchableTimelineDeltaEvent[], event.deliveryEpoch));
         return;
       }
+      set((state) => recordTimelineStreamEvents(state, batchEvents));
       for (const raw of event.events) {
         get().dispatchEvent({ type: "codex-event", event: raw });
       }
@@ -1238,6 +1322,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         );
         return;
       }
+      set((state) => recordTimelineStreamEvents(state, [event.event]));
       get().ensureThread(threadId);
       const generation = typeof ev.generation === "number" ? ev.generation : null;
       const visibleTimelineEvent = isVisibleTimelineEvent(ev.kind);
@@ -1292,6 +1377,7 @@ export const useStore = create<State & Actions>((set, get) => ({
         case "turn.completed":
         case "turn.failed":
         case "turn.canceled":
+        case "turn_canceled":
         case "turn_completed":
         case "turn_failed":
         case "turn_interrupted": {
@@ -1659,6 +1745,7 @@ function indexedThreadState(prev: ThreadState, entries: TimelineEntry[]): Thread
     ...prev,
     timelineEngine,
     entries: timelineEngine.entries,
+    eventStream: timelineEventStreamFromEntries(timelineEngine.entries, prev.eventStream),
     entryIndexes: buildTimelineEntryIndexes(timelineEngine.entries),
     timelineGeneration: timelineEngine.generation,
     turnManifest: timelineEngine.turnManifest,
@@ -1847,6 +1934,12 @@ function applyCodexDeltaInputs(
       }
     }
     const currentEngine = currentTimelineEngine(prev);
+    const eventStream = applyTimelineStreamInputs(
+      prev.eventStream,
+      threadEvents
+        .flatMap((event) => timelineStreamInputsForCodexEvent(event))
+        .filter((input) => timelineStreamInputAllowed(prev, input))
+    );
     const inputs = threadEvents.flatMap((event, index) => {
       const entry = timelineDeltaEntry(event, threadId, prev.timelineGeneration, index);
       if (!entry) {
@@ -1899,6 +1992,7 @@ function applyCodexDeltaInputs(
     const nextThread = {
       ...prev,
       timelineEngine,
+      eventStream,
       entries: timelineEngine.entries,
       timelineGeneration: timelineEngine.generation,
       deletedTurnIds: timelineEngine.deletedTurnIds,
@@ -1918,6 +2012,169 @@ function applyCodexDeltaInputs(
   }
 
   return changed ? { ...state, threads } : state;
+}
+
+function recordTimelineStreamEvents(
+  state: State & Actions,
+  events: WsCodexEvent["event"][]
+): State & Actions {
+  const threads = { ...state.threads };
+  let changed = false;
+  for (const event of events) {
+    for (const input of timelineStreamInputsForCodexEvent(event)) {
+      const previous = threads[input.kind === "delta" ? input.threadId : event.threadId ?? ""] ?? emptyThread();
+      const threadId = input.kind === "delta" ? input.threadId : event.threadId;
+      if (!threadId) continue;
+      if (!timelineStreamInputAllowed(previous, input)) continue;
+      const eventStream = applyTimelineStreamInput(previous.eventStream, input);
+      if (eventStream === previous.eventStream) continue;
+      threads[threadId] = { ...previous, eventStream };
+      changed = true;
+    }
+  }
+  return changed ? { ...state, threads } : state;
+}
+
+function timelineStreamInputAllowed(prev: ThreadState, input: TimelineStreamInput): boolean {
+  const turnId = input.kind === "entry"
+    ? input.entry.turnId
+    : input.turnId;
+  if (turnId && (prev.deletedTurnIds.has(turnId) || prev.interruptedTurnIds.has(turnId))) {
+    return false;
+  }
+  const generation = input.kind === "entry"
+    ? input.entry.historyStamp?.generation ?? input.entry.generation
+    : input.generation;
+  return typeof generation !== "number" || generation >= prev.timelineGeneration;
+}
+
+function timelineStreamInputsForCodexEvent(
+  event: WsCodexEvent["event"]
+): TimelineStreamInput[] {
+  const sequence = typeof event.streamSequence === "number"
+    ? event.streamSequence
+    : typeof event.sequence === "number"
+      ? event.sequence
+      : undefined;
+  const parentId = parentTimelineEventId(event);
+  const sourceMetadata = {
+    ...(parentId ? { parentId } : {}),
+    ...(typeof event.eventId === "string" ? { eventId: event.eventId } : {}),
+    ...(typeof sequence === "number" ? { sequence } : {})
+  };
+  const deltaMetadata = {
+    ...sourceMetadata,
+    ...(typeof event.bootId === "string" ? { bootId: event.bootId } : {}),
+    ...(typeof event.generation === "number" ? { generation: event.generation } : {})
+  };
+  const turnId = typeof event.turnId === "string" ? event.turnId : null;
+  if (typeof event.threadId === "string" && turnId && isTurnLifecycleEventKind(event.kind)) {
+    const isRetryableError = event.kind === "turn_error" && event.willRetry === true;
+    const isFinalError = event.kind === "turn_error" && event.willRetry !== true;
+    const isLegacyWarning = event.kind === "turn_error" &&
+      typeof event.message === "string" &&
+      isLegacyAppServerWarningText(event.message);
+    const status = isRetryableError
+      ? "retrying"
+      : event.kind === "turn.started" || event.kind === "turn_started"
+        ? "running"
+        : event.kind === "turn.canceled" || event.kind === "turn_canceled"
+          ? "cancelled"
+          : event.kind === "turn_interrupted"
+            ? "interrupted"
+            : isFinalError || event.kind === "turn.failed" || event.kind === "turn_failed"
+              ? "failed"
+              : "success";
+    const message = typeof event.message === "string" ? event.message : null;
+    return [{
+      kind: "lifecycle",
+      threadId: event.threadId,
+      turnId,
+      itemId: `${turnId}-lifecycle`,
+      eventKind: event.kind,
+      status,
+      ...(message ? { label: message } : {}),
+      visible: !isLegacyWarning && (isRetryableError || isFinalError || event.kind === "turn.failed" || event.kind === "turn_failed" || event.kind === "turn.canceled" || event.kind === "turn_canceled" || event.kind === "turn_interrupted"),
+      ...deltaMetadata
+    }];
+  }
+  if (isBatchableTimelineDeltaEvent(event)) {
+    if (
+      typeof event.threadId !== "string" ||
+      typeof event.turnId !== "string" ||
+      typeof event.itemId !== "string" ||
+      typeof event.delta !== "string" ||
+      event.delta.length === 0
+    ) {
+      return [];
+    }
+    return [{
+      kind: "delta",
+      threadId: event.threadId,
+      turnId: event.turnId,
+      itemId: event.itemId,
+      eventKind: event.kind,
+      delta: event.delta,
+      ...deltaMetadata
+    }];
+  }
+  if (
+    event.kind !== "item_updated" &&
+    event.kind !== "item.appended" &&
+    event.kind !== "item.updated"
+  ) {
+    return [];
+  }
+  const rawItem = event.item as TimelineItem | undefined;
+  if (
+    !rawItem ||
+    typeof event.threadId !== "string" ||
+    typeof rawItem.id !== "string" ||
+    typeof rawItem.role !== "string" ||
+    typeof rawItem.text !== "string"
+  ) {
+    return [];
+  }
+  const itemTurnId = typeof event.turnId === "string" ? event.turnId : rawItem.turnId;
+  const entry = timelineItemToEntry(
+    withCodexEventMetadata({ ...rawItem, ...(itemTurnId ? { turnId: itemTurnId } : {}) }, event),
+    typeof event.completedAtMs === "number" ? event.completedAtMs : Date.now()
+  );
+  return [{ kind: "entry", entry, threadId: event.threadId, ...sourceMetadata }];
+}
+
+function isTurnLifecycleEventKind(kind: string): boolean {
+  return new Set([
+    "turn.started",
+    "turn_started",
+    "turn.completed",
+    "turn_completed",
+    "turn.failed",
+    "turn_failed",
+    "turn.canceled",
+    "turn_canceled",
+    "turn_interrupted",
+    "turn_error"
+  ]).has(kind);
+}
+
+function parentTimelineEventId(event: WsCodexEvent["event"]): string | null {
+  for (const key of ["parentId", "parentItemId", "parentCallId", "parentEventId"]) {
+    const value = event[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+function approvalStreamLabel(request: PendingServerRequest): string {
+  if (request.title) return request.title;
+  if (request.description) return request.description;
+  switch (request.kind) {
+    case "question": return "等待回答";
+    case "mcp_elicitation": return "等待 MCP 确认";
+    case "dynamic_tool": return "等待动态工具确认";
+    default: return "等待审批";
+  }
 }
 
 function replaceSetContents<T>(target: Set<T>, source: Set<T>): void {

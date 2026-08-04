@@ -36,6 +36,194 @@ describe("web store codex events", () => {
     expect(useStore.getState().threads["thread-1"]?.activeTurnId).toBeNull();
   });
 
+  it("keeps retry, completion and stale failure updates on one event-stream lifecycle", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-retry",
+        turnId: "turn-1",
+        eventId: "retry-1",
+        streamSequence: 10,
+        message: "连接暂时断开，正在重试",
+        willRetry: true
+      }
+    });
+
+    expect(useStore.getState().threads["thread-retry"]?.eventStream.events[0]).toMatchObject({
+      kind: "error",
+      status: "retrying",
+      visible: true,
+      eventKind: "turn_error"
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_completed",
+        threadId: "thread-retry",
+        turnId: "turn-1",
+        eventId: "retry-complete",
+        streamSequence: 20
+      }
+    });
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_error",
+        threadId: "thread-retry",
+        turnId: "turn-1",
+        eventId: "retry-stale",
+        streamSequence: 11,
+        message: "迟到的旧重试",
+        willRetry: true
+      }
+    });
+
+    expect(useStore.getState().threads["thread-retry"]?.eventStream.events[0]).toMatchObject({
+      status: "success",
+      label: "执行完成",
+      sourceEventIds: ["retry-1", "retry-complete", "retry-stale"]
+    });
+  });
+
+  it("shows final failures, cancellation and local interruption as lifecycle states", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn_failed",
+        threadId: "thread-failure",
+        turnId: "turn-failed",
+        message: "模型执行失败"
+      }
+    });
+    expect(useStore.getState().threads["thread-failure"]?.eventStream.events[0]).toMatchObject({
+      status: "failed",
+      visible: true,
+      label: "模型执行失败"
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "turn.canceled",
+        threadId: "thread-cancel",
+        turnId: "turn-cancel"
+      }
+    });
+    expect(useStore.getState().threads["thread-cancel"]?.eventStream.events[0]).toMatchObject({
+      status: "cancelled",
+      visible: true,
+      label: "已取消"
+    });
+
+    useStore.getState().markTurnInterrupted("thread-interrupt", "turn-interrupt");
+    expect(useStore.getState().threads["thread-interrupt"]?.eventStream.events[0]).toMatchObject({
+      status: "interrupted",
+      visible: true,
+      label: "执行已中断"
+    });
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-interrupt",
+        turnId: "turn-interrupt",
+        itemId: "late-command",
+        eventId: "late-command-event",
+        delta: "迟到输出"
+      }
+    });
+    expect(useStore.getState().threads["thread-interrupt"]?.eventStream.events).toHaveLength(1);
+  });
+
+  it("tracks approval pending and resolved states without changing approval actions", () => {
+    useStore.getState().addApproval("thread-approval", {
+      requestId: "approval-1",
+      kind: "command_approval",
+      threadId: "thread-approval",
+      request: { command: "npm test" }
+    });
+    expect(useStore.getState().threads["thread-approval"]?.eventStream.events[0]).toMatchObject({
+      kind: "approval",
+      status: "pending",
+      source: "lifecycle"
+    });
+
+    useStore.getState().resolvePendingRequest("approval-1");
+    expect(useStore.getState().threads["thread-approval"]?.eventStream.events[0]).toMatchObject({
+      kind: "approval",
+      status: "success",
+      eventKind: "approval_resolved"
+    });
+  });
+
+  it("records live item lifecycle in the event stream while keeping entries as the compatibility projection", () => {
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "command_output_delta",
+        threadId: "thread-stream",
+        turnId: "turn-stream",
+        itemId: "command-stream",
+        parentItemId: "parent-call",
+        eventId: "command-output-1",
+        streamSequence: 10,
+        delta: "$ npm test\n"
+      }
+    });
+
+    const runningThread = useStore.getState().threads["thread-stream"]!;
+    expect(runningThread.eventStream.events).toEqual([
+      expect.objectContaining({
+        id: "command-stream",
+        kind: "command",
+        status: "running",
+        parentId: "parent-call",
+        firstSequence: 10,
+        sourceEventIds: ["command-output-1"]
+      })
+    ]);
+
+    useStore.getState().dispatchEvent({
+      type: "codex-event",
+      event: {
+        kind: "item_updated",
+        threadId: "thread-stream",
+        turnId: "turn-stream",
+        itemId: "command-stream",
+        eventId: "command-completed-1",
+        streamSequence: 12,
+        item: {
+          id: "command-stream",
+          turnId: "turn-stream",
+          role: "tool",
+          toolKind: "command",
+          server: "shell",
+          tool: "npm test",
+          status: "success",
+          text: "pass"
+        }
+      }
+    });
+
+    const completedThread = useStore.getState().threads["thread-stream"]!;
+    expect(completedThread.eventStream.events[0]).toMatchObject({
+      id: "command-stream",
+      kind: "command",
+      status: "success",
+      lastSequence: 12,
+      sourceEventIds: ["command-output-1", "command-completed-1"]
+    });
+    expect(completedThread.entries).toEqual([
+      expect.objectContaining({
+        id: "command-stream",
+        body: expect.objectContaining({ kind: "tool", status: "success" })
+      })
+    ]);
+  });
+
   it("updates thread status from app-server status events without appending timeline content", () => {
     useStore.getState().setThreadStatus("thread-1", "active", "turn-live");
 
@@ -3718,6 +3906,8 @@ describe("web store codex events", () => {
     });
 
     expect(useStore.getState().threads["thread-1"]?.entries).toEqual([]);
+    expect(useStore.getState().threads["thread-1"]?.eventStream.events[0]?.kind).toBe("error");
+    expect(useStore.getState().threads["thread-1"]?.eventStream.events[0]?.visible).toBeUndefined();
     expect(useStore.getState().threads["thread-1"]?.notices).toEqual([
       expect.objectContaining({ kind: "warning", source: "app-server" })
     ]);

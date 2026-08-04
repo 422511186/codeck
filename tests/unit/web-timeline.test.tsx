@@ -20,6 +20,10 @@ import {
 } from "../../src/web/components/cards/LongTextPreview";
 import { useStore } from "../../src/web/state/store";
 import { codex } from "../../src/web/api/endpoints";
+import {
+  applyTimelineStreamInput,
+  createTimelineEventStreamState
+} from "../../src/web/state/timeline-event-stream";
 
 describe("Timeline", () => {
   beforeEach(() => {
@@ -693,6 +697,39 @@ describe("Timeline", () => {
     expect(screen.queryByText("出错了")).not.toBeInTheDocument();
     expect(container.querySelector("button")).toBeNull();
     expect(container.querySelector("pre")).toBeNull();
+  });
+
+  it("renders event-stream-only retry lifecycle and updates it to recovered state", () => {
+    let eventStream = createTimelineEventStreamState();
+    eventStream = applyTimelineStreamInput(eventStream, {
+      kind: "lifecycle",
+      threadId: "thread-retry-ui",
+      turnId: "turn-retry-ui",
+      itemId: "turn-retry-ui-lifecycle",
+      eventKind: "turn_error",
+      status: "retrying",
+      label: "连接暂时断开，正在重试",
+      visible: true,
+      sequence: 10
+    });
+
+    const { container, rerender } = render(<Timeline entries={[]} eventStream={eventStream} />);
+    expect(container.querySelector("[data-error-status='retrying']")).toHaveTextContent("正在重试");
+
+    eventStream = applyTimelineStreamInput(eventStream, {
+      kind: "lifecycle",
+      threadId: "thread-retry-ui",
+      turnId: "turn-retry-ui",
+      itemId: "turn-retry-ui-lifecycle",
+      eventKind: "turn_completed",
+      status: "success",
+      label: "重试成功",
+      sequence: 20
+    });
+    rerender(<Timeline entries={[]} eventStream={eventStream} />);
+
+    expect(container.querySelector("[data-error-status='success']")).toHaveTextContent("已恢复");
+    expect(screen.getByText("重试成功")).toBeInTheDocument();
   });
 
   it("不为排序占位 createdAt 显示错误的远古相对时间", () => {

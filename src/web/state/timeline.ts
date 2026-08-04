@@ -68,6 +68,7 @@ export type SystemEntry = {
 export type ErrorEntry = {
   kind: "error";
   text: string;
+  status?: "failed" | "success" | "retrying" | "cancelled" | "interrupted";
 };
 
 export type UserMessageEntry = {
@@ -368,13 +369,17 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
         ...meta
       };
     case "tool":
+      {
+        const inferredToolKind = item.toolKind ?? (
+          item.server === "command" || item.tool === "exec_command" ? "command" : undefined
+        );
       return {
         id,
         ...meta,
         createdAt,
         body: {
           kind: "tool",
-          toolKind: item.toolKind,
+          toolKind: inferredToolKind,
           actionKind: item.actionKind,
           server: item.server ?? item.toolKind ?? "tool",
           tool: item.tool ?? item.toolKind ?? "tool",
@@ -387,6 +392,7 @@ export function timelineItemToEntry(item: TimelineItem, fallbackCreatedAt: numbe
           ...(item.imagePaths?.length ? { imagePaths: item.imagePaths } : {})
         }
       };
+      }
     default:
       return { id, ...meta, createdAt, body: { kind: "system", text: item.text } };
   }

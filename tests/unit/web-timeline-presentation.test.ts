@@ -192,6 +192,29 @@ describe("timeline presentation", () => {
     }
   });
 
+  it("recognizes legacy exec_command tool records as command activity", () => {
+    const presentation = createActivityPresentation([
+      {
+        id: "legacy-exec",
+        turnId: "turn-legacy",
+        createdAt: 1,
+        body: {
+          kind: "tool",
+          server: "command",
+          tool: "exec_command",
+          arguments: JSON.stringify({ cmd: "npm test" }),
+          status: "success",
+          result: "passed"
+        }
+      }
+    ]);
+
+    expect(presentation.summary).toBe("运行了命令");
+    expect(presentation.items).toEqual([
+      expect.objectContaining({ kind: "command", label: "已运行 npm test" })
+    ]);
+  });
+
   it("keeps identical-metadata commands split by a visible assistant message as two activity groups", () => {
     const entries: TimelineEntry[] = [
       {
